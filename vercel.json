@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "api/stripe-metrics.js": { "maxDuration": 30 },
+    "api/stripe-customers.js": { "maxDuration": 30 },
+    "api/gmail-threads.js": { "maxDuration": 20 },
+    "api/gmail-thread.js": { "maxDuration": 20 },
+    "api/gmail-send.js": { "maxDuration": 20 },
+    "api/ai-draft.js": { "maxDuration": 45 },
+    "api/invite.js": { "maxDuration": 15 },
+    "api/usage-ingest.js": { "maxDuration": 15 },
+    "api/health.js": { "maxDuration": 10 },
+    "api/platform-sso.js": { "maxDuration": 15 },
+    "api/gmail-auth-start.js": { "maxDuration": 10 },
+    "api/gmail-callback.js": { "maxDuration": 15 }
+  }
+}
