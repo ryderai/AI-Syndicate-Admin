@@ -1370,3 +1370,271 @@ touching `api/stripe-metrics.js`, which older code depends on.
 - Nothing reconciles a Stripe invoice against one of ours. They live in two tabs and do not know
   about each other.
 - The cost list has no receipt upload — a link only, same rule as everywhere else in this console.
+
+---
+
+## §19. Every number on the Finance page — the exact maths — Aug 20 2026 (append-only section)
+
+Ryder asked for the maths itself to live in context, not just the design. This is that: every figure
+the Finance and Invoices pages print, the formula behind it, what feeds it, and what makes it go
+blank. **All money is integer cents.** Every function named here is in `lib/finance-math.js` unless
+it says otherwise, and every one is covered by `tests/finance/test.mjs`.
+
+Read §18 first for *why* it is built this way. This section is the *what*.
+
+### §19.0 The three inputs everything is built from
+
+| Input | Where it comes from | Shape |
+|---|---|---|
+| Subscriptions | `api/stripe-finance.js` → Stripe `subscriptions.list({status:"all"})` | `{id, customerName, plan, status, mrrCents, lastMrrCents, created, canceledAt}`. `created`/`canceledAt` are **unix seconds**. |
+| Money in, per month | `api/stripe-finance.js` → `charges.list` (gross) minus `refunds.list` bucketed by refund date | `revenueByMonth = { "2026-08": cents }`, UTC months. **This map is the page's calendar.** |
+| Money out | `admin_expenses`, typed in by us | `{incurred_on, ended_on, category, vendor, amount_cents, interval, client_id, counts_toward_cac}` |
+
+Plus two smaller ones: `admin_invoices` + `admin_invoice_payments` (everything in §19.6), and
+`admin_finance_settings.cash_on_hand_cents` (the bank balance, typed in, used only by runway).
+
+### §19.1 Recurring revenue
+
+| Figure | Formula | Notes |
+|---|---|---|
+| **MRR** | `Σ mrrCents` over subs whose status is `active` or `past_due` | `mrrFromSubs()`. `PAYING_STATUSES = ["active","past_due"]`. Trials are **excluded**. |
+| One subscription's monthly value | `Σ over items: unit_amount × quantity ÷ interval` — a year price ÷ 12, a week price × 52 ÷ 12, a day price × 365 ÷ 12, and any of them ÷ `interval_count` | `subscriptionMrrCents()` in `lib/stripe-server.js`. Older code (`api/stripe-metrics.js`) uses the same function. |
+| **Trial MRR** | `Σ mrrCents` over subs with status `trialing` | `trialMrr()`. Printed on its own line under MRR — a promise, not money. |
+| **Yearly run rate (ARR)** | `MRR × 12` | `arrFromMrr()`. Not a forecast: what a year at today's rate comes to. |
+| **Projected MRR, +3 months** | `MRR × (1 + g)³`, where `g` is the growth rate from §19.4 | Estimate. Blank when there is not enough finished history to work out `g`. |
+| **Paying clients** | count of subs with status `active` or `past_due` | Trials are counted separately and named as trials in the rail list. |
+| **Average client value (ARPA)** | `MRR ÷ paying clients` | `arpa()`. Blank when there are no paying clients — not zero, not infinity. |
+
+### §19.2 What moved inside MRR this month — `mrrMovement()`
+
+Let `M` be the month being asked about.
+
+```
+started        = subs created in M, excluding status incomplete / incomplete_expired
+startedPaying  = started ∩ (active | past_due)
+cancelled      = subs cancelled in M that were NOT ALSO created in M
+inAndOut       = subs created in M AND cancelled in M
+
+newMrr    = Σ mrrCents over startedPaying
+churnMrr  = Σ (lastMrrCents or mrrCents) over cancelled
+endMrr    = MRR today
+startMrr  = max(0, endMrr − newMrr + churnMrr)
+
+newCount        = |started|          ← subscriptions that began
+newPayingCount  = |startedPaying|    ← the ones that actually pay
+churnCount      = |cancelled|
+inAndOutCount   = |inAndOut|
+```
+
+Three rules baked into that, each of which was a real bug first:
+
+- **`lastMrrCents` exists because Stripe reports 0 MRR on a cancelled subscription.** Without it,
+  churn would always read as $0 — the flattering kind of wrong.
+- **A subscription signed and cancelled inside the same month is in neither figure.** Adding it to
+  `churnMrr` would add it to a `startMrr` it was never part of, inventing revenue that never
+  existed. It is counted as `inAndOutCount` and said out loud under the bar.
+- **A checkout that never completed is not a new client.** `incomplete` and `incomplete_expired`
+  are dropped before anything is counted.
+
+**Expansion and contraction are `null`, always**, with `expansionMeasured: false`. Stripe hands back
+no plan-change history, so a client moving between plans shows as neither gained nor lost. The page
+says that in words rather than drawing a zero.
+
+### §19.3 Money out — `expenseToMonths()` and friends
+
+One expense row lands in months like this:
+
+| `interval` | Months it lands in | Amount per month |
+|---|---|---|
+| `one_time` | the month of `incurred_on` only | the whole `amount_cents` |
+| `monthly` | every month from `incurred_on` to `ended_on` (or forever if `ended_on` is null) | `amount_cents` |
+| `yearly` | same range as monthly | `round(amount_cents ÷ 12)` |
+
+Everything else is a roll-up of that:
+
+```
+moneyOut(M)   = Σ expenseToMonths(e, M) over every expense e
+                + measuredCardFee(M)  ONLY IF nobody typed a "Payment fees" cost for M
+
+byCategory(M) = the same, grouped by e.category
+byVendor(M)   = the same, grouped by e.vendor, biggest first
+fixed(M)      = Σ categories in ["Software","Hosting & domains","Office & admin"]
+variable(M)   = everything else + the measured card fee
+breakEven(M)  = fixed + variable            ← the money in needed just to cover the month
+```
+
+**Card fees are counted once, never twice.** Stripe measures the real fee per charge (via the
+expanded balance transaction). It is added only for months with no typed "Payment fees" cost; a
+typed figure always wins, and the page prints both so a big gap gets noticed.
+
+**AI spend is cross-checked, not merged.** The usage feed measures what the AI actually cost; the
+typed "AI & APIs" cost is what every number uses. When the two differ by more than 25% (or $20,
+whichever is larger) the page says so.
+
+### §19.4 Profit, margins and the projection
+
+```
+profit(M)      = moneyIn(M) − moneyOut(M)
+netMargin(M)   = profit(M) ÷ moneyIn(M) × 100
+
+deliveryCost(M) = Σ categories ["Contractors","AI & APIs","Client costs","Payment fees"]
+                  + measured card fee if it was added in §19.3
+grossMargin(M)  = (moneyIn(M) − deliveryCost(M)) ÷ moneyIn(M) × 100
+costToServe(M)  = deliveryCost(M) ÷ paying clients
+```
+
+Gross margin answers "is the work itself profitable"; net margin answers "is the business
+profitable". They are different questions, so both are printed.
+
+**The projection — `projectForward(series, 3, { partialLast: true, today })`:**
+
+```
+real     = the 12-month series with EMPTY MONTHS TRIMMED OFF THE ENDS ONLY
+complete = real minus the month we are standing in          ← it is not finished
+window   = the last ≤6 months of `complete`
+g        = mean over window of (revenue[i] − revenue[i−1]) ÷ revenue[i−1]
+g        = clamp(g, −20%, +20%)                             ← one freak month cannot run away
+cost     = mean cost of the last 3 finished months
+steps    = months from the base month to the last month drawn on the chart
+revenue(n) = round( base.revenue × (1 + g)^(steps + n) )    for n = 1, 2, 3
+```
+
+Empty months are trimmed from the **ends only**, never out of the middle — filtering them
+everywhere used to delete the current month and then project it again, drawing two bars for one
+month. The method sentence printed under the chart is generated from these exact numbers, so the
+page can never claim a method it did not use.
+
+**Runway:**
+
+```
+runway = cash_on_hand ÷ |profit(last FINISHED month)|      when that profit is negative
+       = "no limit / profitable"                          when it is positive
+       = blank, with the reason                           when it is exactly 0, when the last
+                                                          finished month has no money in it at all,
+                                                          or when nobody has typed the bank balance
+```
+
+It deliberately does **not** use the current month: this month books a full month of costs on day
+one against however much has cleared so far, so on the 2nd it would report a burn that never
+happened.
+
+### §19.5 The client numbers
+
+Every one of these is a formula on top of §19.1–§19.4, so every one is badged ESTIMATE on screen
+unless it is a plain count.
+
+| Figure | Formula | Blank when |
+|---|---|---|
+| **Cost to win a client (CAC)** | `(Σ Ads costs in M + Σ costs ticked "won us clients" in M) ÷ new PAYING clients in M` | nobody started paying in M — dividing by zero is no answer, not infinite cost |
+| **Clients lost (churn %)** | `churnCount ÷ startOfMonthClients × 100`, where `startOfMonthClients = max(0, payingClients + churnCount − newPayingCount)` | we started the month with nobody |
+| **Money lost (revenue churn %)** | `churnMrr ÷ startMrr × 100` | `startMrr` is 0 |
+| **How long a client stays** | `100 ÷ churn%` months | churn is 0 — no losses means no honest answer, not an infinite lifetime |
+| **What a client is worth (LTV)** | `ARPA × (grossMargin% ÷ 100) × lifetimeMonths` | any input above is blank |
+| **Worth ÷ cost to win** | `LTV ÷ CAC` | either side blank. Above 3× is the usual healthy line |
+| **Months to earn a client back** | `CAC ÷ (ARPA × grossMargin% ÷ 100)` | any input blank |
+| **Revenue kept (NRR)** | `(startMrr + expansion − contraction − churnMrr) ÷ startMrr × 100`, with expansion and contraction **0 and flagged not-measured** | `startMrr` is 0 |
+| **Gained vs lost (quick ratio)** | `(newMrr + expansion) ÷ (churnMrr + contraction)` | nothing was lost — the good version of no answer, and it says so |
+| **Biggest client's share** | `topClient ÷ Σ all clients × 100` over 12 months of paid charges | no paid charges |
+| **Clients making half the money** | how many clients, largest first, it takes for the running total to reach 50% | no paid charges |
+
+### §19.6 Invoices
+
+```
+line.amount   = qty × unit_cents
+subtotal      = Σ line.amount
+discount      = min(typed discount, subtotal)          ← an invoice can never go negative
+tax           = round((subtotal − discount) × taxPct ÷ 100)
+total         = subtotal − discount + tax
+outstanding   = max(0, total − amount_paid)            ← 0 for a draft or a cancelled invoice
+```
+
+`amount_paid_cents` is **written by the database**, by a trigger over `admin_invoice_payments`, not
+by the browser. `invoiceTotals()` recomputes the totals from the lines on every save — the number in
+the form is never trusted.
+
+**Status is worked out, not stored.** Only `draft`, `sent`, `paid`, `void` live in the table;
+`effectiveInvoiceStatus()` derives the rest, and the SQL trigger follows the same rules so the two
+can never disagree:
+
+```
+void                                              → void
+draft                                             → draft (even if money arrives against it)
+paid ≥ total                                      → paid
+0 < paid < total, due date in the future or today → part paid
+0 < paid < total, due date in the past            → overdue
+paid = 0,        due date in the past             → overdue
+otherwise                                         → sent
+```
+
+An invoice due **today** is not overdue today. Dates are compared as plain `YYYY-MM-DD` strings.
+
+```
+aging bucket    = days between due_date and today → not due / 1–30 / 31–60 / 61–90 / 90+
+avgDaysToPay    = mean over fully paid invoices of max(0, paid_at − (sent_at or issue_date)), by DATE
+billed          = Σ total over invoices that are not draft and not cancelled
+collected       = Σ amount_paid over the same set
+collected%      = collected ÷ billed × 100
+nextNumber      = prefix + (highest trailing number ever used + 1), padded to 4 digits
+```
+
+### §19.7 The dates, one more time, because this is where the bugs live
+
+- `new Date("2026-08-01")` is **midnight UTC** — the evening of July 31 in Chicago. `monthKey()`,
+  `dateOnly()`, `daysBetween()` and `addDays()` all read the string instead. Never hand a plain
+  `YYYY-MM-DD` to `new Date()` anywhere in this feature.
+- `daysBetween()` reduces both sides to a plain date before subtracting, so a full timestamp
+  compared against a date-at-midnight cannot produce −1 days.
+- Stripe timestamps are **unix seconds in UTC**; `monthKeyUtc()` / `monthOf()` handle those.
+- **One calendar.** The server builds the month keys and the month map; the page uses the server's
+  month list rather than re-bucketing days. Expense dates are zoneless strings and slot into either.
+
+### §19.8 The badge each figure carries, decided in code
+
+| Badge | Set when |
+|---|---|
+| MEASURED | the value came straight from Stripe |
+| TYPED IN | it came from `admin_expenses`, `admin_invoices` or the settings row |
+| MEASURED + TYPED | a Stripe number with typed costs subtracted |
+| ESTIMATE | a formula from §19.4 or §19.5 |
+| NOT MEASURED | the value is `null`; the card prints the reason instead of a number |
+| SAMPLE | preview mode, or the live source has not answered yet |
+
+`Figure` in `financeParts.jsx` forces this: pass a `null` value and it prints "not measured yet"
+with the `why` line and flips the badge to NOT MEASURED on its own. It is not possible to print a
+zero for something that was never measured without deleting that component's logic.
+
+---
+
+## §20. STATE BOARD — replaces §16 as the current picture (Aug 20 2026, end of session)
+
+§16 is the Aug 18 board and stays as history. This is where things actually stand.
+
+### BUILT AND WORKING (in the repo, still not deployed)
+
+Overview · Work · Leads (with import + scraping) · Operations · Inbox (shared growth@) · Tickets ·
+Notes (self-writing) · AI Brain + memory · the assistant · client pages with standing · platform
+login cards · Team · Settings · **Finance** · **Invoices**.
+
+### STILL NEEDED — in this order
+
+1. **Run the migrations that are not run yet**, `0006_brain_notes_leads.sql` and
+   `0007_finance.sql`, in the Supabase SQL editor. Until each is run, its pages open, say SAMPLE,
+   and save nothing.
+2. **Deploy.** Nothing in this console has ever run on admin.aisyndicate.com.
+3. **`STRIPE_SECRET_KEY` in Vercel** — every MEASURED figure on Finance, Customers and Overview is
+   waiting on it and says WAITING ON KEY rather than guessing.
+4. **Type the costs in** (Finance → The cost list). Money out does not exist anywhere else.
+5. **Type the bank balance in** (Finance → Update) or runway stays blank.
+6. `ANTHROPIC_API_KEY` for the AI drafting and the assistant; `USAGE_INGEST_KEY` for the token feed.
+
+### KNOWN GAPS, WRITTEN DOWN RATHER THAN HIDDEN
+
+- Plan upgrades and downgrades are not tracked, so expansion, contraction and the part of NRR that
+  depends on them are blank everywhere (§19.2).
+- Stripe reads cover the last twelve months and cap at 1,000 rows per resource; the reply carries
+  `truncated` and the page prints it.
+- No email send from the Invoices page — a "Copy email text" button and a printable copy instead.
+- Nothing reconciles a Stripe invoice against one of ours; they sit in two tabs.
+- Receipts are links, never files.
+- The cost list is the only source of money out, so the profit line is exactly as honest as what
+  somebody typed.
