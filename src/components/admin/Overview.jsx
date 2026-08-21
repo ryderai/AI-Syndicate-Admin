@@ -279,6 +279,16 @@ export default function Overview({ member, setSection }) {
               <span><strong style={{ color: "white" }}>{s.customerCount}</strong> customers</span>
               {s.truncated && <span style={{ color: "#fbbf24" }}>large account — totals capped at first 1,000 rows</span>}
             </div>
+            {/* Aug 20 2026: the Finance page counts trials on their own line, so
+              * its MRR reads lower than this one whenever there is a trial
+              * running. Two pages, two numbers, one label was confusing — this
+              * sentence says which is which instead of quietly differing. */}
+            {(s.trialingSubs || 0) > 0 && (
+              <div style={{ marginTop: 6, fontSize: 11.5, color: "rgba(255,255,255,0.55)", lineHeight: 1.5 }}>
+                Trials are counted in the figure above. The Finance page keeps them on a separate line, so
+                its MRR reads lower until a trial starts paying.
+              </div>
+            )}
           </div>
           <div style={{ display: "flex", gap: 10 }}>
             <a className="btn" style={{ textDecoration: "none" }} href="https://dashboard.stripe.com" target="_blank" rel="noopener noreferrer">

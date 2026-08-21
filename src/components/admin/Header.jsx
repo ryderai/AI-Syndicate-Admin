@@ -4,11 +4,14 @@ import { SourceBadge } from "./shared.jsx";
 const SECTION_TITLES = {
   work: { kicker: "Yours", title: "Work · what's on you right now" },
   overview: { kicker: "Command", title: "Overview · revenue, usage, activity" },
+  finance: { kicker: "Command", title: "Finance · in, out, projected" },
+  invoices: { kicker: "Command", title: "Invoices · billed, paid, owed" },
   customers: { kicker: "Command", title: "Customers · every paying account" },
   leads: { kicker: "Sales", title: "Leads · the pipeline" },
   operations: { kicker: "Delivery", title: "Operations · clients, tasks & weekly logs" },
   inbox: { kicker: "Comms", title: "Inbox · team Gmail in one place" },
   tickets: { kicker: "Comms", title: "Tickets · customer support desk" },
+  notes: { kicker: "Intelligence", title: "Notes · what the system noticed" },
   brain: { kicker: "Intelligence", title: "AI Brain · what the AI knows and how it writes" },
   platform: { kicker: "Intelligence", title: "Our platform · GEO for our own site" },
   team: { kicker: "Workspace", title: "Team · seats & roles" },
@@ -21,7 +24,14 @@ export function requestRefresh() {
 }
 
 export default function Header({ section, preview }) {
-  const t = SECTION_TITLES[section] || SECTION_TITLES.overview;
+  /* A page that is not in the map above gets its own name, NOT the Overview's.
+   * Falling back to Overview showed "Overview · revenue, usage, activity" over
+   * the Notes page for its first hour of life — a header that lies about which
+   * page you are on is worse than a plain one. Caught by a screenshot, Aug 20 2026. */
+  const t = SECTION_TITLES[section] || {
+    kicker: "Console",
+    title: section ? section.charAt(0).toUpperCase() + section.slice(1) : "Console",
+  };
   const [refreshing, setRefreshing] = useState(false);
 
   const refresh = () => {

@@ -23,3 +23,14 @@ export function useRoute() {
   };
   return [route, go];
 }
+
+/** Rewrite the address bar WITHOUT adding a history entry and without moving
+ * the page. Used to stamp the page you are on into the URL, so a reload comes
+ * back to the same page instead of the landing page. `go()` is wrong for that
+ * job: it pushes a history entry, so Back would walk through addresses the
+ * user never chose. */
+export function stampRoute(r) {
+  if (readRoute() === r) return;
+  const { pathname, search } = window.location;
+  window.history.replaceState(null, "", `${pathname}${search}#${r}`);
+}

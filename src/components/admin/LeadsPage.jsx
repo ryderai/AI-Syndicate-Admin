@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  listLeads, upsertLead, insertLeadsBatch, listLeadActivity, addLeadActivity,
-  listAllLeadActivity, listTeam, logActivity, parseCsv, guessLeadColumn,
+  listLeads, upsertLead, listLeadActivity, addLeadActivity,
+  listAllLeadActivity, listTeam, logActivity, listLeadSources, buildCallQueue,
   LEAD_STAGES, LEAD_STAGE_LABELS,
 } from "../../lib/data.js";
+import { ImportModal, SourcesModal } from "./leadsIntake.jsx";
+import { useScreenContext } from "../../lib/screenContext.js";
 import { apiFetch } from "../../lib/adminApi.js";
 import { toast } from "../../lib/toast.js";
 import {
@@ -43,16 +45,19 @@ export default function LeadsPage({ member }) {
   const [q, setQ] = useState("");
   const [stageFilter, setStageFilter] = useState("all");
   const [mineOnly, setMineOnly] = useState(member.role === "sales");
-  const [view, setView] = useState("table"); // table | board
+  const [view, setView] = useState(member.role === "sales" ? "queue" : "table"); // queue | table | board
+  const [sources, setSources] = useState([]);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [openLead, setOpenLead] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
 
   const load = useCallback(async () => {
-    const [l, t] = await Promise.all([listLeads(), listTeam()]);
+    const [l, t, src] = await Promise.all([listLeads(), listTeam(), listLeadSources()]);
     setLeads(l);
     setTeam(t.rows);
+    setSources(src.rows);
   }, []);
 
   useEffect(() => {
@@ -83,6 +88,32 @@ export default function LeadsPage({ member }) {
     won: leads.rows.filter((l) => l.stage === "won").length,
     mine: leads.rows.filter((l) => l.owner_id === member.user_id && !["won", "lost"].includes(l.stage)).length,
   }), [leads, member.user_id]);
+
+  /* THE CALL QUEUE — the rep's actual job, in order.
+   *
+   * Built from the same staleness rules as the Work page (buildCallQueue in
+   * data.js calls the same STALE_AFTER_DAYS table), so a rep can never see a
+   * lead here that their Work page says is fine, or the other way round. That
+   * disagreement is the classic way two screens quietly stop being trusted. */
+  const queue = useMemo(
+    () => buildCallQueue(leads.rows, member.user_id, { includeUnclaimed: true }),
+    [leads.rows, member.user_id]
+  );
+  const owed = queue.filter((q) => q.over >= 0);
+
+  /* Tell the assistant what is on screen. The open lead if there is one,
+   * otherwise the list they are looking at. Nothing else travels — see
+   * src/lib/screenContext.js for why this is stated rather than scraped. */
+  useScreenContext(() => ({
+    page: "Leads",
+    label: openLead
+      ? null
+      : `${rows.length} lead${rows.length === 1 ? "" : "s"} shown${stageFilter !== "all" ? `, stage ${stageFilter}` : ""}${mineOnly ? ", mine only" : ""}`,
+    record: openLead
+      ? { type: "lead", id: openLead.id, label: openLead.name || openLead.company || "unnamed lead" }
+      : null,
+    visible: rows.slice(0, 20).map((l) => `${l.name || l.company || "unnamed"} (${l.stage})`),
+  }), [openLead, rows, stageFilter, mineOnly]);
 
   const patchLead = async (id, patch, note) => {
     const res = await upsertLead({ id, ...patch });
@@ -119,15 +150,18 @@ export default function LeadsPage({ member }) {
           {mineOnly ? "✓ My leads" : "My leads"}
         </button>
         <div style={{ display: "inline-flex", padding: 3, borderRadius: 10, background: "white", border: "1px solid var(--rule)" }}>
-          {["table", "board"].map((v) => (
-            <button key={v} onClick={() => setView(v)} style={{ padding: "6px 12px", border: 0, borderRadius: 7, background: view === v ? "var(--ink)" : "transparent", color: view === v ? "white" : "var(--ink-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--body)" }}>
-              {v === "table" ? "Table" : "Board"}
+          {[["queue", "My queue"], ["table", "Table"], ["board", "Board"]].map(([v, label]) => (
+            <button key={v} onClick={() => setView(v)} title={v === "queue" ? "Who to call next, coldest first" : undefined} style={{ padding: "6px 12px", border: 0, borderRadius: 7, background: view === v ? "var(--ink)" : "transparent", color: view === v ? "white" : "var(--ink-2)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--body)" }}>
+              {label}{v === "queue" && owed.length ? ` · ${owed.length}` : ""}
             </button>
           ))}
         </div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           {isAdmin && <button className="btn" onClick={() => setStatsOpen(true)}>Rep stats</button>}
-          <button className="btn" onClick={() => setImportOpen(true)}>Import CSV</button>
+          <button className="btn" onClick={() => setSourcesOpen(true)} title="Imported lists and saved searches">
+            Where leads come from{sources.some((x) => x.last_run_error) ? " ⚠" : ""}
+          </button>
+          {isAdmin && <button className="btn" onClick={() => setImportOpen(true)}>Import a list</button>}
           <button className="btn btn-accent" onClick={() => setAddOpen(true)}>+ Add lead</button>
         </div>
       </div>
@@ -141,9 +175,65 @@ export default function LeadsPage({ member }) {
             ? "Add a lead by hand, or import a CSV list — column names are matched automatically and you confirm before anything saves."
             : "Clear the search or stage filter to see the rest."}
           action={leads.rows.length === 0
-            ? <button className="btn btn-accent" onClick={() => setImportOpen(true)}>Import your first list</button>
+            ? (isAdmin
+              ? <button className="btn btn-accent" onClick={() => setImportOpen(true)}>Import your first list</button>
+              : <button className="btn" onClick={() => setAddOpen(true)}>Add a lead by hand</button>)
             : <button className="btn" onClick={() => { setQ(""); setStageFilter("all"); setMineOnly(false); }}>Clear filters</button>}
         />
+      ) : view === "queue" ? (
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--rule)", background: "var(--bg-1)" }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--ink)" }}>
+              {owed.length ? `${owed.length} owed a contact right now` : "Nothing is overdue"}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-dim)", marginTop: 2 }}>
+              Coldest first. A lead counts as owed once it has sat longer than its stage allows —
+              a day for a new lead, three once you have spoken, five while you are following up.
+              Unclaimed leads are shown too, so nothing sits in the pool unnoticed.
+            </div>
+          </div>
+          {queue.length === 0 ? (
+            <div style={{ padding: 24, textAlign: "center", color: "var(--ink-dim)", fontSize: 13 }}>
+              No open leads with your name on them, and nothing unclaimed.
+            </div>
+          ) : (
+            <div>
+              {queue.slice(0, 60).map(({ lead: l, over, mine }) => (
+                <div key={l.id} className="adm-row-click" onClick={() => setOpenLead(l)}
+                  style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 16px", borderTop: "1px solid var(--rule)", cursor: "pointer" }}>
+                  <div style={{
+                    width: 58, flexShrink: 0, textAlign: "center", padding: "4px 0", borderRadius: 8,
+                    background: over >= 3 ? "#fef2f2" : over >= 0 ? "#fffbeb" : "var(--bg-2)",
+                    color: over >= 3 ? "var(--danger)" : over >= 0 ? "#92400e" : "var(--ink-dim)",
+                    fontFamily: "var(--mono)", fontSize: 10.5, fontWeight: 800, letterSpacing: "0.04em",
+                  }}>
+                    {/* "0D LATE" is not a thing a person says. A lead that has
+                        just crossed its line is due now; one that has not is fine. */}
+                    {over > 0 ? `${over}D LATE` : over === 0 ? "DUE NOW" : "OK"}
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>
+                      {l.name || l.company || "unnamed"}
+                      {!mine && <span style={{ marginLeft: 8, fontSize: 10, fontFamily: "var(--mono)", fontWeight: 800, letterSpacing: "0.06em", color: "var(--accent-deep)" }}>UNCLAIMED</span>}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "var(--ink-dim)" }}>
+                      {[l.company && l.name ? l.company : null, l.city ? `${l.city}${l.state ? `, ${l.state}` : ""}` : null, l.phone || l.email].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                  <StagePill stage={l.stage} />
+                  <div style={{ width: 92, textAlign: "right", flexShrink: 0, fontFamily: "var(--mono)", fontSize: 11, color: "var(--ink-faint)" }}>
+                    {l.last_activity_at ? timeAgo(l.last_activity_at) : "never"}
+                  </div>
+                </div>
+              ))}
+              {queue.length > 60 && (
+                <div style={{ padding: "10px 16px", borderTop: "1px solid var(--rule)", fontSize: 11.5, color: "var(--ink-faint)" }}>
+                  Showing the first 60 of {queue.length}. Work these and the rest move up.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       ) : view === "table" ? (
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ overflowX: "auto" }}>
@@ -211,7 +301,11 @@ export default function LeadsPage({ member }) {
         />
       )}
       {addOpen && <AddLeadModal member={member} onClose={() => setAddOpen(false)} reload={load} />}
-      {importOpen && <ImportModal member={member} onClose={() => setImportOpen(false)} reload={load} />}
+      {importOpen && <ImportModal member={member} team={team} onClose={() => setImportOpen(false)} reload={load} />}
+      {sourcesOpen && (
+        <SourcesModal member={member} team={team} sources={sources}
+          onClose={() => setSourcesOpen(false)} reload={load} />
+      )}
       {statsOpen && <RepStatsModal team={team} leads={leads.rows} onClose={() => setStatsOpen(false)} />}
     </>
   );
@@ -434,112 +528,6 @@ function AddLeadModal({ member, onClose, reload }) {
         <Field label="State"><TextInput value={f.state} onChange={set("state")} placeholder="TX" /></Field>
       </div>
       <Field label="Notes"><TextArea value={f.notes} onChange={set("notes")} placeholder="Where they came from, what they need…" /></Field>
-    </Modal>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-
-const LEAD_FIELDS = [["", "— skip —"], ["name", "Name"], ["company", "Company"], ["domain", "Website"], ["email", "Email"], ["phone", "Phone"], ["city", "City"], ["state", "State"], ["vertical", "Industry"], ["notes", "Notes"]];
-
-function ImportModal({ member, onClose, reload }) {
-  const [rows, setRows] = useState(null);   // parsed csv rows
-  const [mapping, setMapping] = useState([]); // per-column target field
-  const [fileName, setFileName] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const onFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) { toast.error("File too big", "Keep imports under 5 MB — split the list if needed."); return; }
-    const text = await file.text();
-    const parsed = parseCsv(text);
-    if (parsed.length < 2) { toast.error("Couldn't read that file", "It needs a header row plus at least one lead."); return; }
-    setFileName(file.name);
-    setRows(parsed);
-    setMapping(parsed[0].map((h) => guessLeadColumn(h)));
-  };
-
-  const doImport = async () => {
-    const body = rows.slice(1);
-    if (!mapping.some((m) => m === "name" || m === "company" || m === "email")) {
-      toast.warn("Map at least one of Name, Company, or Email", "Otherwise the rows can't be told apart.");
-      return;
-    }
-    const toInsert = [];
-    for (const r of body) {
-      const lead = { source: "csv", stage: "new" };
-      mapping.forEach((field, i) => {
-        if (!field) return;
-        const v = String(r[i] ?? "").trim();
-        if (v) lead[field] = v.slice(0, 500);
-      });
-      if (lead.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lead.email)) delete lead.email;
-      if (lead.name || lead.company || lead.email) toInsert.push(lead);
-    }
-    if (!toInsert.length) { toast.error("Nothing importable", "Every row was empty after mapping."); return; }
-    if (toInsert.length > 2000) { toast.error("Too many rows", "Keep each import under 2,000 leads."); return; }
-    setBusy(true);
-    const res = await insertLeadsBatch(toInsert);
-    setBusy(false);
-    if (!res.ok) { toast.error("Import failed", res.error); return; }
-    await logActivity({ actor: member.user_id, kind: "leads_imported", title: `Imported ${res.count} leads from ${fileName}` });
-    toast.success(`${res.count} leads imported`, `${body.length - toInsert.length} empty/invalid rows skipped.`);
-    onClose();
-    reload();
-  };
-
-  return (
-    <Modal open onClose={onClose} kicker="SALES" title="Import a lead list (CSV)" width={720}
-      footer={rows && <>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-accent" onClick={doImport} disabled={busy}>
-          {busy ? "Importing…" : `Import ${rows.length - 1} rows`}
-        </button>
-      </>}>
-      {!rows ? (
-        <div style={{ textAlign: "center", padding: "16px 0 8px" }}>
-          <p style={{ fontSize: 13.5, color: "var(--ink-2)", lineHeight: 1.6, marginBottom: 16 }}>
-            Export the list from anywhere (spreadsheet, the platform's lead scraper, a bought list)
-            as CSV — a plain text file where each line is one lead. First row must be column names.
-          </p>
-          <label className="btn btn-accent btn-lg" style={{ cursor: "pointer" }}>
-            Choose CSV file
-            <input type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={onFile} />
-          </label>
-        </div>
-      ) : (
-        <>
-          <p style={{ fontSize: 13, color: "var(--ink-2)", marginBottom: 12 }}>
-            <strong>{fileName}</strong> — {rows.length - 1} rows. Check each column's match below,
-            then import. Nothing saves until you click the button.
-          </p>
-          <div style={{ overflowX: "auto", border: "1px solid var(--rule)", borderRadius: 10 }}>
-            <table className="adm-table" style={{ minWidth: 500 }}>
-              <thead>
-                <tr>
-                  {rows[0].map((h, i) => (
-                    <th key={i} style={{ minWidth: 130 }}>
-                      <div style={{ marginBottom: 6, color: "var(--ink)", textTransform: "none", letterSpacing: 0, fontFamily: "var(--body)", fontSize: 12 }}>{h || `Column ${i + 1}`}</div>
-                      <select className="adm-input" style={{ padding: "5px 8px", fontSize: 12 }} value={mapping[i] || ""} onChange={(e) => {
-                        const m = [...mapping]; m[i] = e.target.value; setMapping(m);
-                      }}>
-                        {LEAD_FIELDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                      </select>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.slice(1, 4).map((r, ri) => (
-                  <tr key={ri}>{rows[0].map((_, ci) => <td key={ci} style={{ fontSize: 12, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r[ci]}</td>)}</tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 8 }}>Showing the first 3 rows as a preview.</div>
-        </>
-      )}
     </Modal>
   );
 }

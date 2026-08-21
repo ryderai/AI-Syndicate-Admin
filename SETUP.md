@@ -376,3 +376,41 @@ Who can do what, once this is run:
 
 Removing is owners-only on purpose: the card list is the record of which logins this console can
 open, and who added each one. Switching a card off is the everyday way to retire one.
+
+## Migration 0007 — Finance + invoices (added Aug 20 2026)
+
+The Finance page and the Invoices page under it need one migration. Until it is run, the two pages
+open and every number reads SAMPLE, nothing saves, and a red line at the top of Invoices says so.
+
+**What it adds** — five new tables, all `admin_` prefixed, nothing the platform owns is touched:
+`admin_expenses` (money out, typed in by us), `admin_invoices`, `admin_invoice_items`,
+`admin_invoice_payments`, `admin_finance_settings` (one row: our name on an invoice, the numbering,
+the default terms, and what is in the bank).
+
+**Clicks:**
+
+1. Open https://supabase.com/dashboard and sign in.
+2. Pick the project **xweueatikwvnahegeful** (the same one the platform uses).
+3. In the left menu click **SQL Editor**.
+4. Click **New query**.
+5. Open `supabase/migrations/0007_finance.sql` from this repo, select all of it, copy it.
+6. Paste it into the query box.
+7. Click **Run** (bottom right).
+8. It should say *Success. No rows returned.* Running it twice is safe.
+
+**Check it worked.** In the same SQL editor, run:
+
+```sql
+select count(*) from public.admin_expenses;          -- 0, and no error
+select * from public.admin_finance_settings;         -- exactly one row
+```
+
+**Then, in the console:** open Finance → *The cost list* → **+ Add a cost** and put in the things we
+pay every month (hosting, AI, software, contractors). Money in comes from Stripe on its own; money
+out does not exist anywhere until it is typed here, so until the list is filled in, the profit line
+is wrong on the high side and says so.
+
+**Who can see it.** Owners and admins only. A sales rep cannot see a total, a count, or an invoice —
+the Finance and Invoices pages are not even in their sidebar. Deleting a cost, an invoice or a
+payment is owners only; anyone with admin can cancel an invoice or switch a cost off, which is the
+everyday action.

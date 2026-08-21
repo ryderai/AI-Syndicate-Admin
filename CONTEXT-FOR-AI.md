@@ -1209,3 +1209,164 @@ is reasoning from the endpoint's code, not something watched.
   the VITE one to match or the plain links and the SSO tab go to different places.
 - Nothing bulk-imports accounts; they are added one at a time.
 - `sort` exists on the row but there is no drag order in the UI yet.
+
+---
+
+## §18. Finance + Invoices — Aug 20 2026 (append-only section)
+
+Ryder asked for a money page: the summary at the top (his wireframe), then "extremely in depth"
+underneath, and a drop-down arrow on Finance in the sidebar opening a second page for invoices.
+That is what this is. Nothing above this line was changed except where §18.6 says so.
+
+### §18.1 The one idea the whole thing is built on
+
+**Money in is measured. Money out is typed in. Everything else is worked out from those two, and
+says which it is.** Every figure on the page carries a badge:
+
+| Badge | Means |
+|---|---|
+| MEASURED | From Stripe. Real money that moved. |
+| TYPED IN | Somebody entered it here — a cost, an invoice, the bank balance. |
+| MEASURED + TYPED | Stripe money minus costs we typed. |
+| ESTIMATE | A formula on top of those. True today, wrong when the inputs move. |
+| NOT MEASURED | We cannot work it out, and the card says why instead of printing a zero. |
+
+A figure that cannot be honestly worked out prints **"not measured yet"** with the reason. Never 0,
+never a guess. That rule is the reason the page can be shown to CJ without a caveat email.
+
+### §18.2 Files
+
+| File | What it is |
+|---|---|
+| `lib/finance-math.js` | Every calculation, pure. No database, no clock of its own — anything needing "today" is handed it. This is why `tests/finance/test.mjs` can check the lot with no keys. |
+| `supabase/migrations/0007_finance.sql` | `admin_expenses`, `admin_invoices`, `admin_invoice_items`, `admin_invoice_payments`, `admin_finance_settings`, RLS, and two triggers. |
+| `src/lib/finance.js` | Data layer. Preview store when Supabase is not configured, real tables when it is — same shape both ways. |
+| `api/stripe-finance.js` | Owner/admin only. Subscriptions with start and cancel dates, gross charges by month, refunds by refund date, measured card fees, revenue by client, Stripe's own invoices (read only). |
+| `src/components/admin/Finance.jsx` | The page. Hero, four tiles, three charts, right rail, then the long version. |
+| `src/components/admin/financeParts.jsx` | `Figure`, `Block`, `BasisBadge`, `InOutBars`, `ProfitBars`, `MovementBar`, `RankedBars`, `ListCard`. |
+| `src/components/admin/expensesPanel.jsx` | The cost list — add, edit, remove, filter by month. |
+| `src/components/admin/Invoices.jsx` | The invoices page. |
+| `src/components/admin/invoiceParts.jsx` | Status chip, editor, drawer, and the printable HTML copy. |
+| `tests/finance/test.mjs` + `run.sh` | 53 checks, pure logic, run in four timezones. |
+
+Touched: `Sidebar.jsx` (items can now carry children — see §18.3), `AdminDashboard.jsx` (two new
+pages, `pageIdsForRole` instead of the old flat list), `Header.jsx` (two titles), `admin.css`
+(appended section), `Overview.jsx` (one sentence — see §18.6), `SETUP.md` (migration 0007).
+
+### §18.3 The sidebar drop-down
+
+A `SECTIONS` item can now be `[id, label, children]`. Finance is the first one to use it, with
+`[["invoices", "Invoices"]]`. The children are **real pages with their own address**
+(`#/dashboard/invoices`), not tabs inside Finance, because invoicing is a job you sit down and do.
+
+Two things to know if another page grows children:
+
+- `pageIdsForRole()` flattens parents **and** children. A child missing from that list behaves
+  exactly like a page that does not exist — the dashboard silently falls back to the landing page.
+- The caret is a `<span role="button">`, not a `<button>`. A button inside a button is invalid HTML
+  and React will not render it reliably. Anything not toggled by hand follows the page you are on,
+  so landing on Invoices always shows Invoices.
+
+### §18.4 Decisions that are not obvious
+
+- **Repeating costs.** One row covers every month it runs. `monthly` repeats from its start until an
+  end date; `yearly` is divided by twelve across the months it covers, so one January payment does
+  not make January look like a disaster. `expenseToMonths()` is the only place this is decided.
+- **Card fees are counted once.** Stripe measures the real fee. It is added to the month's costs
+  **only** when nobody typed a "Payment fees" cost for that month. A typed figure always wins, and
+  the page prints both so a big gap gets noticed.
+- **Expansion and contraction are blank, everywhere.** Stripe does not hand back a plan-change
+  history, so a client moving up a plan shows as neither gained nor lost. Written on the page, not
+  hidden in a zero.
+- **Trials are not MRR.** `mrrFromSubs` counts `active` and `past_due`. `trialMrr` is a separate
+  line. A promise is not money.
+- **Overdue and part-paid are never stored.** Four statuses live in the database — draft, sent,
+  paid, void. The other two are worked out from the due date and the payments, so nobody has to
+  remember to change anything and two people cannot disagree.
+- **The paid total is written by the database**, from a trigger over `admin_invoice_payments`. A
+  browser that dies mid-save cannot leave an invoice claiming to be paid. A draft stays a draft even
+  if money arrives against it — "sent" is a claim about something *we* did.
+- **Invoices copy the client's name and email**, they do not link to them. An invoice is a record of
+  what was sent; renaming a client next year must not rewrite a document already in their hands.
+- **Print instead of a PDF library.** The printable copy is a whole HTML page opened from a blob URL;
+  the browser's "Save as PDF" makes the PDF. No 400 KB dependency shipped to every visitor.
+- **This console never writes to Stripe.** Stripe's own invoices are a read-only second tab.
+- **Nothing can see a bank account,** so the runway figure is typed in with the date it was true,
+  and that date is printed next to it.
+
+### §18.5 The part-month trap, and the one-calendar rule
+
+Two bugs that will come back if anyone edits the bucketing, so they are written down:
+
+1. **The month you are standing in is not finished.** On the 20th it holds two thirds of a month's
+   income but a full month of costs. Growing a projection from it predicted a falling business every
+   time. `projectForward(..., { partialLast: true, today })` leaves it out of the growth sum and
+   compounds an extra step over it, and the runway figure uses the last **finished** month.
+   Everything comparing "this month" to a finished one prints "20 of 31 days in" beside it.
+2. **One calendar for the page.** Stripe buckets in UTC, a browser in Chicago buckets locally, and
+   for a few hours around the 1st they disagree about which month it is. The server now returns a
+   month map it built itself and the page uses the server's month list as its calendar. Expense
+   dates are plain `YYYY-MM-DD` strings with no zone, so they slot into either the same way.
+   Related and just as sharp: `new Date("2026-08-01")` is **midnight UTC**, which in Chicago is the
+   evening of July 31. `monthKey`, `dateOnly`, `daysBetween` and `addDays` all read the string
+   instead, and due dates are compared as strings. The first of the month is the most common billing
+   day there is.
+
+### §18.6 One change outside this feature
+
+`Overview.jsx` gained a single sentence under its MRR figure: trials are counted there, and the
+Finance page keeps them separate, so the two read differently while a trial is running. Two pages
+showing two numbers under one label was the confusing part — saying which is which fixes it without
+touching `api/stripe-metrics.js`, which older code depends on.
+
+### §18.7 How it was proven, Aug 20 2026
+
+- `npx eslint .` clean. `npx vite build` clean, 121 modules.
+- `bash tests/finance/run.sh` **53/53**, run under `America/Chicago`, `Asia/Tokyo`, `UTC` and
+  `Pacific/Auckland` — the timezone bugs above are exactly the kind that pass in one zone.
+- `tests/brain` 52/52 and `tests/inbox` 47/47 still pass, so nothing older broke.
+- Playwright walked the **built** bundle (see §12 — the Chrome extension wedges the dev server):
+  Finance renders, the caret collapses and reopens Invoices, an invoice opens, a part payment flips
+  it to PAID and every total on the page moves with it, a new invoice is numbered AIS-0006 and saves,
+  the live total tracks the lines as they are typed, a cost is added and the profit numbers change,
+  the printable copy opens with the right totals, and the page holds up at 430px wide. 0 console
+  errors.
+- **Two adversarial review passes by a separate agent, not the one that wrote it.** The first found
+  13 real defects — all fixed, listed here so they are not reintroduced: UTC date parsing (§18.5);
+  gross margin ignoring the measured card fee; a subscription signed and cancelled in the same month
+  inflating the starting MRR; failed checkouts counted as new clients; the invoice editor's footer
+  total not matching what got saved when a line had no description; the projection dropping an empty
+  current month and then drawing it twice; days-to-pay reading −1 for a same-day payment; line items
+  deleted before the replacements were inserted; refunds rewriting the month of the original charge;
+  the runway figure built on the part month; a failed settings read printing sample company details
+  on a real invoice; `created_by` being forgeable by an admin; and revenue bucketed on two calendars.
+  The second pass checked the fixes and found 14 follow-ons — the calendar mismatch above, three more
+  `new Date("YYYY-MM-DD")` sites, the new-client count still including trials, fixed-plus-variable no
+  longer adding up to the total beside it, the Overview mismatch, the editor blaming the wrong field,
+  and preview mode drifting from the database on a removed payment. All fixed.
+
+### §18.8 What is still needed
+
+1. **Run `0007_finance.sql`** in the Supabase SQL editor (SETUP.md § Migration 0007). Nothing saves
+   until then.
+2. **Type in the costs.** Money out does not exist until somebody enters it. Start with the monthly
+   ones.
+3. **Type in the bank balance** (Finance → Update, top right) or the runway figure stays blank.
+4. Blocked until `STRIPE_SECRET_KEY` exists in Vercel: every MEASURED figure. The pages are wired and
+   say WAITING ON KEY rather than guessing.
+5. Deploy — none of this has ever run on admin.aisyndicate.com.
+
+### §18.9 Known gaps, written down rather than hidden
+
+- Plan upgrades and downgrades are not tracked (see §18.4), so expansion, contraction, and the part
+  of NRR that depends on them are blank.
+- Stripe figures cover the last twelve months and are capped at 1,000 rows per resource; the reply
+  carries `truncated` and the page prints it.
+- Client totals net a refund against the client it came from, while the month totals net it against
+  the month it was issued. If a refund crossed a month boundary the two differ; the page says so.
+- No email send from the Invoices page yet. There is a "Copy email text" button and the printable
+  copy; wiring it to the Gmail send endpoint is a small job and was left out on purpose rather than
+  half-built.
+- Nothing reconciles a Stripe invoice against one of ours. They live in two tabs and do not know
+  about each other.
+- The cost list has no receipt upload — a link only, same rule as everywhere else in this console.

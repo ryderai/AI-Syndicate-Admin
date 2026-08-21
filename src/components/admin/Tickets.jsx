@@ -5,6 +5,7 @@ import { toast } from "../../lib/toast.js";
 import {
   MetricCard, SourceBadge, Modal, Field, TextInput, TextArea, Select, EmptyState, timeAgo,
 } from "./shared.jsx";
+import { useScreenContext } from "../../lib/screenContext.js";
 
 /* Tickets — the internal support desk. Tickets come in by hand today and by
  * email/platform hook later (source field is already there). Replies can be
@@ -24,6 +25,12 @@ export default function Tickets({ member }) {
   const [team, setTeam] = useState([]);
   const [statusFilter, setStatusFilter] = useState("openish");
   const [openTicket, setOpenTicket] = useState(null);
+
+  useScreenContext(() => ({
+    page: "Tickets",
+    record: openTicket ? { type: "ticket", id: openTicket.id, label: openTicket.subject } : null,
+    visible: (tickets.rows || []).slice(0, 15).map((t) => `${t.status}: ${t.subject}`),
+  }), [openTicket, tickets.rows]);
   const [newOpen, setNewOpen] = useState(false);
 
   const load = useCallback(async () => {

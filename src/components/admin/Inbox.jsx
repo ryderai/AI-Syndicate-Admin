@@ -16,6 +16,7 @@ import {
   sampleAppendMessage, sampleMarkRead, suggestLinkForEmail,
   EMAIL_STATUS_LABELS,
 } from "../../lib/data.js";
+import { useScreenContext } from "../../lib/screenContext.js";
 
 /* INBOX — the team mailbox.
  *
@@ -131,6 +132,18 @@ export default function Inbox({ member }) {
   const [messages, setMessages] = useState(null);
   const [threadLoading, setThreadLoading] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
+
+  /* Subjects and senders only — never the body of anyone's mail. The
+   * assistant reads the thread's own row from the database if it needs more,
+   * under the same role rules as every other page. */
+  useScreenContext(() => ({
+    page: "Inbox",
+    label: mailbox ? `${mailbox} · "${view}" view` : "no mailbox connected",
+    record: openId
+      ? { type: "email thread", id: openId, label: rows.find((r) => r.id === openId)?.subject || "a thread" }
+      : null,
+    visible: rows.slice(0, 15).map((r) => `${r.status}: ${r.subject || "no subject"}`),
+  }), [mailbox, view, openId, rows]);
 
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);

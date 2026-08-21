@@ -5,6 +5,8 @@ import { toast } from "../../lib/toast.js";
 import {
   SourceBadge, Modal, Field, TextInput, TextArea, Select, EmptyState, Explainer,
 } from "./shared.jsx";
+import BrainMemory from "./brainMemory.jsx";
+import { useScreenContext } from "../../lib/screenContext.js";
 
 /* AI Brain — the editable knowledge base every AI draft is grounded in.
  * Edit a rule here and the next email/ticket/outreach draft follows it.
@@ -49,9 +51,18 @@ export default function Brain({ member }) {
     setChat((c) => [...c, { role: "user", text: q }]);
     setChatInput("");
     setChatBusy(true);
-    const res = await apiFetch("/api/ai-draft", {
+    /* Deliberately /api/ai-chat and not /api/ai-draft. Testing the Brain
+     * against a different endpoint from the one that answers everywhere else
+     * would test the wrong thing — you would tune a prompt the assistant never
+     * uses. Actions are off here: this box is for checking what it KNOWS.  */
+    const res = await apiFetch("/api/ai-chat", {
       method: "POST",
-      body: { kind: "chat", context: q, history: chat.slice(-8) },
+      body: {
+        message: q,
+        history: chat.map((m) => ({ role: m.role, text: m.text })).slice(-8),
+        allowActions: false,
+        screen: { page: "AI Brain", label: "testing the Brain" },
+      },
     });
     setChatBusy(false);
     if (!res.ok) {
@@ -60,8 +71,14 @@ export default function Brain({ member }) {
         : `Couldn't answer: ${res.error}` }]);
       return;
     }
-    setChat((c) => [...c, { role: "assistant", text: res.data.text }]);
+    setChat((c) => [...c, { role: "assistant", text: res.data.text, read: res.data.context?.counts }]);
   };
+
+  useScreenContext(() => ({
+    page: "AI Brain",
+    label: `${brain.rows.filter((r) => r.enabled).length} rules switched on`,
+    visible: brain.rows.slice(0, 20).map((r) => `${r.kind}: ${r.title}`),
+  }), [brain.rows]);
 
   const grouped = Object.keys(KIND_META).map((k) => ({
     kind: k, ...KIND_META[k],
@@ -74,7 +91,7 @@ export default function Brain({ member }) {
         icon="🧠"
         kicker="THE TEAM'S AI MEMORY"
         title="Edit here, and every AI draft changes"
-        body="Emails, ticket replies, and outreach drafts are all written against these entries. Add a rule ('never promise a timeline'), a fact ('we support 12 AI engines'), or a voice note — then prove it in the test chat."
+        body="Every AI answer in this console is written against these entries — the assistant, the notes, the email drafts, the outreach. Add a rule ('never promise a timeline'), a fact ('we support 12 AI engines'), or a voice note, then prove it in the test chat on the right."
       />
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
@@ -132,6 +149,11 @@ export default function Brain({ member }) {
                   {m.role === "assistant" ? "AI" : "YOU"}
                 </div>
                 <div style={{ fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{m.text}</div>
+                {m.read && (
+                  <div style={{ marginTop: 6, fontFamily: "var(--mono)", fontSize: 9.5, letterSpacing: "0.05em", color: "var(--ink-faint)" }}>
+                    READ {Object.entries(m.read).filter(([, v]) => v > 0).map(([k, v]) => `${v} ${k}`).join(" · ") || "nothing"}
+                  </div>
+                )}
               </div>
             ))}
             {chatBusy && <div style={{ fontSize: 12, color: "var(--ink-faint)" }}>Thinking…</div>}
@@ -147,6 +169,10 @@ export default function Brain({ member }) {
           </div>
         </div>
       </div>
+
+      {/* What it has learned, under what it was told. Order matters: rules are
+          the thing you tune, memories are the thing you check. */}
+      <BrainMemory member={member} />
 
       {editItem !== null && (
         <BrainModal member={member} row={editItem.id ? editItem : null} onClose={() => setEditItem(null)} reload={load} />

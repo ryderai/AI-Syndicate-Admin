@@ -15,7 +15,10 @@ function inboxUrl(req, params) {
   const proto = req.headers["x-forwarded-proto"] || "https";
   const host = req.headers["x-forwarded-host"] || req.headers.host;
   const qs = new URLSearchParams(params).toString();
-  return `${proto}://${host}/#/dashboard${qs ? `?${qs}` : ""}`;
+  // Land ON the Inbox page. Since Aug 19 2026 the page id is part of the
+  // address, and only the Inbox reads ?gmail= — a bare "#/dashboard" now
+  // means Overview, where the message would never be shown.
+  return `${proto}://${host}/#/dashboard/inbox${qs ? `?${qs}` : ""}`;
 }
 
 export default async function handler(req, res) {

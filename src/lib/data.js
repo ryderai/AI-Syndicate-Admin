@@ -1278,3 +1278,225 @@ export async function deletePlatformAccount(id) {
   }
   return { ok: true };
 }
+
+/* ==================================================================== */
+/* APPENDED Aug 20 2026 — AI notes, brain memory, lead sources.          */
+/* Nothing above this line was changed. New sections go BELOW this one.  */
+/* ==================================================================== */
+
+/* Preview rows for the three new tables. Names are deliberately fake and
+ * domains end in -sample, same rule as the store above. */
+const previewNotes = [
+  { id: "an1", category: "follow_up", title: "3 leads owed a contact", body: "3 leads have gone past the point where a contact is due. The coldest is Sarah Chen — last touched 9 days ago, sitting at \"contacted\".", evidence: [{ table: "admin_leads", id: "l1", label: "Sarah Chen" }, { table: "admin_leads", id: "l2", label: "Summit Roofing Co" }], written_by: "counted", client_id: null, lead_id: null, owner_id: "preview-user", urgency: 3, status: "open", fingerprint: "lead-cold:preview-user", generated_at: new Date(Date.now() - 2 * 3600e3).toISOString(), created_at: new Date(Date.now() - 2 * 3600e3).toISOString(), updated_at: new Date(Date.now() - 2 * 3600e3).toISOString() },
+  { id: "an2", category: "attention", title: "2 tasks for Harbor Injury Law past the date", body: "The oldest is \"Send the schema markup for the second office\" — 6 days past its date, still \"blocked\".", evidence: [{ table: "admin_tasks", id: "t3", label: "Send the schema markup for the second office" }], written_by: "counted", client_id: "c2", lead_id: null, owner_id: null, urgency: 2, status: "open", fingerprint: "tasks-late:c2", generated_at: new Date(Date.now() - 2 * 3600e3).toISOString(), created_at: new Date(Date.now() - 2 * 3600e3).toISOString(), updated_at: new Date(Date.now() - 2 * 3600e3).toISOString() },
+  { id: "an3", category: "attention", title: "1 email waiting on us", body: "\"AI visibility audit for our firm\" from Dana W. has been marked needs reply for 2 days.", evidence: [{ table: "admin_email_threads", id: "et1", label: "AI visibility audit for our firm" }], written_by: "ai_written", client_id: "c1", lead_id: null, owner_id: "preview-user", urgency: 2, status: "open", fingerprint: "email-needs-reply", generated_at: new Date(Date.now() - 2 * 3600e3).toISOString(), created_at: new Date(Date.now() - 2 * 3600e3).toISOString(), updated_at: new Date(Date.now() - 2 * 3600e3).toISOString() },
+  { id: "an4", category: "in_circulation", title: "6 leads worked in the last 7 days", body: "4 calls, 2 emails across 6 leads. Counted from logged activity only — a call nobody logged is not in this number.", evidence: [{ table: "admin_lead_activity", id: "a1", label: "call (talked)" }], written_by: "counted", client_id: null, lead_id: null, owner_id: null, urgency: 1, status: "open", fingerprint: "sales-moving", generated_at: new Date(Date.now() - 2 * 3600e3).toISOString(), created_at: new Date(Date.now() - 2 * 3600e3).toISOString(), updated_at: new Date(Date.now() - 2 * 3600e3).toISOString() },
+  { id: "an5", category: "win", title: "1 lead marked won this week", body: "Lakeside Realty Group.", evidence: [{ table: "admin_leads", id: "l4", label: "Lakeside Realty Group" }], written_by: "counted", client_id: null, lead_id: null, owner_id: null, urgency: 1, status: "open", fingerprint: "leads-won", generated_at: new Date(Date.now() - 2 * 3600e3).toISOString(), created_at: new Date(Date.now() - 2 * 3600e3).toISOString(), updated_at: new Date(Date.now() - 2 * 3600e3).toISOString() },
+];
+
+const previewMemory = [
+  { id: "bm1", kind: "preference", subject: "Harbor Injury Law", body: "Everything the firm publishes goes through their legal review first. Allow a week.", origin: "assistant", origin_ref: null, client_id: "c2", lead_id: null, weight: 5, confirmed: true, confirmed_by: "preview-user", last_used_at: new Date(Date.now() - 20 * 3600e3).toISOString(), use_count: 4, active: true, created_by: "preview-user", created_at: daysAgo(6), updated_at: daysAgo(1) },
+  { id: "bm2", kind: "gotcha", subject: "The platform's scores", body: "Scores cache, sometimes for days. Always re-run and read the MEASURED timestamp before quoting a number.", origin: "person", origin_ref: null, client_id: null, lead_id: null, weight: 5, confirmed: true, confirmed_by: "preview-user", last_used_at: new Date(Date.now() - 3 * 3600e3).toISOString(), use_count: 11, active: true, created_by: "preview-user", created_at: daysAgo(12), updated_at: daysAgo(2) },
+  { id: "bm3", kind: "fact", subject: "Lakeside Realty Group", body: "Dana W. is the decision maker. Her office manager handles scheduling but does not sign.", origin: "assistant", origin_ref: null, client_id: "c1", lead_id: null, weight: 3, confirmed: false, confirmed_by: null, last_used_at: null, use_count: 0, active: true, created_by: "preview-user", created_at: daysAgo(2), updated_at: daysAgo(2) },
+];
+
+const previewLeadSources = [
+  { id: "ls1", label: "CJ's realtor sheet — August", kind: "import", query: {}, provider: null, auto_daily: false, daily_cap: 50, assign_to: [], last_run_at: daysAgo(3), last_run_found: 214, last_run_new: 186, last_run_error: null, active: true, created_by: "preview-user", created_at: daysAgo(3), updated_at: daysAgo(3) },
+  { id: "ls2", label: "Destin med spas", kind: "scraper", query: { vertical: "medical spa", city: "Destin", state: "FL", keywords: "med spa" }, provider: "platform", auto_daily: false, daily_cap: 25, assign_to: [], last_run_at: null, last_run_found: null, last_run_new: null, last_run_error: null, active: true, created_by: "preview-user", created_at: daysAgo(1), updated_at: daysAgo(1) },
+];
+
+/* ---- AI NOTES ---------------------------------------------------- */
+
+export const NOTE_CATEGORIES = ["follow_up", "attention", "in_circulation", "win"];
+export const NOTE_CATEGORY_LABELS = {
+  follow_up: "Needs a follow-up",
+  attention: "Needs attention",
+  in_circulation: "In circulation",
+  win: "Wins",
+};
+export const NOTE_CATEGORY_HELP = {
+  follow_up: "Somebody is owed a reply or a call, and it is past due.",
+  attention: "This has stopped moving, or it is going wrong.",
+  in_circulation: "This is moving right now — here is where it stands.",
+  win: "This went well. Nothing else on this page ever says so.",
+};
+
+export async function listAiNotes({ statuses = ["open"] } = {}) {
+  if (!live()) {
+    return { rows: previewNotes.filter((n) => statuses.includes(n.status)), sample: true };
+  }
+  const { data, error } = await getSupabase()
+    .from("admin_ai_notes").select("*")
+    .in("status", statuses)
+    .order("urgency", { ascending: false })
+    .order("generated_at", { ascending: false })
+    .limit(300);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+/** Mark a note done or dismissed. A person's decision is never undone by a
+ * re-run of the generator, which is why this writes a status and not a delete. */
+export async function setNoteStatus(id, status, userId) {
+  const patch = { status, status_changed_at: new Date().toISOString(), status_changed_by: userId || null };
+  if (!live()) {
+    const i = previewNotes.findIndex((n) => n.id === id);
+    if (i >= 0) previewNotes[i] = { ...previewNotes[i], ...patch };
+    return { ok: true, sample: true };
+  }
+  const { error } = await getSupabase().from("admin_ai_notes").update(patch).eq("id", id);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/** Write the note's link back after a task or reminder is made from it, so the
+ * page can show "turned into a task" instead of offering it again. */
+export async function linkNote(id, patch) {
+  if (!live()) {
+    const i = previewNotes.findIndex((n) => n.id === id);
+    if (i >= 0) previewNotes[i] = { ...previewNotes[i], ...patch };
+    return { ok: true, sample: true };
+  }
+  const { error } = await getSupabase().from("admin_ai_notes").update(patch).eq("id", id);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/* ---- BRAIN MEMORY ------------------------------------------------- */
+
+export const MEMORY_KINDS = ["fact", "preference", "event", "person", "decision", "gotcha"];
+export const MEMORY_KIND_LABELS = {
+  fact: "Fact", preference: "How they like it", event: "Something that happened",
+  person: "About a person", decision: "A decision and why", gotcha: "A trap",
+};
+
+export async function listMemory({ includeRetired = false } = {}) {
+  if (!live()) {
+    return { rows: previewMemory.filter((m) => includeRetired || m.active), sample: true };
+  }
+  let q = getSupabase().from("admin_brain_memory").select("*")
+    .order("weight", { ascending: false })
+    .order("updated_at", { ascending: false })
+    .limit(500);
+  if (!includeRetired) q = q.eq("active", true);
+  const { data, error } = await q;
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+export async function upsertMemory(patch) {
+  if (!live()) {
+    const now = new Date().toISOString();
+    if (patch.id) {
+      const i = previewMemory.findIndex((m) => m.id === patch.id);
+      if (i >= 0) previewMemory[i] = { ...previewMemory[i], ...patch, updated_at: now };
+      return { ok: true, row: previewMemory[i], sample: true };
+    }
+    const row = { id: pid("bm"), kind: "fact", origin: "person", weight: 3, confirmed: true, active: true, use_count: 0, last_used_at: null, created_at: now, updated_at: now, ...patch };
+    previewMemory.unshift(row);
+    return { ok: true, row, sample: true };
+  }
+  const supabase = getSupabase();
+  const q = patch.id
+    ? supabase.from("admin_brain_memory").update(patch).eq("id", patch.id).select().maybeSingle()
+    : supabase.from("admin_brain_memory").insert(patch).select().maybeSingle();
+  const { data, error } = await q;
+  // 23505 = the unique index. This exact memory is already stored, which is
+  // the outcome the person wanted, so it is not reported as a failure.
+  if (error?.code === "23505") return { ok: true, duplicate: true };
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, row: data };
+}
+
+export async function deleteMemory(id) {
+  if (!live()) {
+    const i = previewMemory.findIndex((m) => m.id === id);
+    if (i >= 0) previewMemory.splice(i, 1);
+    return { ok: true, sample: true };
+  }
+  const { error } = await getSupabase().from("admin_brain_memory").delete().eq("id", id);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/* ---- LEAD SOURCES ------------------------------------------------- */
+
+export async function listLeadSources() {
+  if (!live()) return { rows: [...previewLeadSources], sample: true };
+  const { data, error } = await getSupabase()
+    .from("admin_lead_sources").select("*")
+    .order("created_at", { ascending: false }).limit(100);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+export async function upsertLeadSource(patch) {
+  if (!live()) {
+    const now = new Date().toISOString();
+    if (patch.id) {
+      const i = previewLeadSources.findIndex((s) => s.id === patch.id);
+      if (i >= 0) previewLeadSources[i] = { ...previewLeadSources[i], ...patch, updated_at: now };
+      return { ok: true, row: previewLeadSources[i], sample: true };
+    }
+    const row = { id: pid("ls"), kind: "import", query: {}, provider: null, auto_daily: false, daily_cap: 50, assign_to: [], active: true, last_run_at: null, last_run_found: null, last_run_new: null, last_run_error: null, created_at: now, updated_at: now, ...patch };
+    previewLeadSources.unshift(row);
+    return { ok: true, row, sample: true };
+  }
+  const supabase = getSupabase();
+  const q = patch.id
+    ? supabase.from("admin_lead_sources").update(patch).eq("id", patch.id).select().maybeSingle()
+    : supabase.from("admin_lead_sources").insert(patch).select().maybeSingle();
+  const { data, error } = await q;
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, row: data };
+}
+
+/**
+ * Which of these dedupe keys are already in the pipeline.
+ *
+ * Asked BEFORE an import saves anything, so the person is told "12 of these
+ * 214 are already here" while they can still do something about it. Chunked at
+ * 100, because a single `in` list of two thousand values makes a URL long
+ * enough for the database to refuse it — and the refusal would arrive as
+ * "import failed" with no clue why.
+ */
+export async function findExistingLeadKeys(keys) {
+  const unique = [...new Set(keys.filter(Boolean))];
+  if (!unique.length) return { keys: new Set(), sample: !live() };
+  if (!live()) {
+    // Preview has no dedupe_key column, so it is computed the same way the
+    // browser computes it for the incoming rows — otherwise the preview would
+    // claim nothing is ever a duplicate.
+    const have = new Set();
+    for (const l of previewStore.leads) {
+      const k = l.email ? `e:${String(l.email).toLowerCase()}` : null;
+      if (k && unique.includes(k)) have.add(k);
+    }
+    return { keys: have, sample: true };
+  }
+  const found = new Set();
+  const supabase = getSupabase();
+  for (let i = 0; i < unique.length; i += 100) {
+    const { data, error } = await supabase
+      .from("admin_leads").select("dedupe_key").in("dedupe_key", unique.slice(i, i + 100));
+    if (error) return { keys: found, error: error.message };
+    for (const row of data || []) if (row.dedupe_key) found.add(row.dedupe_key);
+  }
+  return { keys: found };
+}
+
+/** Leads a rep should work next: theirs, still open, coldest first. The same
+ * staleness rules as the Work page, so the two can never disagree. */
+export function buildCallQueue(leads, userId, { includeUnclaimed = true } = {}) {
+  const rows = (leads || []).filter((l) => {
+    if (["won", "lost"].includes(l.stage)) return false;
+    if (l.owner_id === userId) return true;
+    return includeUnclaimed && !l.owner_id;
+  });
+  const rank = (l) => {
+    const limit = STALE_AFTER_DAYS[l.stage];
+    const quiet = daysSince(l.last_activity_at || l.created_at);
+    if (limit === undefined || quiet === null) return -1;
+    return quiet - limit; // above zero = overdue, and by how much
+  };
+  return rows
+    .map((l) => ({ lead: l, over: rank(l), mine: l.owner_id === userId }))
+    .sort((a, b) => (b.over - a.over) || (a.mine === b.mine ? 0 : a.mine ? -1 : 1));
+}

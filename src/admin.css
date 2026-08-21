@@ -212,22 +212,76 @@ select.adm-input { cursor: pointer; }
 .adm-drawer-body { flex: 1; overflow-y: auto; padding: 20px 22px; }
 .adm-drawer-foot { padding: 14px 22px; border-top: 1px solid var(--rule); background: var(--bg-1); }
 
-/* ---------- Chart tooltip ---------- */
-/* Stays INSIDE the chart card (top of the plot area) instead of floating
-   above it and covering the row of boxes overhead. */
-.adm-chart-tip {
-  position: absolute;
-  top: 0;
-  transform: translate(-50%, 0);
-  background: white;
+/* ---------- Chart readout (replaces the old floating tooltip) ---------- */
+/* Aug 19 2026: the hover box used to float over the plot and hide the bar you
+   were pointing at. Now the numbers print in their own strip BELOW the chart,
+   inside the same card, in normal page flow — it can never cover data. It is
+   always on screen (newest period when nothing is hovered) so the card does
+   not grow and shrink under the mouse. */
+.adm-chart-readout {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: var(--bg-1);
   border: 1px solid var(--rule);
   border-radius: 10px;
-  box-shadow: var(--shadow-lg);
-  padding: 8px 12px;
-  pointer-events: none;
-  white-space: nowrap;
-  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px 26px;
+  flex-wrap: wrap;
+  min-height: 46px;
+  box-sizing: border-box;
 }
+/* Fixed-width period column. Without it, the numbers slide sideways as the
+   label length changes — "AUGUST 2026" vs "WEEK OF JUN 15 – JUN 21" — and the
+   figures you are trying to compare move while you read them. */
+.adm-chart-readout-when {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 0 0 auto;
+  width: 152px;
+  padding-right: 14px;
+  border-right: 1px solid var(--rule);
+  line-height: 1.35;
+  /* Two lines' worth, always. The "point at any bar" line only shows when
+     nothing is hovered; without reserved height the card twitched 3px the
+     first time you touched a bar. Measured, not guessed. */
+  min-height: 29px;
+  justify-content: center;
+}
+@media (max-width: 620px) {
+  .adm-chart-readout-when { width: 100%; padding-right: 0; border-right: 0; }
+}
+.adm-chart-readout-hint {
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+}
+.adm-chart-readout-cells { display: flex; align-items: baseline; gap: 10px 26px; flex-wrap: wrap; }
+.adm-chart-readout-cell { min-width: 88px; }
+/* The AI-spend cell carries the "% of money in" tail, whose length changes
+   with the value. Fixed width, so the cell after it holds still. */
+.adm-chart-readout-cell--wide { min-width: 208px; }
+@media (max-width: 620px) {
+  .adm-chart-readout-cell, .adm-chart-readout-cell--wide { min-width: 0; }
+}
+.adm-chart-readout-label {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 1px;
+}
+.adm-chart-readout-value { font-size: 13px; font-weight: 700; color: var(--ink); }
+.adm-chart-readout-sub { font-size: 11px; font-weight: 500; color: var(--ink-dim); margin-left: 6px; }
 
 /* ---------- Pipeline board ---------- */
 .adm-board { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; }
@@ -1263,4 +1317,175 @@ select.adm-input { cursor: pointer; }
 @media (max-width: 900px) {
   .adm-pa-notecols { grid-template-columns: 1fr; }
   .adm-pa-grid { grid-template-columns: 1fr; }
+}
+
+/* ==================================================================== */
+/* APPENDED Aug 20 2026 — FINANCE + INVOICES.                           */
+/* Nothing above this line was changed. New sections go BELOW this one.  */
+/* ==================================================================== */
+
+/* ---------- sidebar drop-down (Finance → Invoices) ---------- */
+.dash-nav-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.45);
+  transition: transform 0.16s ease, color 0.16s ease, background 0.16s ease;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.dash-nav-caret:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.dash-nav-caret.open { transform: rotate(90deg); }
+.dash-sidebar-nav .dash-nav-child { padding-left: 34px; font-size: 13px; }
+.dash-sidebar-nav .dash-nav-child .dash-nav-icon { opacity: 0.75; }
+
+/* ---------- the money hero ---------- */
+.adm-fin-hero {
+  padding: 26px 30px;
+  background: linear-gradient(135deg, #0a2245 0%, #1e1b4b 60%, #312e81 100%);
+  border: 0;
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+}
+.adm-fin-hero-glow {
+  position: absolute; top: -140px; right: -90px; width: 400px; height: 400px;
+  border-radius: 50%; filter: blur(30px);
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.35), transparent 65%);
+}
+.adm-fin-hero-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(140px, 1fr));
+  gap: 22px;
+  align-items: end;
+}
+.adm-fin-hero-kicker {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 800;
+  letter-spacing: 0.13em; color: rgba(255, 255, 255, 0.6);
+}
+.adm-fin-hero-big {
+  font-family: var(--display); font-size: 50px; font-weight: 800;
+  letter-spacing: -0.03em; line-height: 1.05; margin-top: 8px;
+}
+.adm-fin-hero-mid {
+  font-family: var(--display); font-size: 27px; font-weight: 700;
+  letter-spacing: -0.02em; margin-top: 8px;
+}
+.adm-fin-hero-dashed { border-bottom: 2px dashed rgba(255, 255, 255, 0.35); display: inline-block; padding-bottom: 3px; }
+.adm-fin-hero-unit { font-size: 17px; font-weight: 600; color: rgba(255, 255, 255, 0.55); }
+.adm-fin-hero-note { font-size: 11.5px; color: rgba(255, 255, 255, 0.6); margin-top: 6px; line-height: 1.5; }
+.adm-fin-linkbtn {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: inherit; font: inherit; text-decoration: underline; opacity: 0.85;
+}
+.adm-fin-linkbtn:hover { opacity: 1; }
+
+/* ---------- layout ---------- */
+.adm-fin-main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(260px, 0.95fr); gap: 16px; align-items: start; }
+.adm-fin-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.adm-fin-rail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.adm-fin-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
+.adm-fin-form2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 16px; }
+.adm-fin-form3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 16px; }
+
+@media (max-width: 1080px) {
+  .adm-fin-main { grid-template-columns: minmax(0, 1fr); }
+  .adm-fin-hero-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .adm-fin-hero-big { font-size: 40px; }
+}
+
+/* ---------- a block on the page ---------- */
+.adm-fin-block { padding: 22px; }
+.adm-fin-block-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.adm-fin-block-title { font-family: var(--display); font-size: 18px; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); }
+.adm-fin-block-blurb { margin-top: 6px; font-size: 12.5px; color: var(--ink-dim); line-height: 1.55; max-width: 720px; }
+.adm-fin-foot-note { margin-top: 12px; font-size: 11.5px; color: var(--ink-faint); line-height: 1.6; }
+.adm-fin-callout {
+  margin-top: 12px; padding: 12px 14px; border-radius: 10px;
+  background: var(--bg-1); border: 1px solid var(--rule);
+  font-size: 12.5px; color: var(--ink-2); line-height: 1.6;
+}
+.adm-fin-empty { padding: 18px 4px; font-size: 13px; color: var(--ink-dim); line-height: 1.6; }
+.adm-fin-divider {
+  display: flex; align-items: center; gap: 12px; margin: 10px 0 -4px;
+  font-family: var(--mono); font-size: 9.5px; font-weight: 800; letter-spacing: 0.14em; color: var(--ink-faint);
+}
+.adm-fin-divider::before, .adm-fin-divider::after { content: ""; height: 1px; background: var(--rule); flex: 1; }
+.adm-fin-divider::before { flex: 0 0 8px; }
+.adm-fin-tag {
+  display: inline-block; margin-top: 4px; padding: 1px 6px; border-radius: 4px;
+  background: var(--bg-3); color: var(--ink-dim);
+  font-family: var(--mono); font-size: 9px; font-weight: 800; letter-spacing: 0.08em;
+}
+
+/* ---------- one figure ---------- */
+.adm-fin-fig { padding: 16px 18px; }
+.adm-fin-fig-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.adm-fin-fig-val {
+  font-family: var(--display); font-size: 26px; font-weight: 700;
+  letter-spacing: -0.025em; line-height: 1.1; margin-top: 8px; color: var(--ink);
+}
+.adm-fin-blank { font-family: var(--body); font-size: 14px; font-weight: 500; color: var(--ink-faint); }
+.adm-fin-fig-sub { margin-top: 5px; font-size: 11.5px; color: var(--ink-2); }
+.adm-fin-fig-means { margin-top: 8px; font-size: 11.5px; color: var(--ink-dim); line-height: 1.5; }
+.adm-fin-fig-why { margin-top: 6px; font-size: 11.5px; color: var(--ink-faint); line-height: 1.5; font-style: italic; }
+
+/* ---------- charts ---------- */
+.adm-fin-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 11.5px; color: var(--ink-2); }
+.adm-fin-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.adm-fin-legend i { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto; }
+.adm-fin-legend-dash { border: 1.5px dashed var(--ink-faint); background: transparent; }
+.adm-fin-barcol {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: flex-end; height: 100%; min-width: 0; transition: opacity 0.15s;
+}
+
+/* ---------- MRR movement ---------- */
+.adm-fin-move-words { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--ink-2); margin-bottom: 10px; }
+.adm-fin-move-bar { display: flex; height: 14px; border-radius: 99px; overflow: hidden; background: var(--bg-3); }
+.adm-fin-move-bar span { display: block; height: 100%; }
+.adm-fin-move-note { margin-top: 10px; font-size: 11.5px; color: var(--ink-faint); line-height: 1.6; }
+
+/* ---------- ranked bars ---------- */
+.adm-fin-ranked { display: flex; flex-direction: column; gap: 8px; }
+.adm-fin-ranked-row { display: grid; grid-template-columns: minmax(90px, 150px) minmax(60px, 1fr) auto; gap: 10px; align-items: center; }
+.adm-fin-ranked-name { font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adm-fin-ranked-track { height: 10px; border-radius: 99px; background: var(--bg-3); overflow: hidden; }
+.adm-fin-ranked-track span { display: block; height: 100%; border-radius: 99px; }
+.adm-fin-ranked-val { font-size: 12.5px; font-weight: 700; color: var(--ink); white-space: nowrap; }
+.adm-fin-ranked-pct { margin-left: 6px; font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--ink-faint); }
+
+/* ---------- rail lists ---------- */
+.adm-fin-list { padding: 0; overflow: hidden; }
+.adm-fin-list-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 16px 18px 8px; }
+.adm-fin-list-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; padding: 9px 18px; border-top: 1px solid var(--rule); }
+.adm-fin-list-name { font-size: 13px; font-weight: 600; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adm-fin-list-sub { display: block; font-size: 11px; font-weight: 400; color: var(--ink-dim); }
+.adm-fin-list-amt { font-size: 13px; font-weight: 700; color: var(--ink); white-space: nowrap; }
+.adm-fin-list-foot { padding: 10px 18px 14px; border-top: 1px solid var(--rule); font-size: 12px; }
+.adm-fin-list-foot .adm-fin-linkbtn { color: var(--accent-deep); font-weight: 600; text-decoration: none; }
+.adm-fin-list-foot .adm-fin-linkbtn:hover { text-decoration: underline; }
+
+/* ---------- toolbar + forms ---------- */
+.adm-fin-toolbar { padding: 14px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.adm-fin-check { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--rule); border-radius: 10px; background: var(--bg-1); margin-bottom: 14px; font-size: 12.5px; line-height: 1.55; color: var(--ink-2); }
+.adm-fin-check input { margin-top: 3px; }
+
+/* ---------- invoice lines ---------- */
+.adm-inv-lines { display: flex; flex-direction: column; gap: 6px; }
+.adm-inv-line { display: grid; grid-template-columns: minmax(120px, 1fr) 70px 110px 90px 34px; gap: 8px; align-items: center; }
+.adm-inv-line-head { font-family: var(--mono); font-size: 9.5px; font-weight: 800; letter-spacing: 0.1em; color: var(--ink-faint); }
+.adm-inv-line-head span:nth-child(2), .adm-inv-line-head span:nth-child(3), .adm-inv-line-head span:nth-child(4) { text-align: right; }
+.adm-inv-line-amt { text-align: right; font-weight: 700; font-size: 13px; color: var(--ink); }
+.adm-inv-totals { margin-left: auto; width: min(300px, 100%); margin-top: 14px; }
+.adm-inv-totals > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 5px 0; font-size: 13px; color: var(--ink-2); }
+.adm-inv-totals .adm-inv-total-big { border-top: 2px solid var(--ink); margin-top: 6px; padding-top: 9px; font-size: 16px; color: var(--ink); font-weight: 800; }
+
+@media (max-width: 640px) {
+  .adm-inv-line { grid-template-columns: 1fr 1fr; }
+  .adm-inv-line-head { display: none; }
 }

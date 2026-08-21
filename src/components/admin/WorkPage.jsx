@@ -9,6 +9,7 @@ import {
   TASK_STATUS_LABELS, LEAD_STAGE_LABELS,
 } from "../../lib/data.js";
 import { toast } from "../../lib/toast.js";
+import { useScreenContext } from "../../lib/screenContext.js";
 
 /* WORK — the page you open to get through the day.
  *
@@ -111,6 +112,14 @@ export default function WorkPage({ member }) {
   const [work, setWork] = useState(null);
   const [notes, setNotes] = useState(null);
   const [busyId, setBusyId] = useState(null);
+
+  useScreenContext(() => ({
+    page: "Work",
+    label: work
+      ? `${work.counts?.overdue || 0} tasks late, ${work.counts?.contact || 0} leads owed a contact, ${work.counts?.remindersDue || 0} follow-ups due`
+      : "still loading",
+    visible: (work?.tasks || []).slice(0, 15).map((t) => `task: ${t.title}`),
+  }), [work]);
 
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState({ title: "", body: "" });

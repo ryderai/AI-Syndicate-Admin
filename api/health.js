@@ -17,6 +17,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       supabase: false, stripe: false, gmail: false, ai: false, usageIngest: false,
       platformSso: false, platformAccountSet: false,
+      leadGenPlatform: false, leadGenApollo: false, leadScrapeCron: false,
       note: "Supabase env vars are missing on the server.",
     });
   }
@@ -38,6 +39,14 @@ export default async function handler(req, res) {
     // error on the button itself.
     platformSso: isServerConfigured(),
     platformAccountSet: Boolean((process.env.PLATFORM_ACCOUNT_EMAIL || "").trim()),
+    // Lead scraping. Two providers, either of which is enough on its own —
+    // the source card on the Leads page says which one it is waiting for.
+    leadGenPlatform: Boolean(process.env.PLATFORM_LEADGEN_URL),
+    leadGenApollo: Boolean(process.env.APOLLO_API_KEY),
+    // Without CRON_SECRET the daily run is closed, not open. Worth reporting,
+    // because "the schedule exists" and "the schedule can run" are different
+    // facts and only one of them is visible in the Vercel dashboard.
+    leadScrapeCron: Boolean(process.env.CRON_SECRET),
     role: member.membership.role,
   });
 }

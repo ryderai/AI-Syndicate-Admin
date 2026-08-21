@@ -214,15 +214,66 @@ export function Select({ options, ...props }) {
 
 /* ------------------------------------------------------------------ */
 /* Charts — single-series only (palette-validated: #6366f1 on light).   */
-/* Thin marks, 4px rounded data-ends, 2px gaps, hover tooltip.          */
+/* Thin marks, 4px rounded data-ends, 2px gaps, in-card hover readout.  */
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* ChartReadout — one bar's numbers, printed INSIDE the card BELOW the  */
+/* chart. Replaces the old floating box (`.adm-chart-tip`), which sat   */
+/* on top of the bars and hid the very bar you were pointing at, plus   */
+/* its neighbours. Ryder asked for this on Aug 19 2026.                 */
+/*                                                                      */
+/* Three rules this follows:                                            */
+/*  1. It is ALWAYS on screen. An empty-until-hover strip would make    */
+/*     the card grow and shrink under the mouse, which moves the bars   */
+/*     while you are trying to point at them. With nothing hovered it   */
+/*     shows the newest period and says so.                             */
+/*  2. It never sits on top of data. Below the axis labels, in flow.    */
+/*  3. Phones and tablets have no hover, so the bars answer to a tap    */
+/*     as well. Known limit, written down rather than papered over: the */
+/*     bars are not reachable by keyboard, so a keyboard-only or        */
+/*     screen-reader user gets the newest period and the chart's spoken */
+/*     summary, not one period at a time. Fixing that means making      */
+/*     every bar a real focusable control, which is a bigger job than   */
+/*     this one. No aria-live here on purpose — it would read all four  */
+/*     values aloud again for every bar the pointer crosses.            */
+/* ------------------------------------------------------------------ */
+export function ChartReadout({ when, cells, hint }) {
+  return (
+    <div className="adm-chart-readout">
+      <div className="adm-chart-readout-when">
+        <span>{String(when).toUpperCase()}</span>
+        {/* The hint line is ALWAYS rendered — an empty one when a bar is
+          * hovered — so the strip cannot change height under the pointer. */}
+        <span className="adm-chart-readout-hint">{hint || "\u00A0"}</span>
+      </div>
+      <div className="adm-chart-readout-cells">
+        {cells.map((c) => (
+          <div key={c.label} className={`adm-chart-readout-cell${c.wide ? " adm-chart-readout-cell--wide" : ""}`}>
+            <div className="adm-chart-readout-label">{c.label}</div>
+            <div className="adm-chart-readout-value" style={c.color ? { color: c.color } : undefined}>
+              {c.value}
+              {c.sub && <span className="adm-chart-readout-sub">· {c.sub}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function Bars({ data, height = 160, format = (v) => v, ariaLabel }) {
   // data: [{ label, value }]
   const [hover, setHover] = useState(null);
   const max = Math.max(1, ...data.map((d) => d.value));
   const maxIdx = data.reduce((mi, d, i) => (d.value > data[mi].value ? i : mi), 0);
+  // Nothing hovered → read out the newest bar, and say that is what it is.
+  // Clamped: switching range shortens the series while a tap can still be
+  // "held", and an out-of-range index used to blank the strip.
+  const shown = Math.min(hover != null ? hover : data.length - 1, data.length - 1);
+  const row = data[shown];
   return (
+    <div>
     <div style={{ position: "relative" }} aria-label={ariaLabel} role="img">
       <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height }}>
         {data.map((d, i) => {
@@ -233,6 +284,7 @@ export function Bars({ data, height = 160, format = (v) => v, ariaLabel }) {
               style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%", cursor: "default", minWidth: 0 }}
               onMouseEnter={() => setHover(i)}
               onMouseLeave={() => setHover(null)}
+              onTouchStart={() => setHover(i)}
             >
               {i === maxIdx && d.value > 0 && (
                 <div style={{ fontSize: 10, fontFamily: "var(--mono)", fontWeight: 700, color: "var(--ink-2)", marginBottom: 3, whiteSpace: "nowrap" }}>{format(d.value)}</div>
@@ -254,12 +306,16 @@ export function Bars({ data, height = 160, format = (v) => v, ariaLabel }) {
           </div>
         ))}
       </div>
-      {hover != null && (
-        <div className="adm-chart-tip" style={{ left: `${((hover + 0.5) / data.length) * 100}%` }}>
-          <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: "0.08em", color: "var(--ink-dim)" }}>{data[hover].label.toUpperCase()}</div>
-          <div style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)" }}>{format(data[hover].value)}</div>
-          {data[hover].detail && <div style={{ fontSize: 11, color: "var(--ink-dim)", marginTop: 2 }}>{data[hover].detail}</div>}
-        </div>
+    </div>
+      {row && (
+        <ChartReadout
+          when={row.label}
+          hint={hover == null ? "newest · tap or hover" : null}
+          cells={[
+            { label: "Amount", value: format(row.value) },
+            ...(row.detail ? [{ label: "Detail", value: row.detail }] : []),
+          ]}
+        />
       )}
     </div>
   );
@@ -320,6 +376,10 @@ export function MoneyBars({ data, height = 210, ariaLabel }) {
   const px = (cents) => Math.round((cents / max) * plot);
 
   const maxIdx = data.reduce((mi, d, i) => (d.revenue > data[mi].revenue ? i : mi), 0);
+  // Nothing hovered → the readout shows the newest period, and labels it as
+  // such. Clamped: the Weekly/Monthly/Quarterly tabs change how many bars
+  // there are, and a stale index used to blank the strip.
+  const shown = data[Math.min(hover != null ? hover : data.length - 1, data.length - 1)];
   const totalRev = data.reduce((s, d) => s + d.revenue, 0);
   const totalCost = data.reduce((s, d) => s + d.cost, 0);
 
@@ -352,6 +412,7 @@ export function MoneyBars({ data, height = 210, ariaLabel }) {
                 style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%", minWidth: 0, opacity: dim ? 0.55 : 1, transition: "opacity 0.15s" }}
                 onMouseEnter={() => setHover(i)}
                 onMouseLeave={() => setHover(null)}
+                onTouchStart={() => setHover(i)}
               >
                 {i === maxIdx && d.revenue > 0 && (
                   <div style={{ fontSize: 10, fontFamily: "var(--mono)", fontWeight: 700, color: "var(--ink-2)", marginBottom: 3, whiteSpace: "nowrap" }}>
@@ -394,28 +455,33 @@ export function MoneyBars({ data, height = 210, ariaLabel }) {
           })}
         </div>
 
-        {hover != null && (
-          <div className="adm-chart-tip" style={{ left: `${((hover + 0.5) / data.length) * 100}%` }}>
-            <div style={{ fontFamily: "var(--mono)", fontSize: 9, letterSpacing: "0.08em", color: "var(--ink-dim)" }}>
-              {String(data[hover].tipLabel || data[hover].label).toUpperCase()}
-            </div>
-            <div style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)" }}>{fmtMoney(data[hover].revenue)} in</div>
-            <div style={{ fontSize: 11, color: "var(--ink-dim)", marginTop: 2 }}>
-              −{fmtMoney(data[hover].cost)} AI spend
-              {data[hover].revenue > 0 && (
-                <span> · {((data[hover].cost / data[hover].revenue) * 100).toFixed(
-                  (data[hover].cost / data[hover].revenue) * 100 < 1 ? 2 : 1
-                )}% of money in</span>
-              )}
-            </div>
-            <div style={{ fontSize: 11.5, fontWeight: 700, marginTop: 3, color: data[hover].revenue - data[hover].cost > 0 ? "#006300" : MONEY_RED }}>
-              {data[hover].revenue - data[hover].cost >= 0
-                ? `${fmtMoney(data[hover].revenue - data[hover].cost)} left`
-                : `${fmtMoney(data[hover].cost - data[hover].revenue)} short`}
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* The numbers for one period — inside the card, under the chart, never
+        * on top of the bars. Nothing hovered = the newest period. */}
+      {shown && (
+        <ChartReadout
+          when={shown.tipLabel || shown.label}
+          hint={hover == null ? "newest · tap or hover" : null}
+          cells={[
+            { label: "Money in", value: fmtMoney(shown.revenue) },
+            {
+              label: "AI spend",
+              value: `−${fmtMoney(shown.cost)}`,
+              color: MONEY_RED,
+              // Widest cell, fixed width: its share text changes length
+              // ("0.63%" vs "1.0%"), which used to nudge the figure after it.
+              wide: true,
+              sub: shown.revenue > 0
+                ? `${((shown.cost / shown.revenue) * 100).toFixed((shown.cost / shown.revenue) * 100 < 1 ? 2 : 1)}% of money in`
+                : null,
+            },
+            shown.revenue - shown.cost >= 0
+              ? { label: "Left after AI", value: fmtMoney(shown.revenue - shown.cost), color: "#006300" }
+              : { label: "Short by", value: fmtMoney(shown.cost - shown.revenue), color: MONEY_RED },
+          ]}
+        />
+      )}
     </div>
   );
 }

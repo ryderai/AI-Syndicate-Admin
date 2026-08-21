@@ -15,6 +15,7 @@ import TaskDatabase, {
   TaskBoard, COLUMNS, DEFAULT_COLUMNS, GROUP_OPTIONS, plusDaysISO, isOverdue, isGroupBy,
 } from "./opsTable.jsx";
 import { Popover, PRIORITY_ICON } from "./opsCells.jsx";
+import { useScreenContext } from "../../lib/screenContext.js";
 
 /* Operations — the Notion replacement, in Notion's own shape.
  *
@@ -175,6 +176,17 @@ export default function Operations({ member }) {
   const lateCount = filtered.filter(isOverdue).length;
 
   const openClient = (clientId) => { setSelectedClientId(clientId); setViewId("clients"); };
+
+  /* What the assistant may see of this page: the view, the task count, and the
+   * titles on screen. Stated, not scraped — see src/lib/screenContext.js. */
+  useScreenContext(() => ({
+    page: "Operations",
+    label: `${filtered.length} task${filtered.length === 1 ? "" : "s"} in the "${viewId}" view`,
+    record: selectedClientId
+      ? { type: "client", id: selectedClientId, label: clients.rows.find((c) => c.id === selectedClientId)?.name || "a client" }
+      : null,
+    visible: filtered.slice(0, 20).map((t) => `${t.title} (${t.status})`),
+  }), [filtered, viewId, selectedClientId, clients.rows]);
 
   const dbProps = {
     tasks: filtered, groupBy, columns, clients: clients.rows, team,
