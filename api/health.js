@@ -6,6 +6,7 @@ import { requireMember, isServerConfigured } from "../lib/supabase-server.js";
 import { isStripeConfigured } from "../lib/stripe-server.js";
 import { hasGoogleClientCredentials } from "../lib/google-oauth.js";
 import { isAiConfigured } from "../lib/ai.js";
+import { isVaultConfigured } from "../lib/vault-crypto.js";
 
 export default async function handler(req, res) {
   if (req.method !== "GET") {
@@ -16,7 +17,7 @@ export default async function handler(req, res) {
     // Even the gate can't run — report everything down so the UI can say so.
     return res.status(200).json({
       supabase: false, stripe: false, gmail: false, ai: false, usageIngest: false,
-      platformSso: false, platformAccountSet: false,
+      platformSso: false, platformAccountSet: false, vault: false,
       leadGenPlatform: false, leadGenApollo: false, leadScrapeCron: false,
       note: "Supabase env vars are missing on the server.",
     });
@@ -47,6 +48,18 @@ export default async function handler(req, res) {
     // because "the schedule exists" and "the schedule can run" are different
     // facts and only one of them is visible in the Vercel dashboard.
     leadScrapeCron: Boolean(process.env.CRON_SECRET),
+    /* The vault. false means VAULT_KEY is missing or is not a 32-byte key, so
+     * Reveal and Save will both refuse. The page says so at the top, with the
+     * exact steps, instead of letting the first press fail like a bug.
+     * Note what this canNOT tell you: whether the key on the server is the SAME
+     * key the existing rows were scrambled with. That only shows up on a
+     * reveal, which answers "this was saved with a different VAULT_KEY". */
+    /* Owners and admins only, and undefined for anybody else. A sales rep
+       cannot open the Vault page, so whether its key is set is not their
+       business — and the migration says plainly that sales sees nothing about
+       the vault, not even a count. Reported as undefined rather than false, so
+       the page can tell "no key" apart from "not your business". */
+    vault: ["owner", "admin"].includes(member.membership.role) ? isVaultConfigured() : undefined,
     role: member.membership.role,
   });
 }

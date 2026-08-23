@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useScreenContext } from "../../lib/screenContext.js";
 import { apiFetch } from "../../lib/adminApi.js";
 import { isConfigured } from "../../lib/supabase.js";
 import { toast } from "../../lib/toast.js";
@@ -384,6 +385,27 @@ export default function Finance({ member, setSection }) {
     if (g == null) return null;
     return Math.round(calc.mrr * Math.pow(1 + g / 100, 3));
   }, [calc]);
+
+  /* Tell the assistant what is on this page, so "why is the runway that
+   * number?" can be answered without the person re-typing the figures.
+   *
+   * Money needs a rule the other pages do not: the SHAPE travels, not the
+   * ledger. The assistant reads the real rows itself under the same role gate
+   * as everything else (lib/brain-context.js), so pasting totals here would
+   * add nothing and would put revenue into a prompt for anyone who can open
+   * the panel. Counts and state, not amounts. */
+  useScreenContext(() => ({
+    page: "Finance",
+    label: `the money page — ${finState === "live" ? "live figures" : finState}`,
+    visible: [
+      `${expenseRows.length} costs on record`,
+      `${invoiceRows.length} invoices on record`,
+      settings?.cash_on_hand_cents != null
+        ? `cash on hand was last set on ${settings.cash_updated_on || "an unrecorded date"}`
+        : "cash on hand has never been set, so runway cannot be worked out",
+      projectedMrr != null ? "a 3-month projection is on screen" : "no projection is shown",
+    ],
+  }), [finState, expenseRows.length, invoiceRows.length, settings, projectedMrr]);
 
   const saveCash = async () => {
     const dollars = Number(String(cashInput).replace(/[^0-9.]/g, ""));

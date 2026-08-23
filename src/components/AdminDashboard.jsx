@@ -9,7 +9,7 @@ import Overview from "./admin/Overview.jsx";
 import Finance from "./admin/Finance.jsx";
 import Invoices from "./admin/Invoices.jsx";
 import Customers from "./admin/Customers.jsx";
-import LeadsPage from "./admin/LeadsPage.jsx";
+import SalesPage from "./admin/SalesPage.jsx";
 import Operations from "./admin/Operations.jsx";
 import Inbox from "./admin/Inbox.jsx";
 import Tickets from "./admin/Tickets.jsx";
@@ -18,6 +18,7 @@ import NotesPage from "./admin/NotesPage.jsx";
 import Assistant from "./admin/Assistant.jsx";
 import PlatformView from "./admin/PlatformView.jsx";
 import WorkPage from "./admin/WorkPage.jsx";
+import VaultPage from "./admin/VaultPage.jsx";
 import TeamPage from "./admin/TeamPage.jsx";
 import SettingsPage from "./admin/SettingsPage.jsx";
 
@@ -61,7 +62,14 @@ export default function AdminDashboard({ go }) {
   // message. Anything after the page id is left alone too, so a future deep
   // link (a client, a task, a thread) survives.
   const [urlPath, urlQuery = ""] = route.replace(/^\/dashboard\/?/, "").split("?");
-  const fromUrl = urlPath.split("/")[0];
+  /* The page used to be called Leads. Old links, old bookmarks and the
+   * browser history of anybody who used it before Aug 21 2026 still say
+   * `leads`, and an unknown page id silently falls back to the landing page —
+   * so the link would not break loudly, it would just quietly take you
+   * somewhere else. Rewrite it instead. */
+  const RENAMED = { leads: "sales" };
+  const rawPage = urlPath.split("/")[0];
+  const fromUrl = RENAMED[rawPage] || rawPage;
   const query = urlQuery ? `?${urlQuery}` : "";
   // `|| "work"` is the last resort: a role nobody has taught this file about
   // would otherwise leave the page id blank, and a blank page id shows one
@@ -76,8 +84,13 @@ export default function AdminDashboard({ go }) {
   // right page, do NOT touch it — that is what protects the query and
   // anything deeper in the path.
   useEffect(() => {
-    if (fromUrl !== section) stampRoute(`/dashboard/${section}${query}`);
-  }, [section, fromUrl, query]);
+    /* Compared against the RAW page id, not the renamed one. Comparing the
+     * renamed value meant an old `#/dashboard/leads` link rendered Sales
+     * correctly but left `leads` in the address bar forever — so a reload, a
+     * bookmark or a shared link kept passing the dead name around and the
+     * rename never actually finished. Caught by the browser walkthrough. */
+    if (rawPage !== section) stampRoute(`/dashboard/${section}${query}`);
+  }, [section, rawPage, query]);
 
   useEffect(() => {
     const prev = document.body.style.background;
@@ -92,13 +105,14 @@ export default function AdminDashboard({ go }) {
       case "finance": return <Finance member={member} setSection={setSection} />;
       case "invoices": return <Invoices member={member} />;
       case "customers": return <Customers member={member} />;
-      case "leads": return <LeadsPage member={member} />;
+      case "sales": return <SalesPage member={member} />;
       case "operations": return <Operations member={member} />;
       case "inbox": return <Inbox member={member} />;
       case "tickets": return <Tickets member={member} />;
       case "notes": return <NotesPage member={member} />;
       case "brain": return <Brain member={member} />;
       case "platform": return <PlatformView member={member} />;
+      case "vault": return <VaultPage member={member} />;
       case "team": return <TeamPage member={member} />;
       case "settings": return <SettingsPage member={member} setSection={setSection} />;
       default: return <WorkPage member={member} />;

@@ -3,8 +3,7 @@ import { listBrain, upsertBrain, deleteBrain, logActivity } from "../../lib/data
 import { apiFetch } from "../../lib/adminApi.js";
 import { toast } from "../../lib/toast.js";
 import {
-  SourceBadge, Modal, Field, TextInput, TextArea, Select, EmptyState, Explainer,
-} from "./shared.jsx";
+  SourceBadge, Modal, Field, TextInput, TextArea, Select, EmptyState, } from "./shared.jsx";
 import BrainMemory from "./brainMemory.jsx";
 import { useScreenContext } from "../../lib/screenContext.js";
 
@@ -87,13 +86,6 @@ export default function Brain({ member }) {
 
   return (
     <>
-      <Explainer
-        icon="🧠"
-        kicker="THE TEAM'S AI MEMORY"
-        title="Edit here, and every AI draft changes"
-        body="Every AI answer in this console is written against these entries — the assistant, the notes, the email drafts, the outreach. Add a rule ('never promise a timeline'), a fact ('we support 12 AI engines'), or a voice note, then prove it in the test chat on the right."
-      />
-
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         <SourceBadge mode={brain.sample ? "sample" : "live"} />
         <button className="btn btn-accent" onClick={() => setEditItem({})}>+ Add entry</button>

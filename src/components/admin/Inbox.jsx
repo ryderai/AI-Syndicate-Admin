@@ -3,7 +3,7 @@ import { apiFetch } from "../../lib/adminApi.js";
 import { isConfigured } from "../../lib/supabase.js";
 import { toast } from "../../lib/toast.js";
 import {
-  SourceBadge, EmptyState, timeAgo, useHealth, useNow, Explainer, TextInput,
+  SourceBadge, EmptyState, timeAgo, useHealth, useNow, TextInput,
 } from "./shared.jsx";
 import { Chip, clientColor } from "./opsCells.jsx";
 import {
@@ -632,17 +632,6 @@ export default function Inbox({ member }) {
 
   return (
     <>
-      {!gmailReady && (
-        <Explainer
-          icon="✉"
-          kicker={configured ? "WAITING ON THE GOOGLE KEY" : "PREVIEW"}
-          title={configured ? "The team inbox is built - it unlocks with one Google setup" : "Sample team inbox"}
-          body={configured
-            ? "Everything below works the moment GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are set (SETUP.md, section Gmail - about 15 minutes, once). Then one person connects growth@aisyndicate.com, switches Shared on, and the whole team works the same mail here."
-            : "This is the shared growth@aisyndicate.com mailbox with sample mail in it. Statuses, client links, owners and follow-ups all work - they just reset when you reload."}
-        />
-      )}
-
       {needsReconnect && (
         <div className="adm-inbox-warn">
           <strong>This mailbox needs reconnecting once.</strong> It was connected before the console could label

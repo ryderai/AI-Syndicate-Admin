@@ -279,7 +279,45 @@ export async function parseXlsx(arrayBuffer) {
     rows,
     sheetCount: tabs.length || sheetNames.length,
     sheetName: label,
+    /* Everything needed to read the OTHER tabs, so parseXlsxAllTabs below does
+     * not have to unzip and re-parse the same file a second time. */
+    _all: { files, tabs, sheetNames, shared, dec },
   };
+}
+
+/**
+ * Every tab in the workbook, in the order a person sees them.
+ *
+ * WHY THIS EXISTS
+ * parseXlsx reads the first tab and tells the person to "save the other tab
+ * out on its own first". CJ's outreach sheet has eight lead tabs plus a rules
+ * tab, so that instruction means eight exports, eight imports, and eight
+ * chances to import the same tab twice. This reads them all in one pass and
+ * lets the import screen tick the ones to bring in.
+ *
+ * Returns [{ name, rows, empty }]. A tab whose relationship cannot be
+ * resolved is returned with its file-order name rather than dropped — a
+ * missing tab is worse than an oddly named one, because nobody notices it.
+ */
+export async function parseXlsxAllTabs(arrayBuffer) {
+  const head = await parseXlsx(arrayBuffer);
+  const { files, tabs, sheetNames, shared, dec } = head._all;
+
+  const out = [];
+  const used = new Set();
+  for (const t of tabs) {
+    if (!t.path || !files[t.path]) continue;
+    used.add(t.path);
+    const rows = parseSheet(dec.decode(files[t.path]), shared);
+    out.push({ name: t.name, rows, empty: rows.length === 0 });
+  }
+  // Anything the workbook.xml relationships did not cover, by file order.
+  for (const n of sheetNames) {
+    if (used.has(n)) continue;
+    const rows = parseSheet(dec.decode(files[n]), shared);
+    out.push({ name: n.replace(/^xl\/worksheets\//, "").replace(/\.xml$/, ""), rows, empty: rows.length === 0 });
+  }
+  return out;
 }
 
 /**
@@ -296,7 +334,7 @@ export async function readSheetFile(file) {
       rows,
       kind: "xlsx",
       note: sheetCount > 1
-        ? `Read ${which} — the first of ${sheetCount} tabs. To import a different tab, save that one out on its own first.`
+        ? `Read ${which} — the first of ${sheetCount} tabs. The Sales page imports every tab at once; this older importer reads one.`
         : `Read ${which}.`,
     };
   }

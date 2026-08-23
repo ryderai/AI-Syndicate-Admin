@@ -1,474 +1,1140 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../../lib/adminApi.js";
 import { isConfigured } from "../../lib/supabase.js";
-import { listUsage, listActivity, listLeads, listTickets } from "../../lib/data.js";
-import { toast } from "../../lib/toast.js";
 import {
-  MetricCard, SourceBadge, MoneyBars, MONEY_RED, SectionHeader, Modal,
-  fmtMoney, fmtNum, timeAgo, useHealth, CountUp,
+  getMyWork, listAiNotes, listTasks, listEmailThreads, listTickets, listLeads,
+  listAllLeadActivity, touchCountsByLead, listUsage, listActivity,
+  upsertTask, upsertReminder, setNoteStatus,
+  NOTE_CATEGORY_LABELS, TASK_STATUS_LABELS,
+} from "../../lib/data.js";
+/* The Sales rebuild (Aug 21-22 2026) moved every "who owes a contact" judgement
+ * into one pure file. Overview imports it rather than keeping its own copy: the
+ * old lead logic in getMyWork() — stale-after-N-days-per-stage — predates the
+ * claim windows, the cold clock and the cadence, so a snapshot built on it
+ * would have quietly disagreed with the Sales page's My Day about who is owed
+ * a call. Their rule, one place. */
+import { salesQueue, isOpenStage } from "../../../lib/sales-rules.js";
+import { listInvoices } from "../../lib/finance.js";
+import { invoiceOutstandingCents } from "../../../lib/finance-math.js";
+import { TEAM_TZ, teamDate } from "../../../lib/brain-context.js";
+import {
+  teamDayStartOf, teamDayEndOf, dueLabel, taskBucket, parsedOr0,
+} from "../../lib/teamDay.js";
+import { toast } from "../../lib/toast.js";
+import { useScreenContext } from "../../lib/screenContext.js";
+import {
+  SourceBadge, SectionHeader, EmptyState, Modal, fmtMoney, timeAgo, useHealth,
 } from "./shared.jsx";
+import ConsoleReportsPanel, { useConsoleReports } from "./consoleReports.jsx";
 
-/* Overview — the command page. Revenue (Stripe), AI usage + cost (ingest
- * feed), pipeline snapshot, support snapshot, activity feed. Every card
- * carries a SourceBadge: LIVE, SAMPLE, or WAITING ON KEY. */
+/* OVERVIEW — the snapshot you open first.
+ *
+ * This page used to be the money page. Finance took that job on Aug 20 2026,
+ * so this is now one screen that answers "what do I need to know right now":
+ * your day, the things the console noticed for you, the state of the agency,
+ * one line of money, and what changed.
+ *
+ * Three rules keep it honest:
+ *   1. Nothing here is a list you work through. Every block is capped, and
+ *      every block links to the page that owns it. Work is still where you
+ *      grind; this is where you look.
+ *   2. The only actions allowed inline are the one-click ones. Anything that
+ *      needs a form sends you to the page that owns it.
+ *   3. A read that failed says so. It never renders as a zero. Every label on
+ *      this page describes exactly what the code counted — no more.
+ */
 
-const SAMPLE_STRIPE = {
-  configured: false,
-  sample: true,
-  mrrCents: 449600,
-  activeSubs: 9,
-  trialingSubs: 2,
-  customerCount: 14,
-  monthlyRevenue: (() => {
-    const now = new Date();
-    const rows = [];
-    const base = [1200, 1450, 1800, 2300, 2100, 2900, 3300, 3050, 3800, 4100, 4300, 4496];
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-      rows.push({ month: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`, cents: base[11 - i] * 100 });
-    }
-    return rows;
-  })(),
-  // Daily version of the same twelve months, so the chart can zoom to weeks.
-  // Spread with a weekday rhythm rather than flat, so weekly bars look real.
-  dailyRevenue: (() => {
-    const base = [1200, 1450, 1800, 2300, 2100, 2900, 3300, 3050, 3800, 4100, 4300, 4496];
-    const rows = [];
-    const now = new Date();
-    for (let i = 11; i >= 0; i--) {
-      const first = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
-      const weights = [];
-      for (let d = 0; d < days; d++) {
-        const dow = new Date(first.getFullYear(), first.getMonth(), d + 1).getDay();
-        weights.push(dow === 0 || dow === 6 ? 0.25 : 1 + 0.35 * Math.abs(Math.sin(d * 1.3)));
-      }
-      const totalW = weights.reduce((a, b) => a + b, 0);
-      const monthCents = base[11 - i] * 100;
-      for (let d = 0; d < days; d++) {
-        const day = new Date(first.getFullYear(), first.getMonth(), d + 1);
-        if (day > now) break;
-        rows.push({
-          d: `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`,
-          cents: Math.round((monthCents * weights[d]) / totalW),
-        });
-      }
-    }
-    return rows;
-  })(),
-  recentPayments: [
-    { amount: 99900, currency: "usd", created: Date.now() / 1000 - 86400, description: "Radar Pro — monthly", customerEmail: "greg@sample.com" },
-    { amount: 49900, currency: "usd", created: Date.now() / 1000 - 3 * 86400, description: "Pulse — monthly", customerEmail: "dana@sample.com" },
-    { amount: 199900, currency: "usd", created: Date.now() / 1000 - 6 * 86400, description: "Territory — monthly", customerEmail: "j@sample.com" },
-  ],
-};
-
-/* ------------------------------------------------------------------ */
-/* Bucketing money into periods                                        */
-/*                                                                      */
-/* Both series arrive as day → cents maps and are added up into the     */
-/* chosen period here, so revenue and AI spend can never end up on      */
-/* different calendars. Weeks start Monday.                             */
-/* ------------------------------------------------------------------ */
-
-const RANGES = [
-  { id: "week", label: "Weekly", periods: 12, note: "last 12 weeks" },
-  { id: "month", label: "Monthly", periods: 12, note: "last 12 months" },
-  // Four, not six: /api/stripe-metrics only pulls twelve months of charges, so
-  // a fifth quarter would always draw an empty bar and read as a bad quarter.
-  { id: "quarter", label: "Quarterly", periods: 4, note: "last 4 quarters" },
-];
-
-function startOfWeek(d) {
-  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const back = (x.getDay() + 6) % 7; // Monday = 0
-  x.setDate(x.getDate() - back);
-  return x;
+function greeting(nowMs) {
+  const hour = Number(new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TZ, hourCycle: "h23", hour: "2-digit",
+  }).format(new Date(nowMs)));
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
 }
 
-/** The first day of each of the last n periods, oldest first. */
-function periodStarts(range, n) {
-  const out = [];
-  const now = new Date();
-  for (let i = n - 1; i >= 0; i--) {
-    if (range === "week") {
-      const d = startOfWeek(now);
-      d.setDate(d.getDate() - i * 7);
-      out.push(d);
-    } else if (range === "month") {
-      out.push(new Date(now.getFullYear(), now.getMonth() - i, 1));
-    } else {
-      const q = Math.floor(now.getMonth() / 3) - i;
-      out.push(new Date(now.getFullYear(), q * 3, 1));
-    }
-  }
-  return out;
-}
-
-function periodEnd(range, start) {
-  const d = new Date(start);
-  if (range === "week") d.setDate(d.getDate() + 7);
-  else if (range === "month") d.setMonth(d.getMonth() + 1);
-  else d.setMonth(d.getMonth() + 3);
-  return d;
-}
-
-function dayKey(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function periodLabel(range, start) {
-  if (range === "week") return start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  if (range === "month") return start.toLocaleDateString("en-US", { month: "short" });
-  return `Q${Math.floor(start.getMonth() / 3) + 1} ${String(start.getFullYear()).slice(2)}`;
-}
-
-function periodTip(range, start) {
-  if (range === "week") {
-    const end = new Date(periodEnd(range, start).getTime() - 86400000);
-    return `week of ${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
-  }
-  if (range === "month") return start.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-  return `Q${Math.floor(start.getMonth() / 3) + 1} ${start.getFullYear()}`;
-}
-
-/** [{label, tipLabel, revenue, cost}] in cents, oldest first. */
-function buildMoneySeries(range, revenueByDay, costByDay) {
-  const cfg = RANGES.find((r) => r.id === range) || RANGES[1];
-  return periodStarts(range, cfg.periods).map((start) => {
-    const end = periodEnd(range, start);
-    let revenue = 0;
-    let cost = 0;
-    for (const d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
-      const k = dayKey(d);
-      revenue += revenueByDay[k] || 0;
-      cost += costByDay[k] || 0;
-    }
-    return {
-      label: periodLabel(range, start),
-      tipLabel: periodTip(range, start),
-      revenue: Math.round(revenue),
-      cost: Math.round(cost),
-    };
+function longDate(nowMs) {
+  return new Date(nowMs).toLocaleDateString("en-US", {
+    timeZone: TEAM_TZ, weekday: "long", month: "long", day: "numeric",
   });
 }
 
-export default function Overview({ member, setSection }) {
-  const health = useHealth();
-  const [stripe, setStripe] = useState(null);
-  const [stripeState, setStripeState] = useState("loading"); // loading | live | waiting | sample | error
-  const [usage, setUsage] = useState({ rows: [], sample: true });
-  const [costByDay, setCostByDay] = useState({});
-  const [range, setRange] = useState("month");
-  const [activity, setActivity] = useState({ rows: [], sample: true });
-  const [leadStats, setLeadStats] = useState(null);
-  const [ticketStats, setTicketStats] = useState(null);
-  const [ingestOpen, setIngestOpen] = useState(false);
+/** Never lets a sentence read "1 things". */
+function plural(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
 
-  const load = useCallback(async () => {
-    // Stripe
-    if (!isConfigured()) {
-      setStripe(SAMPLE_STRIPE);
-      setStripeState("sample");
-    } else {
-      const res = await apiFetch("/api/stripe-metrics");
-      if (res.ok && res.data.configured) { setStripe(res.data); setStripeState("live"); }
-      else if (res.ok && !res.data.configured) { setStripe(SAMPLE_STRIPE); setStripeState("waiting"); }
-      else { setStripe(SAMPLE_STRIPE); setStripeState("error"); toast.error("Couldn't reach Stripe", res.error); }
+/* Tasks and reminders are re-bucketed here, on the team calendar, rather than
+ * trusting the buckets getMyWork() attached — those are computed on whatever
+ * clock the browser happens to have, so at 00:30 in New York a task due today
+ * arrived pre-labelled "overdue" while the pill beside it read TODAY. The maths
+ * lives in src/lib/teamDay.js and is tested in five timezones. */
+
+/* ------------------------------------------------------------------ */
+/* Small pieces                                                        */
+/* ------------------------------------------------------------------ */
+
+function Pill({ children, tone, bg }) {
+  return (
+    <span style={{
+      padding: "2px 8px", borderRadius: 4, background: bg, color: tone,
+      fontSize: 9.5, fontWeight: 800, fontFamily: "var(--mono)",
+      letterSpacing: "0.06em", whiteSpace: "nowrap",
+    }}>{children}</span>
+  );
+}
+
+/** A number you can click. Zero is grey — a quiet page should look quiet. */
+function CounterTile({ label, value, hint, tone, onClick, title, broken }) {
+  const hot = !broken && Number(value) > 0;
+  return (
+    <button
+      className="card"
+      onClick={onClick}
+      title={title}
+      style={{
+        padding: 14, textAlign: "left", cursor: "pointer", display: "block",
+        width: "100%", border: "1px solid var(--rule)", background: "white",
+        fontFamily: "var(--body)",
+      }}
+    >
+      <div className="label">{label}</div>
+      <div style={{
+        fontFamily: "var(--display)", fontSize: 28, fontWeight: 700, lineHeight: 1.05,
+        marginTop: 6, color: hot ? tone : "var(--ink-dim)",
+      }}>{broken ? "—" : value}</div>
+      <div style={{ fontSize: 11.5, color: broken ? "var(--danger)" : "var(--ink-dim)", marginTop: 3, lineHeight: 1.4 }}>
+        {broken ? "couldn't read this" : hint}
+      </div>
+    </button>
+  );
+}
+
+/** Header for a block, with the count of what the block is actually showing. */
+function BlockHead({ title, count, capped, onSeeAll, seeAllLabel }) {
+  return (
+    <div style={{
+      padding: "14px 18px 10px", display: "flex", alignItems: "center",
+      justifyContent: "space-between", gap: 10, flexWrap: "wrap",
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <div className="label" style={{ marginBottom: 0 }}>{title}</div>
+        {count > 0 && (
+          <span style={{ fontSize: 11.5, color: "var(--ink-dim)", fontFamily: "var(--mono)" }}>
+            {capped ? `showing ${capped} of ${count}` : count}
+          </span>
+        )}
+      </div>
+      {onSeeAll && (
+        <button
+          onClick={onSeeAll}
+          style={{
+            background: "none", border: 0, padding: 0, cursor: "pointer",
+            color: "var(--accent-deep)", fontSize: 12, fontWeight: 600,
+            fontFamily: "var(--body)",
+          }}
+        >{seeAllLabel || "See all"} →</button>
+      )}
+    </div>
+  );
+}
+
+/* Urgency runs 3 → 1, most urgent first. That is the direction the database
+ * check constraint, notes-engine.js and the AI Notes page all use; reading it
+ * the other way round put the calm notes on top and hid the urgent ones behind
+ * the "6 more" link. */
+const NOTE_TONE = {
+  3: { tone: "#b42318", bg: "#fef3f2" },
+  2: { tone: "#b54708", bg: "#fffaeb" },
+  1: { tone: "var(--ink-dim)", bg: "var(--bg-3)" },
+};
+
+/* ------------------------------------------------------------------ */
+
+export default function Overview({ member, setSection }) {
+  const userId = member?.user_id || null;
+  const firstName = (member?.full_name || "").trim().split(/\s+/)[0] || null;
+  const go = typeof setSection === "function" ? setSection : () => {};
+
+  const [data, setData] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [busy, setBusy] = useState(() => new Set());
+  const [moneyOpen, setMoneyOpen] = useState(false);
+  /* The generator owns its own reads: it is the one block on this page whose
+   * list changes because of something you did rather than something that
+   * happened, so folding it into the snapshot's load would mean re-reading the
+   * whole console every time you wrote a sentence. */
+  const consoleReports = useConsoleReports();
+  const health = useHealth();
+
+  /* Loads are numbered so a slow one that started earlier can never overwrite
+   * a fast one that started later — three inline actions in a row used to be
+   * able to leave the page showing the oldest of the three snapshots. */
+  const loadSeq = useRef(0);
+  /* "unread" is a real state, not a stand-in for preview. An inline action
+   * reloads without calling Stripe, and that used to publish the initial
+   * "unknown" while the first Stripe call was still in flight — the card then
+   * said "preview mode" with a WAITING badge on a live console, and stayed
+   * that way until someone pressed Refresh. */
+  const stripeRef = useRef({ state: "unread", data: null });
+
+  const markBusy = (id, on) => setBusy((prev) => {
+    const next = new Set(prev);
+    if (on) next.add(id); else next.delete(id);
+    return next;
+  });
+
+  const load = useCallback(async ({ withStripe = true } = {}) => {
+    const seq = ++loadSeq.current;
+    try {
+      /* Everything the snapshot needs, in one round of parallel reads. */
+      const [work, aiNotes, allTasks, emails, tickets, leads, leadActivity, usage, activity, invoices] =
+        await Promise.all([
+          getMyWork(userId),
+          listAiNotes({ statuses: ["open"] }),
+          listTasks(),
+          listEmailThreads({}),
+          listTickets(),
+          listLeads(),
+          // 90 days, the same window getSalesBoard() reads, so a cadence step
+          // cannot be counted here and missed there.
+          listAllLeadActivity(90),
+          listUsage(40),
+          listActivity(8),
+          listInvoices(),
+        ]);
+
+      /* Stripe is the only server call. It is skipped in preview mode, because
+       * apiFetch short-circuits there, and skipped after an inline action, so
+       * ticking a reminder does not re-page the whole subscription list — but
+       * never skipped while we still have no answer at all. */
+      let stripe = stripeRef.current;
+      if (!isConfigured()) {
+        stripe = { state: "preview", data: null };
+      } else if (withStripe || stripe.state === "unread") {
+        const res = await apiFetch("/api/stripe-metrics");
+        if (res.ok && res.data?.configured) stripe = { state: "live", data: res.data, at: Date.now() };
+        else if (res.ok) stripe = { state: "nokey", data: null };
+        else stripe = { state: "failed", data: null, error: res.error };
+      }
+
+      if (seq !== loadSeq.current) return; // a newer load is already in flight
+      stripeRef.current = stripe;
+      setLoadError(null);
+      setNowMs(Date.now());
+      setData({
+        work, aiNotes, allTasks, emails, tickets, leads, leadActivity, usage, activity, invoices, stripe,
+      });
+    } catch (err) {
+      if (seq !== loadSeq.current) return;
+      setLoadError(err?.message || String(err));
     }
-    // The rest
-    // A year of usage, because the money chart can zoom out to six quarters.
-    // The 30-day tiles above still read from the same rows, filtered.
-    const [u, a, l, t] = await Promise.all([listUsage(400), listActivity(12), listLeads(), listTickets()]);
-    setUsage(u);
-    // Roll every usage event into day → cents once, here at load time, so the
-    // chart can re-bucket instantly when the filter changes and render stays pure.
-    const byDay = {};
-    for (const r of u.rows) {
-      const t2 = new Date(r.ts);
-      if (Number.isNaN(t2.getTime())) continue;
-      const k = `${t2.getFullYear()}-${String(t2.getMonth() + 1).padStart(2, "0")}-${String(t2.getDate()).padStart(2, "0")}`;
-      byDay[k] = (byDay[k] || 0) + Number(r.cost_usd || 0) * 100;
-    }
-    setCostByDay(byDay);
-    setActivity(a);
-    const leads = l.rows;
-    const now = new Date();
-    const sameMonth = (iso) => {
-      if (!iso) return false;
-      const d = new Date(iso);
-      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-    };
-    setLeadStats({
-      sample: l.sample,
-      newCount: leads.filter((x) => x.stage === "new").length,
-      working: leads.filter((x) => ["contacted", "follow_up", "meeting", "proposal"].includes(x.stage)).length,
-      // "Won this month" = the lead's last activity (the stage change to won)
-      // landed this calendar month — year-aware, not created-date based.
-      wonThisMonth: leads.filter((x) => x.stage === "won" && sameMonth(x.last_activity_at || x.created_at)).length,
-    });
-    const tickets = t.rows;
-    setTicketStats({
-      sample: t.sample,
-      open: tickets.filter((x) => x.status === "open").length,
-      pending: tickets.filter((x) => x.status === "pending").length,
-    });
-  }, []);
+  }, [userId]);
+
+  useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    load();
     const onRefresh = () => load();
     window.addEventListener("adm-refresh", onRefresh);
     return () => window.removeEventListener("adm-refresh", onRefresh);
   }, [load]);
 
-  // Usage aggregates (last 30 days)
-  const totalIn = usage.rows.reduce((s, r) => s + (r.input_tokens || 0), 0);
-  const totalOut = usage.rows.reduce((s, r) => s + (r.output_tokens || 0), 0);
-  const totalCost = usage.rows.reduce((s, r) => s + Number(r.cost_usd || 0), 0);
-  const usageMode = usage.sample ? "sample" : (usage.rows.length ? "live" : (health?.usageIngest ? "live" : "waiting"));
+  /* The clock has to move on its own, or a dashboard left open overnight keeps
+   * yesterday's date in the banner and calls today's tasks late. */
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, []);
 
-  const stripeBadgeMode = stripeState === "live" ? "live" : stripeState === "waiting" || stripeState === "error" ? "waiting" : "sample";
-  const s = stripe || SAMPLE_STRIPE;
+  /* ---------------- derived, all counted ---------------- */
 
-  // Revenue day map, from whichever source answered. Falls back to spreading
-  // the monthly buckets evenly if a live Stripe reply predates dailyRevenue.
-  const revenueByDay = {};
-  if (s.dailyRevenue?.length) {
-    for (const r of s.dailyRevenue) revenueByDay[r.d] = (revenueByDay[r.d] || 0) + r.cents;
-  } else {
-    for (const m of s.monthlyRevenue || []) {
-      const [y, mm] = m.month.split("-").map(Number);
-      const days = new Date(y, mm, 0).getDate();
-      for (let d = 1; d <= days; d++) {
-        revenueByDay[`${y}-${String(mm).padStart(2, "0")}-${String(d).padStart(2, "0")}`] = Math.round(m.cents / days);
-      }
+  const view = useMemo(() => {
+    if (!data) return null;
+    const { work, aiNotes, allTasks, emails, tickets, leads, leadActivity, usage, activity, invoices, stripe } = data;
+
+    /* A read that failed is named, not rendered as a zero. */
+    const problems = [];
+    const fail = (label, res) => {
+      if (res?.error) { problems.push({ label, error: res.error }); return true; }
+      return false;
+    };
+    const notesBroken = fail("what the console noticed", aiNotes);
+    const tasksBroken = fail("client tasks", allTasks);
+    const emailsBroken = fail("the mailbox", emails);
+    const ticketsBroken = fail("tickets", tickets);
+    const leadsBroken = fail("leads", leads) || fail("lead call history", leadActivity);
+    const usageBroken = fail("AI usage", usage);
+    const invoicesBroken = fail("invoices", invoices);
+    const activityBroken = fail("the activity log", activity);
+    /* getMyWork collapses six reads into one error, so name all six rather than
+     * blaming tasks for a client read that failed. */
+    const workBroken = Boolean(work.error);
+    if (workBroken) {
+      problems.push({
+        label: "your clients, tasks, leads, tickets, reminders or call history",
+        error: work.error,
+      });
     }
+
+    const today = teamDate(nowMs);
+    const thisMonth = today.slice(0, 7);
+    const endToday = teamDayEndOf(today);
+
+    // --- your day, re-bucketed on the team calendar ---
+    const myTasks = (work.tasks || []).map((t) => {
+      const ymd = t.due_date ? String(t.due_date).slice(0, 10) : null;
+      return { ...t, bucket: taskBucket(t, nowMs), dueEndMs: ymd ? teamDayEndOf(ymd) : null };
+    });
+    const counts = {
+      overdue: myTasks.filter((t) => t.bucket === "overdue").length,
+      today: myTasks.filter((t) => t.bucket === "today").length,
+      blocked: myTasks.filter((t) => t.bucket === "blocked").length,
+      tickets: (work.tickets || []).length,
+    };
+    const doNow = myTasks
+      .filter((t) => t.bucket === "overdue" || t.bucket === "today")
+      .sort((a, b) => (a.dueEndMs || 0) - (b.dueEndMs || 0));
+    const nextUpTasks = myTasks
+      .filter((t) => t.bucket === "week")
+      .sort((a, b) => (a.dueEndMs || 0) - (b.dueEndMs || 0));
+
+    const openReminders = (work.reminders || []).filter((r) => !r.done_at).map((r) => {
+      const at = Date.parse(r.due_at);
+      const ok = !Number.isNaN(at);
+      return {
+        ...r,
+        atMs: ok ? at : null,
+        dueEndMs: ok ? teamDayEndOf(teamDate(at)) : null,
+        // A reminder whose date will not parse is shown, not swallowed. It used
+        // to fall out of both buckets and disappear while still being counted.
+        due: ok ? at <= endToday : true,
+        late: ok ? at < teamDayStartOf(today) : false,
+      };
+    });
+    /* A row whose date will not parse sorts LAST, not first. Treating its null
+     * as 0 put it ahead of a reminder six days late and handed it the START
+     * HERE slot. It is still shown, still counted, just not promoted. */
+    const byDue = (a, b) => (a.atMs ?? Number.MAX_SAFE_INTEGER) - (b.atMs ?? Number.MAX_SAFE_INTEGER);
+    const remindersDue = openReminders.filter((r) => r.due).sort(byDue);
+    const remindersSoon = openReminders.filter((r) => !r.due).sort(byDue);
+    const remindersUndated = openReminders.filter((r) => r.atMs === null);
+
+    // --- the agency ---
+    const clients = work.clients || [];
+    // "active" is a real column value: active | prospect | holding | closed.
+    // The first version of this filtered on "paused", which does not exist, so
+    // it counted prospects and closed accounts as active clients.
+    const activeClients = clients.filter((c) => (c.status || "active") === "active");
+    const emailRows = emails.rows || [];
+    const needsReply = emailRows.filter((e) => e.status === "needs_reply" || e.status === "new");
+    const ticketRows = tickets.rows || [];
+    const openTickets = ticketRows.filter((t) => t.status === "open");
+    const pendingTickets = ticketRows.filter((t) => t.status === "pending");
+
+    const leadRows = leads.rows || [];
+    /* isOpenStage is theirs — CLOSED_STAGES is won / lost / skip_90 / bad_contact.
+     * Naming the OPEN stages here instead would have silently dropped every one
+     * of the eight stages the Sales rebuild added. */
+    const pipelineNew = leadRows.filter((l) => l.stage === "new");
+    const pipelineWorking = leadRows.filter((l) => l.stage !== "new" && isOpenStage(l.stage));
+
+    /* MY DAY, from the same function the Sales page uses, so the two cannot
+     * disagree about who is owed a call.
+     *
+     * `touchCounts` uses THEIR touchCountsByLead over the same 90-day window
+     * getSalesBoard reads. An earlier version of this counted the types itself
+     * from the same documented list, which was right on the day and would have
+     * drifted the first time somebody added a touch type in one place only.
+     *
+     * `scoreOf` returns null on purpose: site scores live on admin_companies,
+     * and reading them here would mean a second full companies fetch on a page
+     * that is meant to be one glance. So the 90-and-above skip gate does not
+     * run here. It only applies at `new` and `researching`, so the effect is
+     * bounded — Overview can count a very-high-scoring firm the Sales page
+     * leaves out of those two stages. Said on the page, not hidden. */
+    const touchCounts = touchCountsByLead(leadActivity.rows || []);
+    const nowIso = new Date(nowMs).toISOString();
+    const queue = salesQueue(leadRows, {
+      userId, now: nowIso, touchCounts, includeUnclaimed: true, scoreOf: () => null,
+    });
+    /* The same expression SalesPage uses for its "owed" number, character for
+     * character, so the tile here and the tile there are the same count. */
+    const owed = queue.filter((c) => c.over !== null && c.over >= 0 && c.reason !== "unclaimed");
+    const soon = queue.filter((c) => c.over !== null && c.over < 0 && c.reason !== "unclaimed");
+    const unclaimed = queue.filter((c) => c.reason === "unclaimed");
+    /* Leads that ARRIVED this month, counted off created_at. It used to say
+     * "won this month", which the database cannot answer: there is no won_at
+     * column, and last_activity_at moves whenever anyone logs anything. */
+    const newThisMonth = leadRows.filter((l) =>
+      l.created_at ? teamDate(parsedOr0(l.created_at)).slice(0, 7) === thisMonth : false);
+    const wonAllTime = leadRows.filter((l) => l.stage === "won");
+
+    // --- clients that need attention, from the tasks the read returned ---
+    const taskRows = allTasks.rows || [];
+    const byClient = new Map();
+    // Active clients only. A client on Holding or closed is not being neglected.
+    for (const c of activeClients) byClient.set(c.id, { client: c, late: 0, blocked: 0, open: 0 });
+    for (const t of taskRows) {
+      const slot = byClient.get(t.client_id);
+      if (!slot || t.status === "done") continue;
+      slot.open += 1;
+      if (t.status === "blocked") slot.blocked += 1;
+      else if (t.due_date && String(t.due_date).slice(0, 10) < today) slot.late += 1;
+    }
+    const attention = [...byClient.values()]
+      .map((s) => {
+        const reasons = [];
+        if (s.late) reasons.push(`${plural(s.late, "task", "tasks")} late`);
+        if (s.blocked) reasons.push(`${plural(s.blocked, "task", "tasks")} blocked`);
+        if (!s.open) reasons.push("no open tasks — nothing planned");
+        return { ...s, reasons, weight: s.late * 10 + s.blocked * 4 + (s.open ? 0 : 1) };
+      })
+      .filter((s) => s.reasons.length)
+      .sort((a, b) => b.weight - a.weight);
+
+    // --- money, one line ---
+    const outstandingCents = (invoices.rows || []).reduce((sum, inv) => sum + invoiceOutstandingCents(inv), 0);
+    const usageRows = usage.rows || [];
+    const aiSpendMonth = usageRows.reduce((sum, r) => {
+      const t = Date.parse(r.ts);
+      if (Number.isNaN(t)) return sum;
+      return teamDate(t).slice(0, 7) === thisMonth ? sum + Number(r.cost_usd || 0) : sum;
+    }, 0);
+
+    // --- the one sentence at the top ---
+    const bits = [];
+    if (counts.overdue) bits.push(`${plural(counts.overdue, "task", "tasks")} late`);
+    if (counts.today) bits.push(`${counts.today} due today`);
+    if (remindersDue.length) bits.push(`${plural(remindersDue.length, "reminder", "reminders")} due`);
+    if (owed.length) bits.push(`${plural(owed.length, "lead", "leads")} owed a contact`);
+    if (counts.tickets) bits.push(`${plural(counts.tickets, "ticket", "tickets")} on you`);
+
+    // --- the single most urgent thing ---
+    let headline = null;
+    const firstDated = remindersDue.find((r) => r.atMs !== null);
+    if (firstDated) {
+      headline = { text: firstDated.body, why: dueLabel(firstDated.dueEndMs, nowMs), go: "work" };
+    } else if (doNow.length) {
+      const t = doNow[0];
+      headline = {
+        text: t.name,
+        why: `${t.client_name ? `${t.client_name} · ` : ""}${dueLabel(t.dueEndMs, nowMs)}`,
+        go: "work",
+      };
+    } else if (owed.length) {
+      // Already ranked by salesQueue: expired claims first, then cold, then cadence.
+      const c = owed[0];
+      headline = {
+        text: c.lead.name || c.lead.company || "Unnamed lead",
+        why: `${c.headline} — ${c.detail}`,
+        go: "sales",
+      };
+    } else if (needsReply.length) {
+      headline = {
+        text: needsReply[0].subject || "(no subject)",
+        why: "waiting on a reply from us", go: "inbox",
+      };
+    }
+
+    const notes = (aiNotes.rows || []).slice()
+      // 3 is the most urgent, so descending. Then newest first.
+      .sort((a, b) => (b.urgency || 0) - (a.urgency || 0)
+        || parsedOr0(b.generated_at || b.created_at) - parsedOr0(a.generated_at || a.created_at));
+
+    return {
+      sample: Boolean(work.sample),
+      problems,
+      broken: {
+        notes: notesBroken, tasks: tasksBroken, emails: emailsBroken,
+        tickets: ticketsBroken, leads: leadsBroken, usage: usageBroken,
+        invoices: invoicesBroken, activity: activityBroken, work: workBroken,
+      },
+      counts, doNow, nextUpTasks,
+      openReminders, remindersDue, remindersSoon, remindersUndated,
+      owed, soon, unclaimed,
+      notes, notesSample: Boolean(aiNotes.sample),
+      activeClients, clientTotal: clients.length,
+      needsReply, openTickets, pendingTickets,
+      pipelineNew, pipelineWorking, newThisMonth, wonAllTime,
+      leadsTruncated: leads.truncated || leadActivity.truncated || null,
+      attention,
+      money: {
+        stripeState: stripe.state,
+        stripeAt: stripe.at || null,
+        // "just now" / "4m ago" — so a figure left on screen after an inline
+        // reload is dated rather than presented as this second's truth.
+        stripeAgo: stripe.at ? timeAgo(stripe.at) : "",
+        mrrCents: stripe.data ? stripe.data.mrrCents : null,
+        stripeTruncated: Boolean(stripe.data?.truncated),
+        stripeTestMode: stripe.data?.livemode === false,
+        outstandingCents,
+        aiSpendMonth,
+        invoiceSample: Boolean(invoices.sample),
+        usageSample: Boolean(usage.sample),
+        noUsageYet: usageRows.length === 0,
+      },
+      bits, headline,
+    };
+  }, [data, nowMs, userId]);
+
+  /* Keyed on the summary text, not on `view`. `view` is a new object every 60s
+   * when the clock ticks, and each new identity tore the context down and
+   * rebuilt it — leaving a window every minute where the assistant, asked
+   * about "this screen", could see nothing. */
+  const ctxKey = view
+    ? `${view.bits.join("|")}::${view.doNow.map((t) => t.id).join(",")}::${view.remindersDue.map((r) => r.id).join(",")}::${view.notes.map((n) => n.id).join(",")}`
+    : "";
+  useScreenContext(() => ({
+    page: "Overview",
+    label: view
+      ? (view.bits.length ? `Snapshot — ${view.bits.join(", ")}` : "Snapshot — nothing is late or due")
+      : "still loading",
+    visible: view
+      ? [
+        ...view.doNow.slice(0, 8).map((t) => `task due: ${t.name}`),
+        ...view.remindersDue.slice(0, 5).map((r) => `reminder due: ${r.body}`),
+        ...view.owed.slice(0, 6).map((c) => `lead owed a contact: ${c.lead.name || c.lead.company} (${c.headline})`),
+        ...view.notes.slice(0, 8).map((n) => `note: ${n.title}`),
+      ]
+      : [],
+  }), [ctxKey]);
+
+  /* ---------------- the three inline actions ---------------- */
+
+  async function finishTask(task) {
+    markBusy(task.id, true);
+    const res = await upsertTask({ id: task.id, status: "done" });
+    markBusy(task.id, false);
+    if (!res.ok) return toast.error("Couldn't save that", res.error);
+    toast.success("Done — nice", task.name);
+    load({ withStripe: false });
   }
-  const rangeCfg = RANGES.find((r) => r.id === range) || RANGES[1];
-  const moneySeries = buildMoneySeries(range, revenueByDay, costByDay);
+
+  async function tickReminder(r) {
+    markBusy(r.id, true);
+    const res = await upsertReminder({ id: r.id, done_at: new Date().toISOString() });
+    markBusy(r.id, false);
+    if (!res.ok) return toast.error("Couldn't tick that off", res.error);
+    toast.success("Ticked off", r.body);
+    load({ withStripe: false });
+  }
+
+  async function dismissNote(n) {
+    markBusy(n.id, true);
+    const res = await setNoteStatus(n.id, "dismissed", userId);
+    markBusy(n.id, false);
+    if (!res.ok) return toast.error("Couldn't dismiss that", res.error);
+    toast.info("Dismissed", n.title);
+    load({ withStripe: false });
+  }
+
+  /* ---------------- render ---------------- */
+
+  if (loadError) {
+    return (
+      <div className="card" style={{ padding: 28 }}>
+        <div className="label" style={{ color: "var(--danger)" }}>THIS PAGE DIDN&apos;T LOAD</div>
+        <div style={{ fontSize: 14, color: "var(--ink)", marginTop: 8, lineHeight: 1.6 }}>
+          Nothing on the snapshot could be read, so nothing is shown rather than a screen of zeros.
+        </div>
+        <div style={{
+          fontFamily: "var(--mono)", fontSize: 12, color: "var(--ink-dim)", marginTop: 10,
+          padding: 12, borderRadius: 8, background: "var(--bg-3)", overflowX: "auto",
+        }}>{loadError}</div>
+        <button className="btn btn-primary" style={{ marginTop: 14 }} onClick={() => load()}>Try again</button>
+      </div>
+    );
+  }
+
+  if (!view) {
+    return (
+      <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--ink-dim)" }}>
+        Putting your snapshot together…
+      </div>
+    );
+  }
+
+  const mode = view.sample ? "sample" : "live";
+  /* Silence is only good news when everything was actually read. A failed
+   * reminders query used to produce five zeros under the words "Nothing is
+   * late and nothing is due today" — the exact sentence this page exists to
+   * never say wrongly. */
+  const anythingMissing = view.problems.length > 0;
+  const allClear = view.bits.length === 0 && !anythingMissing;
+  const dayBroken = view.broken.work;
+  const m = view.money;
+  const moneyMode = m.stripeState === "live" ? "live"
+    : m.stripeState === "preview" ? "sample"
+      : m.stripeState === "failed" ? "error" : "waiting";
 
   return (
     <>
-      {/* Revenue hero */}
-      <div className="card hero-dark" style={{ padding: "28px 30px", background: "linear-gradient(135deg, #0a2245 0%, #1e1b4b 60%, #312e81 100%)", border: 0, color: "white", position: "relative", overflow: "hidden" }}>
-        <div style={{ position: "absolute", top: -120, right: -80, width: 380, height: 380, borderRadius: "50%", background: "radial-gradient(circle, rgba(139,92,246,0.35), transparent 65%)", filter: "blur(30px)" }} aria-hidden="true" />
-        <div style={{ position: "relative", display: "flex", justifyContent: "space-between", gap: 24, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 800, letterSpacing: "0.14em", color: "rgba(255,255,255,0.6)" }}>
-                MONTHLY RECURRING REVENUE
-              </span>
-              <SourceBadge mode={stripeBadgeMode} hint={
-                stripeState === "live" ? (s.fetchedAt ? `Measured from Stripe at ${new Date(s.fetchedAt).toLocaleTimeString()}` : "Measured from Stripe just now") :
-                stripeState === "waiting" ? "Wired and waiting on STRIPE_SECRET_KEY — SETUP.md § Stripe (5 minutes)" :
-                stripeState === "error" ? "Stripe key is set but the last call failed — hit Refresh" :
-                "Sample numbers — preview mode"
-              } />
-              {stripeState === "live" && s.livemode === false && (
-                <span style={{ fontFamily: "var(--mono)", fontSize: 9, fontWeight: 800, letterSpacing: "0.1em", color: "#fbbf24" }}>TEST-MODE KEY</span>
-              )}
-            </div>
-            <div style={{ fontFamily: "var(--display)", fontSize: 52, fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1.05, marginTop: 10 }}>
-              <CountUp to={(s.mrrCents || 0) / 100} format={(v) => `$${Number(v).toLocaleString()}`} />
-              <span style={{ fontSize: 20, fontWeight: 600, color: "rgba(255,255,255,0.55)" }}> /mo</span>
-            </div>
-            <div style={{ marginTop: 10, display: "flex", gap: 18, flexWrap: "wrap", fontSize: 13, color: "rgba(255,255,255,0.75)" }}>
-              <span><strong style={{ color: "white" }}>{s.activeSubs}</strong> active subscriptions</span>
-              <span><strong style={{ color: "white" }}>{s.trialingSubs || 0}</strong> in trial</span>
-              <span><strong style={{ color: "white" }}>{s.customerCount}</strong> customers</span>
-              {s.truncated && <span style={{ color: "#fbbf24" }}>large account — totals capped at first 1,000 rows</span>}
-            </div>
-            {/* Aug 20 2026: the Finance page counts trials on their own line, so
-              * its MRR reads lower than this one whenever there is a trial
-              * running. Two pages, two numbers, one label was confusing — this
-              * sentence says which is which instead of quietly differing. */}
-            {(s.trialingSubs || 0) > 0 && (
-              <div style={{ marginTop: 6, fontSize: 11.5, color: "rgba(255,255,255,0.55)", lineHeight: 1.5 }}>
-                Trials are counted in the figure above. The Finance page keeps them on a separate line, so
-                its MRR reads lower until a trial starts paying.
-              </div>
-            )}
-          </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            <a className="btn" style={{ textDecoration: "none" }} href="https://dashboard.stripe.com" target="_blank" rel="noopener noreferrer">
-              Open Stripe <span className="arr">→</span>
-            </a>
-          </div>
-        </div>
-      </div>
-
-      {/* Metric tiles */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 16 }}>
-        <MetricCard
-          label="AI spend · 30 days"
-          value={`$${totalCost.toFixed(2)}`}
-          hint={`${fmtNum(totalIn + totalOut)} tokens`}
-          badge={<SourceBadge mode={usageMode} hint={usageMode === "waiting" ? "Screen is wired — goes live when the platform posts usage to /api/usage-ingest (SETUP.md § Token usage)" : undefined} />}
+      {/* ---------------- TODAY ---------------- */}
+      <div
+        className="card hero-dark"
+        style={{
+          padding: "26px 28px", border: 0, color: "white", position: "relative",
+          overflow: "hidden",
+          background: "linear-gradient(135deg, #0a2245 0%, #1e1b4b 60%, #312e81 100%)",
+        }}
+      >
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute", top: -130, right: -70, width: 360, height: 360,
+            borderRadius: "50%", filter: "blur(30px)",
+            background: "radial-gradient(circle, rgba(139,92,246,0.35), transparent 65%)",
+          }}
         />
-        <MetricCard
-          label="Tokens in / out · 30 days"
-          value={`${fmtNum(totalIn)} / ${fmtNum(totalOut)}`}
-          hint={usage.rows.length ? `${usage.rows.length} events` : "no events yet"}
-          badge={<SourceBadge mode={usageMode} />}
-        />
-        <MetricCard
-          label="Pipeline"
-          value={leadStats ? `${leadStats.newCount + leadStats.working}` : "—"}
-          hint={leadStats ? `${leadStats.newCount} new · ${leadStats.working} working · ${leadStats.wonThisMonth} won this mo` : ""}
-          badge={leadStats && <SourceBadge mode={leadStats.sample ? "sample" : "live"} />}
-        />
-        <MetricCard
-          label="Support"
-          value={ticketStats ? `${ticketStats.open}` : "—"}
-          hint={ticketStats ? `open tickets · ${ticketStats.pending} pending` : ""}
-          badge={ticketStats && <SourceBadge mode={ticketStats.sample ? "sample" : "live"} />}
-        />
-      </div>
-
-      {/* ---- Money: revenue with AI spend inside it ---- */}
-      <div className="card" style={{ padding: 22 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap", marginBottom: 14 }}>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div className="label" style={{ marginBottom: 0 }}>Money in vs AI spend · {rangeCfg.note}</div>
-              <SourceBadge mode={stripeBadgeMode} hint={stripeBadgeMode === "live" ? "Revenue measured from Stripe" : "Sample numbers until the Stripe key is set"} />
-              <SourceBadge mode={usageMode} hint={usageMode === "live" ? "AI spend measured from the usage feed" : "AI spend goes live when the platform posts to /api/usage-ingest"} />
-            </div>
-            <div style={{ fontSize: 12, color: "var(--ink-dim)", marginTop: 5, lineHeight: 1.5, maxWidth: 620 }}>
-              Green is what was left after the AI bill. It is <strong>not</strong> full profit — wages,
-              software and ad spend are not in here, only what we paid for AI.
-            </div>
-          </div>
-          {/* Filters sit in one row above the chart */}
-          <div className="aia-tabs" role="tablist" aria-label="Time range" style={{ padding: 4 }}>
-            {RANGES.map((r) => (
-              <button
-                key={r.id}
-                role="tab"
-                aria-selected={range === r.id}
-                onClick={() => setRange(r.id)}
-                className={`aia-tab ${range === r.id ? "active" : ""}`}
-                style={{ padding: "7px 13px", fontSize: 12.5 }}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {usage.rows.length || usage.sample ? (
-          <>
-            <MoneyBars
-              data={moneySeries}
-              height={230}
-              ariaLabel={`Money in and AI spend per ${range} for the ${rangeCfg.note}`}
+        <div style={{ position: "relative" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{
+              fontFamily: "var(--mono)", fontSize: 10, fontWeight: 800,
+              letterSpacing: "0.14em", color: "rgba(255,255,255,0.6)",
+            }}>{longDate(nowMs).toUpperCase()}</span>
+            <SourceBadge
+              mode={mode}
+              hint={mode === "live"
+                ? "Counted from our own rows. Anything that failed to read is named below the banner."
+                : "Sample data — this page goes live with the database key"}
             />
-            <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 14, alignItems: "center" }}>
-              <button className="link-btn" style={{ background: "none", border: 0, color: "var(--accent-deep)", fontSize: 12, fontWeight: 600, cursor: "pointer", padding: 0 }} onClick={() => setIngestOpen(true)}>
-                How usage gets in here →
-              </button>
-              {moneySeries.some((d) => d.cost > d.revenue) && (
-                <span style={{ fontSize: 12, color: MONEY_RED, fontWeight: 600 }}>
-                  A dashed outline means AI cost more than came in that {range}.
-                </span>
-              )}
-            </div>
-          </>
-        ) : (
-          <div style={{ padding: "24px 8px", textAlign: "center" }}>
-            <div style={{ fontSize: 13.5, color: "var(--ink-dim)", lineHeight: 1.6 }}>
-              Revenue is here, but no AI usage has been reported yet, so there is nothing to
-              subtract. The chart fills in as soon as the platform posts token usage to the feed.
-            </div>
-            <button className="btn" style={{ marginTop: 12 }} onClick={() => setIngestOpen(true)}>
-              How the feed works
+          </div>
+
+          <div style={{
+            fontFamily: "var(--display)", fontSize: 34, fontWeight: 800,
+            letterSpacing: "-0.02em", lineHeight: 1.15, marginTop: 10,
+          }}>
+            {greeting(nowMs)}{firstName ? `, ${firstName}` : ""}.
+          </div>
+
+          <div style={{
+            marginTop: 8, fontSize: 15, color: "rgba(255,255,255,0.86)",
+            lineHeight: 1.6, maxWidth: 680,
+          }}>
+            {allClear
+              ? "Nothing is late and nothing is due today. Below is where the agency stands."
+              : view.bits.length
+                ? `You have ${view.bits.join(", ")}.${anythingMissing ? " Some of the page is missing — see below." : ""}`
+                : "Part of this page could not be read, so it cannot tell you whether anything is due. What failed is listed below."}
+          </div>
+
+          {view.headline && (
+            <button
+              onClick={() => go(view.headline.go)}
+              style={{
+                marginTop: 16, textAlign: "left", cursor: "pointer",
+                border: "1px solid rgba(255,255,255,0.22)", borderRadius: 10,
+                background: "rgba(255,255,255,0.09)", padding: "12px 14px",
+                color: "white", fontFamily: "var(--body)", maxWidth: 620, width: "100%",
+              }}
+            >
+              <div style={{
+                fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 800,
+                letterSpacing: "0.12em", color: "rgba(255,255,255,0.6)",
+              }}>START HERE</div>
+              <div style={{ fontSize: 14.5, fontWeight: 700, marginTop: 5 }}>
+                {view.headline.text} <span style={{ opacity: 0.7 }}>→</span>
+              </div>
+              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", marginTop: 3 }}>
+                {view.headline.why}
+              </div>
             </button>
+          )}
+        </div>
+      </div>
+
+      {/* ---------------- WHAT DIDN'T LOAD ---------------- */}
+      {view.problems.length > 0 && (
+        <div className="card" style={{ padding: "14px 18px", border: "1px solid var(--danger)", background: "#fef3f2" }}>
+          <div className="label" style={{ color: "var(--danger)" }}>SOME OF THIS PAGE IS MISSING</div>
+          <div style={{ fontSize: 13, color: "var(--ink)", marginTop: 6, lineHeight: 1.6 }}>
+            These reads failed, so their numbers show a dash instead of a zero. A zero here would have
+            read as good news.
+          </div>
+          <ul style={{ margin: "8px 0 0", paddingLeft: 20, fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.7 }}>
+            {view.problems.map((p, i) => (
+              <li key={i}><strong>{p.label}</strong> — <span style={{ fontFamily: "var(--mono)", fontSize: 11.5 }}>{p.error}</span></li>
+            ))}
+          </ul>
+          <button className="btn btn-sm" style={{ marginTop: 10 }} onClick={() => load()}>Try again</button>
+        </div>
+      )}
+
+      {/* ---------------- ASK FOR ANYTHING ---------------- */}
+      {/* Second on the page, straight under the banner. Ryder, Aug 23 2026:
+        * "put this card at the top of the page." It sits below the greeting and
+        * above the counters — the banner is what orients you, and this is the
+        * first thing you can act on, both without scrolling.
+        *
+        * It stays BELOW the red "some of this page is missing" panel on purpose:
+        * the banner's own sentence says "see below" about that panel, so nothing
+        * may come between the two.
+        *
+        * No section header: collapsed this is one strip, and a heading plus a
+        * subtitle above a one-line box is more chrome than content. */}
+      <ConsoleReportsPanel reports={consoleReports} aiReady={Boolean(health?.ai)} />
+
+      {/* ---------------- YOUR NUMBERS ---------------- */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+        <CounterTile
+          broken={dayBroken}
+          label="Late" value={view.counts.overdue} hint="past their due date"
+          tone="#b42318" onClick={() => go("work")} title="Open the Work page"
+        />
+        <CounterTile
+          broken={dayBroken}
+          label="Due today" value={view.counts.today} hint="finish these"
+          tone="#b54708" onClick={() => go("work")} title="Open the Work page"
+        />
+        <CounterTile
+          broken={dayBroken}
+          label="Reminders due" value={view.remindersDue.length}
+          hint={view.remindersUndated.length
+            ? `today or earlier, Central time · ${view.remindersUndated.length} with an unreadable date`
+            : "today or earlier, Central time"}
+          tone="#6941c6" onClick={() => go("work")} title="Open the Work page"
+        />
+        <CounterTile
+          broken={view.broken.leads}
+          label="Leads owed a contact" value={view.owed.length}
+          hint={view.soon.length
+            ? `${view.soon.length} more going cold or due soon`
+            : "expired claims, cold firms, and touches past due"}
+          tone="var(--accent-deep)" onClick={() => go("sales")} title="Open the Sales page"
+        />
+        <CounterTile
+          broken={dayBroken}
+          label="Tickets on you" value={view.counts.tickets} hint="open or pending, assigned to you"
+          tone="#0e7490" onClick={() => go("tickets")} title="Open the Tickets page"
+        />
+      </div>
+
+      {/* ---------------- YOUR DAY ---------------- */}
+      {/* auto-fit, not two fixed columns: the old Overview used a class
+        * (.adm-charts-row) that no stylesheet ever defined, so its two columns
+        * never collapsed on a narrow window. alignItems:start stops the shorter
+        * card stretching to match the taller one. */}
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+        gap: 16, alignItems: "start",
+      }}>
+        {/* Tasks */}
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <BlockHead
+            title="Do these today"
+            count={view.doNow.length}
+            capped={view.doNow.length > 6 ? 6 : null}
+            onSeeAll={() => go("work")}
+            seeAllLabel="All your tasks"
+          />
+          {view.doNow.length === 0 ? (
+            <div style={{ padding: "4px 18px 20px", fontSize: 13, color: dayBroken ? "var(--ink-2)" : "var(--ink-dim)", lineHeight: 1.6 }}>
+              {dayBroken
+                ? "Your tasks could not be read, so this is empty for a reason, not because there is nothing to do. See the red panel above."
+                : "Nothing of yours is late or due today."}
+              {!dayBroken && view.nextUpTasks.length
+                ? ` Next up: ${view.nextUpTasks[0].name} — ${dueLabel(view.nextUpTasks[0].dueEndMs, nowMs)}.`
+                : " Nothing is due this week either."}
+            </div>
+          ) : (
+            <div>
+              {view.doNow.slice(0, 6).map((t) => (
+                <div
+                  key={t.id}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, padding: "11px 18px",
+                    borderTop: "1px solid var(--line)", flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{t.name}</div>
+                    <div style={{
+                      fontSize: 11.5, color: "var(--ink-dim)", marginTop: 3,
+                      display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center",
+                    }}>
+                      <Pill
+                        tone={t.bucket === "overdue" ? "#b42318" : "#b54708"}
+                        bg={t.bucket === "overdue" ? "#fef3f2" : "#fffaeb"}
+                      >{dueLabel(t.dueEndMs, nowMs).toUpperCase()}</Pill>
+                      {t.client_name && <span>{t.client_name}</span>}
+                      {t.priority === "high" && <><span>·</span><span style={{ color: "#b42318", fontWeight: 700 }}>high</span></>}
+                      {t.status !== "todo" && <><span>·</span><span>{TASK_STATUS_LABELS[t.status] || t.status}</span></>}
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    disabled={busy.has(t.id)}
+                    onClick={() => finishTask(t)}
+                  >Done</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Reminders */}
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <BlockHead
+            title="Reminders due"
+            count={view.remindersDue.length}
+            capped={view.remindersDue.length > 6 ? 6 : null}
+            onSeeAll={() => go("work")}
+            seeAllLabel="All reminders"
+          />
+          {view.remindersDue.length === 0 ? (
+            <div style={{ padding: "4px 18px 16px", fontSize: 13, color: "var(--ink-dim)", lineHeight: 1.6 }}>
+              {dayBroken
+                ? "Your reminders could not be read. See the red panel above."
+                : view.openReminders.length === 0
+                ? "You have no open reminders. Set one on the Work page for anything you would otherwise keep in your head."
+                  : `Nothing is due today. You have ${plural(view.openReminders.length, "reminder", "reminders")} set for later.`}
+            </div>
+          ) : (
+            <div>
+              {view.remindersDue.slice(0, 6).map((r) => (
+                <div
+                  key={r.id}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, padding: "11px 18px",
+                    borderTop: "1px solid var(--line)", flexWrap: "wrap",
+                  }}
+                >
+                  <button
+                    onClick={() => tickReminder(r)}
+                    disabled={busy.has(r.id)}
+                    title="Tick off"
+                    role="checkbox"
+                    aria-checked="false"
+                    aria-label={`Tick off: ${r.body}`}
+                    style={{
+                      width: 20, height: 20, flex: "0 0 auto", borderRadius: 5,
+                      cursor: "pointer", border: "1.5px solid var(--rule)", background: "white",
+                    }}
+                  />
+                  <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, color: "var(--ink)" }}>{r.body}</div>
+                    <div style={{
+                      fontSize: 11.5, marginTop: 3, fontWeight: 700,
+                      color: r.late ? "#b42318" : "#b54708",
+                    }}>{r.atMs === null ? "the date on this one won't read — open it on Work" : dueLabel(r.dueEndMs, nowMs)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {view.remindersSoon.length > 0 && (
+            <div style={{
+              padding: "10px 18px 16px", borderTop: "1px solid var(--line)",
+              fontSize: 12, color: "var(--ink-dim)", lineHeight: 1.6,
+            }}>
+              <strong style={{ color: "var(--ink-2)" }}>Coming up:</strong>{" "}
+              {view.remindersSoon.slice(0, 3).map((r) => `${r.body} (${dueLabel(r.dueEndMs, nowMs)})`).join(" · ")}
+              {view.remindersSoon.length > 3 ? ` · and ${view.remindersSoon.length - 3} more` : ""}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ---------------- WHAT THE CONSOLE NOTICED ---------------- */}
+      <SectionHeader
+        kicker="You should know"
+        title="What the console noticed"
+        subtitle="Late follow-ups, quiet clients, emails nobody answered. Each card says whether it was counted from our rows or written by the AI, and every one points at the record it came from."
+        right={<SourceBadge mode={view.broken.notes ? "error" : view.notesSample ? "sample" : "live"} />}
+      />
+      {view.broken.notes ? (
+        <div className="card" style={{ padding: 20, fontSize: 13.5, color: "var(--ink-2)", lineHeight: 1.6 }}>
+          These notes could not be read, so none are shown. The reason is in the red panel above.
+        </div>
+      ) : view.notes.length === 0 ? (
+        <EmptyState
+          icon="◎"
+          title="Nothing flagged right now"
+          body="Notes appear here on their own when something goes quiet or slips. The full list, including ones already handled, lives on the AI Notes page."
+          action={<button className="btn" onClick={() => go("notes")}>Open AI Notes</button>}
+        />
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12, marginTop: -6 }}>
+          {view.notes.slice(0, 6).map((n) => {
+            const t = NOTE_TONE[n.urgency] || NOTE_TONE[1];
+            return (
+              <div key={n.id} className="card" style={{ padding: 15, display: "flex", flexDirection: "column", gap: 7 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+                  <Pill tone={t.tone} bg={t.bg}>
+                    {(NOTE_CATEGORY_LABELS[n.category] || n.category || "note").toUpperCase()}
+                  </Pill>
+                  <span style={{ fontSize: 10, color: "var(--ink-faint)", fontFamily: "var(--mono)" }}>
+                    {/* Three values live in the column, not two: a note a person
+                      * typed used to be labelled AI-WRITTEN. */}
+                    {n.written_by === "counted" ? "COUNTED"
+                      : n.written_by === "person" ? "WRITTEN BY A PERSON"
+                        : n.written_by === "ai_written" ? "AI-WRITTEN" : "SOURCE UNKNOWN"}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--ink)", lineHeight: 1.4 }}>{n.title}</div>
+                {n.body && (
+                  <div style={{ fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.6, flex: 1 }}>{n.body}</div>
+                )}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 2 }}>
+                  <span style={{ fontSize: 10.5, color: "var(--ink-dim)", fontFamily: "var(--mono)" }}>
+                    {timeAgo(n.generated_at || n.created_at)}
+                    {(n.evidence || []).length ? ` · ${plural(n.evidence.length, "record", "records")}` : ""}
+                  </span>
+                  <span style={{ display: "flex", gap: 6 }}>
+                    <button className="btn btn-sm" onClick={() => go("notes")}>Open</button>
+                    <button className="btn btn-sm" disabled={busy.has(n.id)} onClick={() => dismissNote(n)}>Dismiss</button>
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {view.notes.length > 6 && (
+        <button
+          onClick={() => go("notes")}
+          style={{
+            background: "none", border: 0, padding: 0, cursor: "pointer", marginTop: -4,
+            color: "var(--accent-deep)", fontSize: 12.5, fontWeight: 600, fontFamily: "var(--body)",
+          }}
+        >{plural(view.notes.length - 6, "more note", "more notes")} on the AI Notes page →</button>
+      )}
+
+
+      {/* ---------------- THE AGENCY ---------------- */}
+      <SectionHeader
+        kicker="The agency"
+        title="Where everything stands"
+        subtitle="Not just your work — the whole shop, counted right now."
+      />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginTop: -6 }}>
+        <CounterTile
+          label="Active clients" value={view.activeClients.length}
+          hint={`of ${plural(view.clientTotal, "client", "clients")} on the books`}
+          tone="var(--ink)" broken={dayBroken} onClick={() => go("operations")} title="Open Operations"
+        />
+        <CounterTile
+          label="Emails needing a reply" value={view.needsReply.length}
+          hint="new or needs-reply · every mailbox" tone="#b54708" broken={view.broken.emails}
+          onClick={() => go("inbox")} title="Open the Inbox"
+        />
+        <CounterTile
+          label="Open tickets" value={view.openTickets.length}
+          hint={view.pendingTickets.length
+            ? `${view.pendingTickets.length} pending too · whole team`
+            : "whole team · none pending"} tone="#0e7490"
+          broken={view.broken.tickets} onClick={() => go("tickets")} title="Open Tickets"
+        />
+        <CounterTile
+          label="Pipeline" value={view.pipelineNew.length + view.pipelineWorking.length}
+          hint={`${view.pipelineNew.length} new · ${view.pipelineWorking.length} working`}
+          tone="var(--accent-deep)" broken={view.broken.leads}
+          onClick={() => go("sales")} title="Open Sales"
+        />
+        <CounterTile
+          label="New leads this month" value={view.newThisMonth.length}
+          hint={`arrived since the 1st · ${plural(view.wonAllTime.length, "win", "wins")} on the books`} tone="#0ca30c"
+          broken={view.broken.leads} onClick={() => go("sales")} title="Open Sales"
+        />
+      </div>
+
+      <div style={{ fontSize: 11.5, color: "var(--ink-dim)", lineHeight: 1.6, marginTop: -4 }}>
+        Counted from the newest 400 emails, 500 tasks and 5,000 AI calls. Past those limits the real
+        number is higher.{view.leadsTruncated ? ` ${view.leadsTruncated}` : ""}
+        <br />
+        <strong style={{ color: "var(--ink-2)" }}>Leads owed a contact</strong> uses the Sales
+        page&apos;s own rules and the same 90 days of call history. One gap: it cannot read site
+        scores here, so unlike Sales it does not skip firms already scoring 90 or more.
+      </div>
+
+      {/* Clients that need attention */}
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <BlockHead
+          title="Clients that need attention"
+          count={view.attention.length}
+          capped={view.attention.length > 5 ? 5 : null}
+          onSeeAll={() => go("operations")}
+          seeAllLabel="Operations"
+        />
+        {view.broken.tasks ? (
+          <div style={{ padding: "4px 18px 20px", fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6 }}>
+            Client tasks could not be read, so this list is empty for a reason, not because everything
+            is fine. See the red panel above.
+          </div>
+        ) : view.broken.work ? (
+          <div style={{ padding: "4px 18px 20px", fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6 }}>
+            The client list could not be read, so this cannot say whether anyone needs chasing.
+          </div>
+        ) : view.attention.length === 0 ? (
+          <div style={{ padding: "4px 18px 20px", fontSize: 13, color: "var(--ink-dim)", lineHeight: 1.6 }}>
+            No active client has a late task, a blocked task, or an empty task list. Clients on Holding
+            and closed accounts are not counted here.
+          </div>
+        ) : (
+          view.attention.slice(0, 5).map((s) => (
+            <button
+              key={s.client.id}
+              onClick={() => go("operations")}
+              style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "11px 18px",
+                borderTop: "1px solid var(--line)", flexWrap: "wrap", width: "100%",
+                textAlign: "left", cursor: "pointer", background: "white", border: 0,
+                borderTopStyle: "solid", fontFamily: "var(--body)",
+              }}
+            >
+              <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>
+                  {s.client.name || "Unnamed client"} <span style={{ color: "var(--accent-deep)" }}>→</span>
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--ink-dim)", marginTop: 3 }}>
+                  {s.reasons.join(" · ")}
+                  {s.client.stage ? ` · ${s.client.stage}` : ""}
+                </div>
+              </div>
+              {s.late > 0 && <Pill tone="#b42318" bg="#fef3f2">{`${s.late} LATE`}</Pill>}
+              {s.blocked > 0 && <Pill tone="#6941c6" bg="#f4f3ff">{`${s.blocked} BLOCKED`}</Pill>}
+            </button>
+          ))
+        )}
+      </div>
+
+      {/* ---------------- MONEY, ONE LINE ---------------- */}
+      <div className="card" style={{ padding: "16px 20px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
+            <div>
+              <div className="label" style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                Recurring revenue <SourceBadge mode={moneyMode} />
+              </div>
+              <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, marginTop: 4 }}>
+                {m.mrrCents === null ? "—" : `${fmtMoney(m.mrrCents)}/mo`}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--ink-dim)", marginTop: 2 }}>
+                {m.stripeState === "live"
+                  ? (m.stripeTruncated ? `from Stripe ${m.stripeAgo} · capped at 1,000 rows, so this reads low`
+                    : m.stripeTestMode ? `from Stripe ${m.stripeAgo} · test-mode key`
+                      : `measured from Stripe ${m.stripeAgo}, trials included`)
+                  : m.stripeState === "failed" ? "the Stripe call failed — hit Refresh"
+                    : m.stripeState === "nokey" ? "needs the Stripe key"
+                      : m.stripeState === "preview" ? "preview mode — no Stripe call made"
+                        : "not read yet — hit Refresh"}
+              </div>
+            </div>
+            <div>
+              <div className="label" style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                Still owed to us <SourceBadge mode={view.broken.invoices ? "error" : m.invoiceSample ? "sample" : "live"} />
+              </div>
+              <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, marginTop: 4 }}>
+                {view.broken.invoices ? "—" : fmtMoney(m.outstandingCents)}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--ink-dim)", marginTop: 2 }}>
+                {view.broken.invoices ? "invoices couldn't be read" : "sent invoices, not paid in full"}
+              </div>
+            </div>
+            <div>
+              <div className="label" style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                AI spend this month <SourceBadge mode={view.broken.usage ? "error" : m.usageSample ? "sample" : m.noUsageYet ? "waiting" : "live"} />
+              </div>
+              <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, marginTop: 4 }}>
+                {view.broken.usage || m.noUsageYet ? "—"
+                  : `$${m.aiSpendMonth.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--ink-dim)", marginTop: 2 }}>
+                {view.broken.usage ? "usage couldn't be read"
+                  : m.noUsageYet ? "no usage reported yet"
+                    : m.usageSample ? "sample feed, not real spend" : "from the usage feed"}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn" onClick={() => setMoneyOpen(true)}>What are these?</button>
+            <button className="btn btn-primary" onClick={() => go("finance")}>Open Finance →</button>
+          </div>
+        </div>
+      </div>
+
+      {/* ---------------- WHAT CHANGED ---------------- */}
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        <BlockHead title="What changed lately" count={(data.activity.rows || []).length} />
+        {(data.activity.rows || []).length === 0 ? (
+          <div style={{ padding: "4px 18px 20px", fontSize: 13, color: "var(--ink-dim)", lineHeight: 1.6 }}>
+            {data.activity.error
+              ? "The activity log could not be read."
+              : "Nothing logged yet. Calls, task updates and imports land here on their own as the team works."}
+          </div>
+        ) : (
+          <div style={{ padding: "0 18px 14px", maxHeight: 300, overflowY: "auto" }}>
+            {data.activity.rows.map((a) => (
+              <div key={a.id} style={{ padding: "10px 0", borderTop: "1px solid var(--line)" }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>{a.title}</div>
+                {a.body && <div style={{ fontSize: 12, color: "var(--ink-dim)", marginTop: 2 }}>{a.body}</div>}
+                <div style={{
+                  fontSize: 10, color: "var(--ink-faint)", fontFamily: "var(--mono)",
+                  marginTop: 4, letterSpacing: "0.04em",
+                }}>{timeAgo(a.created_at).toUpperCase()}</div>
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Recent payments + activity */}
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 16 }} className="adm-charts-row">
-        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ padding: "16px 20px 10px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div className="label" style={{ marginBottom: 0 }}>Recent payments</div>
-            <SourceBadge mode={stripeBadgeMode} />
-          </div>
-          {(s.recentPayments || []).length ? (
-            <table className="adm-table">
-              <thead><tr><th>When</th><th>Customer</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
-              <tbody>
-                {s.recentPayments.map((p, i) => (
-                  <tr key={i}>
-                    <td style={{ whiteSpace: "nowrap", fontFamily: "var(--mono)", fontSize: 11 }}>{timeAgo(p.created * 1000)}</td>
-                    <td style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: 180 }}>{p.customerEmail || p.description || "—"}</td>
-                    <td style={{ textAlign: "right", fontWeight: 700, color: "var(--ink)" }}>
-                      {fmtMoney(p.amount, p.currency)}{p.refunded ? <span style={{ color: "var(--danger)", fontSize: 10, marginLeft: 6, fontFamily: "var(--mono)" }}>PARTIAL REFUND</span> : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div style={{ padding: "10px 20px 20px", fontSize: 13, color: "var(--ink-dim)" }}>No payments in the last 12 months.</div>
-          )}
-        </div>
-
-        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ padding: "16px 20px 10px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div className="label" style={{ marginBottom: 0 }}>Team activity</div>
-            {activity && <SourceBadge mode={activity.sample ? "sample" : "live"} />}
-          </div>
-          <div style={{ padding: "4px 20px 16px", maxHeight: 320, overflowY: "auto" }}>
-            {activity.rows.length ? activity.rows.map((a) => (
-              <div key={a.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--rule)" }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink)" }}>{a.title}</div>
-                {a.body && <div style={{ fontSize: 12, color: "var(--ink-dim)", marginTop: 2 }}>{a.body}</div>}
-                <div style={{ fontSize: 10, color: "var(--ink-faint)", fontFamily: "var(--mono)", marginTop: 4, letterSpacing: "0.04em" }}>{timeAgo(a.created_at).toUpperCase()}</div>
-              </div>
-            )) : (
-              <div style={{ padding: "16px 0", fontSize: 13, color: "var(--ink-dim)" }}>
-                Nothing logged yet. Calls, task updates, and imports land here automatically as the team works.
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Quick jumps */}
+      {/* ---------------- JUMP IN ---------------- */}
       <SectionHeader kicker="Jump in" title="Where the work happens" />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16, marginTop: -8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14, marginTop: -8 }}>
         {[
-          ["leads", "Leads", "Work the pipeline, log calls, import lists."],
-          ["operations", "Operations", "Clients, tasks, and weekly logs — the Notion replacement."],
-          ["inbox", "Inbox", "Team Gmail with AI drafting."],
-          ["tickets", "Tickets", "Support queue with AI-drafted replies."],
-        ].filter(([id]) => member.role !== "sales" || id === "leads").map(([id, title, body]) => (
-          <button key={id} onClick={() => setSection(id)} className="card" style={{ padding: 18, textAlign: "left", cursor: "pointer", border: "1px solid var(--rule)", background: "white", fontFamily: "var(--body)" }}>
-            <div style={{ fontSize: 14.5, fontWeight: 700, color: "var(--ink)" }}>{title} <span style={{ color: "var(--accent-deep)" }}>→</span></div>
+          ["work", "Your work", "Every task, reminder and note with your name on it."],
+          ["sales", "Sales", "Work the pipeline, log calls, import lists."],
+          ["operations", "Operations", "Clients, tasks and weekly logs."],
+          ["inbox", "Inbox", "The shared team mailbox."],
+        ].map(([id, title, body]) => (
+          <button
+            key={id}
+            onClick={() => go(id)}
+            className="card"
+            style={{
+              padding: 17, textAlign: "left", cursor: "pointer",
+              border: "1px solid var(--rule)", background: "white", fontFamily: "var(--body)",
+            }}
+          >
+            <div style={{ fontSize: 14.5, fontWeight: 700, color: "var(--ink)" }}>
+              {title} <span style={{ color: "var(--accent-deep)" }}>→</span>
+            </div>
             <div style={{ fontSize: 12.5, color: "var(--ink-dim)", marginTop: 4, lineHeight: 1.5 }}>{body}</div>
           </button>
         ))}
       </div>
 
-      {/* Ingest explainer modal */}
-      <Modal open={ingestOpen} onClose={() => setIngestOpen(false)} kicker="TOKEN USAGE FEED" title="How usage numbers get in here" width={620}>
-        <p style={{ fontSize: 13.5, color: "var(--ink-2)", lineHeight: 1.6 }}>
-          The platform's backend posts every AI call it makes to this console. One HTTP call, one
-          shared secret. Until that's wired, this panel says WAITING ON KEY — it never guesses.
+      {/* ---------------- money explainer ---------------- */}
+      <Modal
+        open={moneyOpen}
+        onClose={() => setMoneyOpen(false)}
+        kicker="MONEY ON THIS PAGE"
+        title="What these three numbers mean"
+        width={620}
+      >
+        <p style={{ fontSize: 13.5, color: "var(--ink-2)", lineHeight: 1.7 }}>
+          <strong>Recurring revenue</strong> is what our live subscriptions add up to each month, read
+          straight from Stripe. It includes anyone still in a free trial. The Finance page keeps trials
+          on their own line, so its figure reads lower until a trial starts paying.
         </p>
-        <div style={{ marginTop: 14, padding: 14, borderRadius: 10, background: "var(--ink)", color: "#d6e4ff", fontFamily: "var(--mono)", fontSize: 11.5, lineHeight: 1.7, overflowX: "auto" }}>
-          POST https://&lt;admin-domain&gt;/api/usage-ingest<br />
-          Header: x-ingest-key: &lt;USAGE_INGEST_KEY&gt;<br />
-          {"Body: { \"events\": [ { \"ts\": \"2026-08-16T12:00:00Z\", \"source\": \"caite\","}<br />
-          {"  \"model\": \"claude-sonnet-4-6\", \"input_tokens\": 1200,"}<br />
-          {"  \"output_tokens\": 480, \"cost_usd\": 0.0125 } ] }"}
-        </div>
-        <p style={{ fontSize: 12.5, color: "var(--ink-dim)", lineHeight: 1.6, marginTop: 12 }}>
-          The console's own AI drafts already report themselves this way (source: "admin"), so
-          the moment the Anthropic key is set you'll see real numbers here from your own usage —
-          before the platform feed even exists.
+        <p style={{ fontSize: 13.5, color: "var(--ink-2)", lineHeight: 1.7, marginTop: 12 }}>
+          <strong>Still owed to us</strong> adds up every invoice we have sent and not been paid in full
+          for. Drafts and voided invoices are left out, because nobody owes us for those yet. This is
+          the same figure, from the same function, as the Finance page headline — if the two ever differ,
+          one of them is broken.
+        </p>
+        <p style={{ fontSize: 13.5, color: "var(--ink-2)", lineHeight: 1.7, marginTop: 12 }}>
+          <strong>AI spend this month</strong> is what we have paid for AI calls since the 1st. It comes
+          from the usage feed, so it reads a dash until the platform starts posting to it.
+        </p>
+        <p style={{ fontSize: 12.5, color: "var(--ink-dim)", lineHeight: 1.6, marginTop: 14 }}>
+          Every date on this page is counted on the team&apos;s calendar (Central time), including the
+          month boundary above. The Finance page counts its months on your computer&apos;s clock, so on
+          the 1st the two AI-spend figures can differ by a few hours&apos; worth of calls.
+        </p>
+        <p style={{ fontSize: 12.5, color: "var(--ink-dim)", lineHeight: 1.6, marginTop: 10 }}>
+          None of these three is profit. Wages, software and ad spend are on the Finance page.
         </p>
       </Modal>
     </>

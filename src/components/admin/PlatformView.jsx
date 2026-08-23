@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Explainer, SectionHeader, SourceBadge, EmptyState, useHealth } from "./shared.jsx";
+import { SectionHeader, SourceBadge, EmptyState, useHealth } from "./shared.jsx";
 import { toast } from "../../lib/toast.js";
 import { listClients, deletePlatformAccount } from "../../lib/data.js";
 import {
@@ -103,13 +103,6 @@ export default function PlatformView() {
 
   return (
     <>
-      <Explainer
-        icon="🛰"
-        kicker="EAT OUR OWN COOKING"
-        title="Every platform account, one click away"
-        body="One card per login we hold on the platform — ours, and one for each client whose workspace we work in. Press the button on a card and that account opens in a new tab, already signed in. No password is typed, and none is kept here."
-      />
-
       <div className="card adm-cp-sitesbar">
         <div style={{ minWidth: 0 }}>
           <div className="label" style={{ marginBottom: 4 }}>Accounts</div>

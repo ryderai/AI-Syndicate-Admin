@@ -414,3 +414,398 @@ is wrong on the high side and says so.
 the Finance and Invoices pages are not even in their sidebar. Deleting a cost, an invoice or a
 payment is owners only; anyone with admin can cancel an invoice or switch a cost off, which is the
 everyday action.
+
+---
+
+## Migration 0006 — Notes, AI memory, the assistant, lead intake (added Aug 20 2026)
+
+Do these in order. Steps 1 and 2 are required before any of it saves anything.
+
+*(0006 and 0007 are independent and can be run in either order — 0006 is this page, 0007 is
+Finance. Neither touches the other's tables.)*
+
+### 1. Run the database file — 2 minutes
+
+1. Go to **https://supabase.com/dashboard** and sign in.
+2. Click the project the platform uses (the shared one).
+3. In the left menu click **SQL Editor**.
+4. Click **+ New query**.
+5. Open `supabase/migrations/0006_brain_notes_leads.sql` from this repo, select all of it,
+   copy it, and paste it into the box.
+6. Click **Run** (bottom right).
+7. You should see **Success. No rows returned**. Green notices saying
+   `... does not exist, skipping` are normal — that is the file being safe to re-run.
+
+Run `0001` through `0005` first if you have not. Everything this file creates is prefixed
+`admin_`; it touches nothing the customer platform owns. It is safe to run twice.
+
+### 2. What works with no extra keys
+
+- The **Notes** page. Press **Write today's notes** and it reads every client, task, lead, email,
+  ticket and follow-up and writes down what it found. Every note is badged **COUNTED**, and no AI
+  is involved in that path at all.
+- **Import a list** on the Leads page: Excel or CSV or paste, with duplicates caught before
+  anything saves.
+- The **rep call queue** on the Leads page.
+
+### 3. Turn the assistant on — needs one key
+
+The assistant (the ✦ button, bottom right, or Ctrl+K) and the AI wording on Notes both need
+`ANTHROPIC_API_KEY`. It is the same key the platform's Caite already uses. If you already did
+this for § 4 above, it is done — skip to step 4.
+
+1. Go to **https://vercel.com** and sign in.
+2. Click the **ai-syndicate-admin** project.
+3. Click **Settings** (top), then **Environment Variables** (left).
+4. In **Key** type `ANTHROPIC_API_KEY`.
+5. In **Value** paste the key.
+6. Tick **Production**, **Preview** and **Development**.
+7. Click **Save**.
+8. Click **Deployments** (top), then the **⋯** on the newest one, then **Redeploy**.
+
+Without it: the assistant says it is waiting on the key, and Notes still writes every note —
+just in its own counted words. Nothing fakes it.
+
+### 4. Lead scraping — needs a key we do not have yet
+
+Saved searches are built and wired. They stay switched off until one of these exists:
+
+| Variable | What it turns on |
+|---|---|
+| `PLATFORM_LEADGEN_URL` (+ optional `PLATFORM_LEADGEN_KEY`) | Pull leads from our own platform's lead generator |
+| `APOLLO_API_KEY` | Pull contact details from Apollo |
+
+Add either the same way as step 3. Until then, pressing **Run it now** on a saved search says
+exactly which variable it is waiting for, and nothing pretends to have run.
+
+**For the daily run**, also add `CRON_SECRET` — any long random string. Without it the scheduled
+run is closed, not open. The schedule itself is already in `vercel.json`: weekdays at 13:00 UTC,
+which is 8am Central.
+
+**What a search costs.** Each run is a paid call to the provider. Three things keep it bounded,
+and none should be loosened without a reason: **Most leads per run** on the search (25 by default,
+500 maximum), one page of results per run, and **Run it every day on its own** being off unless
+somebody ticks it.
+
+### 5. Who can see what
+
+| | Owner | Admin | Sales |
+|---|---|---|---|
+| Notes page | yes | yes | **no** |
+| AI Brain + what it has remembered | yes | yes | **no** |
+| The assistant | yes | yes | yes — **leads only** |
+| Leads, the rep queue | yes | yes | yes |
+| Import a list | yes | yes | no |
+| Create or edit a saved search | yes | yes | no (can see the list) |
+| Run a saved search | yes | yes | no |
+
+A sales rep's assistant can read leads, lead activity, lead sources, **their own** follow-ups and
+the team roster. It cannot read clients, tasks, email, tickets, money, the Brain, the memory or
+the notes — not by asking, not by searching, not indirectly. That is enforced in
+`lib/brain-context.js` and `lib/assistant-tools.js`, twice each, because these endpoints run on
+the service key which ignores the database's own row-level security.
+
+### 6. What the assistant can change, and what it cannot
+
+It can: move a lead's stage, claim or assign a lead, log a call, set a follow-up, add or update a
+task, move an email's status in the shared inbox, remember a fact, and write a note.
+
+It cannot **delete anything at all**, at any role, and it will not blank a lead's notes. Every
+change it makes is printed as its own green or red line in the chat, and written to
+`admin_assistant_log` with who asked for it. The **Actions on / Actions off** switch in the chat
+header makes it read-only for that conversation; it is told when it is off, so it explains what
+it would have done instead of failing quietly.
+
+The full write-up of all of this is `CONTEXT-FOR-AI.md` **§21** (the build) and **§22** (the
+review pass that found 15 defects). Tests: `bash tests/brain/run.sh`.
+
+---
+
+## Migration 0008 — the Vault and client reports (added Aug 21 2026)
+
+Two things go live together: the **Vault** (every password, card and key, ours and each client's)
+and **Generate report** on a client page. Both need step 1. Only the Vault needs step 2.
+
+### 1. Run the database file — 2 minutes
+
+1. Open **supabase.com** and sign in.
+2. Click the project the console uses (the same one as the platform).
+3. In the left sidebar, click **SQL Editor**.
+4. Click **New query**.
+5. Open `supabase/migrations/0008_vault_reports.sql` from this repo, select all of it, copy it.
+6. Paste it into the box.
+7. Press **Run** (bottom right).
+8. It should say **Success. No rows returned.** If it says anything else, stop and send the message
+   to Ryder — do not press Run again.
+
+It only creates things starting with `admin_`. It touches nothing the customer platform owns. It is
+safe to run twice.
+
+### 2. Make the key that scrambles the passwords — 5 minutes
+
+Without this, the Vault page still lists everything, and **Reveal** and **Save** both refuse with a
+banner across the top of the page telling you this step is missing.
+
+1. On your Mac, open **Terminal**.
+2. Type this exactly and press Enter:
+
+   ```
+   openssl rand -base64 32
+   ```
+
+3. It prints one line of about 44 random characters, ending in `=`. Select the whole line and copy
+   it. **Do not make one up, and do not type a phrase.** The console will refuse a phrase, and even
+   the ones it cannot spot can be guessed by somebody who steals the database.
+4. Open **vercel.com** and sign in.
+5. Click the **ai-syndicate-admin** project.
+6. Click **Settings** at the top, then **Environment Variables** in the left sidebar.
+7. Click **Add New**.
+8. In **Key**, type: `VAULT_KEY`
+9. In **Value**, paste the line you copied.
+10. Tick all three boxes: **Production**, **Preview**, **Development**.
+11. Click **Save**.
+12. Click **Deployments** at the top, then the **⋯** next to the newest one, then **Redeploy**.
+
+### 3. Put the key in Bitwarden. This is not optional.
+
+1. Open Bitwarden.
+2. Click **New item** → **Secure note**.
+3. Name it: `AI Syndicate — admin console VAULT_KEY`
+4. Paste the same line into the note.
+5. Save it.
+
+**If that line is lost, every password and card number already stored is gone for good.** Not
+"hard to get back" — gone. Nobody can unscramble them without it, including us.
+
+The line is not a password anybody types. It never goes in Notion, never in a message, never in
+this repo.
+
+### 4. What works with no extra keys
+
+- The whole Vault page: adding items, editing them, searching, the client tabs, "Who looked".
+- Reveal, copy, save and clear — as soon as `VAULT_KEY` exists.
+- Generate report, in its **counted** form: real numbers, plain wording, no AI involved.
+
+### 5. What needs one more key
+
+`ANTHROPIC_API_KEY` (already set up in § 4 of this file) makes reports read like somebody wrote
+them instead of like a list of counts. Everything is still counted first either way; the AI only
+does the wording, and a draft that states anything not in the counts is thrown away.
+
+### 6. Who can see the Vault
+
+| | Owner | Admin | Sales |
+|---|---|---|---|
+| The Vault page and everything on it | yes | yes | **no** |
+| Reveal or copy a password or card number | yes | yes | no |
+| Add, edit or delete an item | yes | yes | no |
+| See who has opened what | yes | yes | no |
+
+A sales account cannot see the Vault in the sidebar, cannot open it by typing the address, and gets
+nothing back from the database or the server if it tries.
+
+### 7. Two things worth knowing before you use it
+
+- **Every reveal is written down** — who, which item, which part, when. Those lines cannot be
+  edited or deleted by anybody through the console, and they stay even if the item is deleted.
+- **Bitwarden is still the master copy.** Each item can hold a Bitwarden link, and the page shows a
+  button for it. The console is the list everybody can see; Bitwarden is where the truth lives.
+
+## Migration 0009 — the Sales page (added Aug 22 2026)
+
+This is the one that replaces CJ's outreach spreadsheet. **Nothing on the Sales page saves until
+step 1 is done.** Steps 3 and 4 each switch on one thing that is otherwise closed, not broken.
+
+*(0008 and 0009 are independent and can be run in either order. 0009 touches only `admin_`
+tables, and only adds — it drops nothing.)*
+
+### 1. Run the database file — 2 minutes
+
+1. Go to **supabase.com** and sign in.
+2. Click the project the console uses.
+3. In the left sidebar click **SQL Editor**.
+4. Click **New query**.
+5. Open `supabase/migrations/0009_sales.sql` from the repo, select all of it, copy it.
+6. Paste it into the box.
+7. Click **Run** (bottom right).
+8. It should say **Success. No rows returned.** That is what finished looks like.
+
+Safe to run twice. If you are not sure whether it ran, run it again — every statement is guarded.
+
+**What it adds:** three new tables (`admin_companies`, `admin_lead_lists`, `admin_proposals`),
+about eighteen columns on `admin_leads`, a wider stage list (12 stages instead of 7), and one
+function that enforces the one-text rule. It also stamps a claim date on every lead that already
+had an owner, so the page can show something true on day one.
+
+### 2. What works straight after step 1
+
+Everything except the score button and the overnight job:
+
+- Claiming a firm, and claiming everybody else at that firm in one click.
+- The 3-business-day and 14-day timers, on screen. (They **warn** on screen from day one; they only
+  start actually handing firms back once step 4 is done.)
+- The 5-touch cadence, and My Day telling a rep what is owed today.
+- Importing the outreach sheet — every tab at once.
+- The whole profile: timeline, proposals, details, playbook.
+
+### 3. The score button — needs one key
+
+The Rules of Engagement say run a site score first and skip anyone at 90 or above. That is the
+**Run score** button on a firm. It calls our own platform.
+
+1. Go to **vercel.com** → the admin console project → **Settings** → **Environment Variables**.
+2. Click **Add New**.
+3. Key: `PLATFORM_SCORE_URL`
+4. Value: the platform's scan endpoint (ask Andrew — it is the URL that takes a domain and returns
+   a score).
+5. Tick **Production**, **Preview** and **Development**.
+6. Click **Save**.
+7. If that endpoint needs a key too, repeat for `PLATFORM_SCORE_KEY`.
+8. Go to **Deployments**, click the newest one, click **⋯** → **Redeploy**. Environment variables
+   only take effect on a new deploy.
+
+Until then the button returns an error that names the missing variable, and the chip on screen
+keeps saying NO SCORE. **It never invents a number** — a rep would quote it to a prospect.
+
+### 4. The overnight claim sweep — needs one key and one schedule
+
+This is what makes "3 days or you lose the claim" and "14 days cold reopens" real instead of a
+sentence in a rules tab.
+
+1. Make a long random password (Bitwarden → Generator → 40 characters).
+2. Vercel → **Settings** → **Environment Variables** → **Add New**.
+3. Key: `CRON_SECRET`, value: that random string. All three environments. **Save.**
+4. Put the same string in Bitwarden so it is not only in Vercel.
+5. Set up a daily call to:
+   `GET https://admin.aisyndicate.com/api/sales-sweep`
+   with the header `Authorization: Bearer <that random string>`
+   Vercel Cron, or any scheduler. Around 3am Central is sensible.
+6. Redeploy.
+
+**Without `CRON_SECRET` the scheduled path is CLOSED, not open.** A cron endpoint that runs for
+anybody who finds the URL could empty the sales floor.
+
+**What it does each night, in this order.** It warns first: anything about to run out gets a dated
+reminder on that rep's Work page. It only hands a firm back to the floor if a warning for that
+lead is already on file — so the very first run after the migration warns and takes nothing. And a
+firm that goes back to the floor keeps everything: every call, every note, the real first-contact
+date, and where the deal had got to. A rep who was mid-conversation re-claims it in one click.
+
+### 5. Import the real sheet
+
+1. In the console, click **Sales** in the sidebar.
+2. Click **Import a sheet**.
+3. Pick the workbook. In Google Sheets: **File → Download → Microsoft Excel (.xlsx)** first.
+4. Tick the tabs you want. The Rules of Engagement tab is unticked already — it is instructions,
+   not a list.
+5. Click **Check the columns**. Each tab is matched on its own, because the columns really are
+   different between them. Change anything it got wrong.
+6. Click **See what will happen**. Read this screen. It tells you how many people, how many firms,
+   how many claims came across, how many are already in the pipeline and will be skipped, and
+   every row it could not read.
+7. Click **Import**.
+
+Import the same file twice by accident and the second run writes nothing — it tells you they are
+already here.
+
+### 6. Who can see what
+
+| | Owner | Admin | Sales |
+|---|---|---|---|
+| The Sales page and every lead on it | yes | yes | yes |
+| Edit anybody's lead, claim or hand back | yes | yes | **yes** |
+| Import a sheet · rep numbers | yes | yes | no |
+| Run a site score | yes | yes | yes |
+| Delete a firm, list or proposal | yes | yes | no |
+| Finance, Invoices, the Vault, the shared inbox, the Brain | yes | yes | no |
+
+**There are no locks between reps** — Ryder's call, Aug 21 2026. "One firm, one rep" is a warning a
+rep reads before they send, not a wall. Everything that was closed to sales before this migration
+is still closed.
+
+### 7. Three things worth knowing before the team uses it
+
+- **The record is the person.** Every row of the sheet is one contact, and it stays that same
+  record for life — a lead does not become a client by being copied somewhere else. The firm is a
+  link on it, which is why scoring one firm scores it for all four people there.
+- **The timeline is never overwritten.** Unlike "Last Touch" in the sheet, nothing is edited or
+  deleted. Every call, email, note, stage change, claim and score run is a dated line.
+- **Marking a lead Won does not yet create the client record.** Sales history stays on the record
+  under Won; onboarding still has to be started by hand on the Clients page. The console says so
+  when you click it.
+
+---
+
+## Migration 0010 — the Overview generator (added Aug 23 2026)
+
+The box on the Overview page: you type what you want, it reads the whole console and writes it. This
+migration only adds the table the results are saved into.
+
+*(0008, 0009 and 0010 are independent and can be run in any order. 0010 touches only `admin_`
+objects and is safe to run twice.)*
+
+**Until you run this, the button still works** — you get the words back and a warning that the row
+did not file. Nothing is silently lost.
+
+1. Go to **supabase.com** and sign in.
+2. Click the **ai-syndicate** project.
+3. In the left sidebar click **SQL Editor**.
+4. Click **New query**.
+5. Open `supabase/migrations/0010_console_reports.sql` from this repo, select all of it, copy it.
+6. Paste it into the box.
+7. Click **Run** (bottom right).
+8. You should see **Success. No rows returned.**
+
+### The one key it wants
+
+The generator writes with Claude, so it needs `ANTHROPIC_API_KEY` in Vercel — the same key the
+assistant and the client reports use. If it is not set, the button still answers with the **counted**
+version (the real numbers, nobody's writing) and the box tells you that before you press it.
+
+To set it: **vercel.com** → the project → **Settings** → **Environment Variables** → Add
+`ANTHROPIC_API_KEY`, tick all three environments, **Save**, then **Deployments** → the newest one →
+the **⋯** menu → **Redeploy**. Env vars only reach a build, so nothing changes until you redeploy.
+
+### Who can use it
+
+Owner and admin only, enforced both in the endpoint and in the database's row-level security. One
+saved result can summarise every client, every lead and every invoice in one place, so a sales rep
+must not be able to read one.
+
+### What it can and cannot see
+
+**Reads:** every client and their tasks, weekly logs, websites, leads and the firms behind them,
+lead lists, proposals, email threads, tickets, follow-ups, open notes, the standing rules, the team,
+and the invoices we issued.
+
+**Never sees:** the vault (no login, no card, no key). Anything on the AI Syndicate platform — there
+are **no scan results and no GEO scores in this console**, only a website score on a sales firm where
+one has been run. Money taken through Stripe. And anything nobody wrote down.
+
+---
+
+## Migration 0011 — rating the Overview generator (added Aug 23 2026)
+
+Two things, both about the box on the Overview page.
+
+**Run this AFTER `0010`.** It changes the table 0010 creates and points at it, so on its own it will
+fail. Both are safe to run twice.
+
+1. Go to **supabase.com** → the **ai-syndicate** project → **SQL Editor** → **New query**.
+2. Open `supabase/migrations/0011_console_feedback.sql` from this repo, select all, copy.
+3. Paste it in and click **Run**. You should see **Success. No rows returned.**
+
+### What it changes
+
+**The "free draft" mode is gone.** Every answer the generator writes is now checked against real
+rows. If it invents a number, a date or a name, the whole draft is thrown away and you get the counted
+version with the reason. There is no longer any way to ask it for an unchecked one. Where it wants a
+figure we do not hold, it leaves a blank in square brackets for you to fill in.
+
+**A star rating, and a box for why.** Under every finished answer: *How was this?* and five stars.
+Click a star and a small optional box appears — "too long", "lead with the money", "stop repeating the
+client's name". The next time you press **Write it**, those notes are put into the instructions, worst
+rating first, so it actually changes. They can only change tone, length and what it leads with — they
+can never let it invent a number, and the rules that stop it come after the notes on purpose.
+
+Rating the same answer twice is fine: it saves a second row and the newest one wins.

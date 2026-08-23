@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getHealth } from "../../lib/adminApi.js";
 import { isConfigured } from "../../lib/supabase.js";
 import { toast } from "../../lib/toast.js";
-import { Explainer, SectionHeader } from "./shared.jsx";
+import { SectionHeader } from "./shared.jsx";
 
 /* Settings — the truth table. Which integration is live, which is waiting
  * on a key, and exactly what to paste where. Never shows secret values. */
@@ -61,17 +61,8 @@ export default function SettingsPage({ member }) {
     catch { toast.warn("Couldn't copy — select it by hand."); }
   };
 
-  const liveCount = health ? INTEGRATIONS.filter((i) => health[i.key]).length : 0;
-
   return (
     <>
-      <Explainer
-        icon="🔧"
-        kicker="THE TRUTH TABLE"
-        title={health ? `${liveCount} of ${INTEGRATIONS.length} integrations live` : "Checking integrations…"}
-        body="Every screen in this console works today — cards without a key show WAITING ON KEY and switch to LIVE the moment the key lands in Vercel. This page is the checklist. No secret is ever shown or stored here."
-      />
-
       <div style={{ display: "grid", gap: 14 }}>
         {INTEGRATIONS.map((intg) => {
           const live = Boolean(health?.[intg.key]);

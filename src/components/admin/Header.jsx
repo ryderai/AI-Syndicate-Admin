@@ -3,17 +3,18 @@ import { SourceBadge } from "./shared.jsx";
 
 const SECTION_TITLES = {
   work: { kicker: "Yours", title: "Work · what's on you right now" },
-  overview: { kicker: "Command", title: "Overview · revenue, usage, activity" },
+  overview: { kicker: "Command", title: "Overview · your day and the whole agency" },
   finance: { kicker: "Command", title: "Finance · in, out, projected" },
   invoices: { kicker: "Command", title: "Invoices · billed, paid, owed" },
   customers: { kicker: "Command", title: "Customers · every paying account" },
-  leads: { kicker: "Sales", title: "Leads · the pipeline" },
+  sales: { kicker: "Sales", title: "Sales · the pipeline" },
   operations: { kicker: "Delivery", title: "Operations · clients, tasks & weekly logs" },
   inbox: { kicker: "Comms", title: "Inbox · team Gmail in one place" },
   tickets: { kicker: "Comms", title: "Tickets · customer support desk" },
   notes: { kicker: "Intelligence", title: "Notes · what the system noticed" },
   brain: { kicker: "Intelligence", title: "AI Brain · what the AI knows and how it writes" },
   platform: { kicker: "Intelligence", title: "Our platform · GEO for our own site" },
+  vault: { kicker: "Workspace", title: "Vault · passwords, cards & keys" },
   team: { kicker: "Workspace", title: "Team · seats & roles" },
   settings: { kicker: "Workspace", title: "Settings · integrations & keys" },
 };
@@ -25,7 +26,7 @@ export function requestRefresh() {
 
 export default function Header({ section, preview }) {
   /* A page that is not in the map above gets its own name, NOT the Overview's.
-   * Falling back to Overview showed "Overview · revenue, usage, activity" over
+   * Falling back to Overview showed the Overview title over
    * the Notes page for its first hour of life — a header that lies about which
    * page you are on is worse than a plain one. Caught by a screenshot, Aug 20 2026. */
   const t = SECTION_TITLES[section] || {

@@ -94,17 +94,21 @@ export function ChipBadge({ label, color = "var(--accent-deep)", bg = "var(--acc
 /** Where a number comes from — the honesty badge. Every data card carries one.
  * live    = measured from the real integration just now
  * sample  = preview data, nothing real behind it
- * waiting = the screen is real but the key/feed isn't set yet */
+ * waiting = the screen is real but the key/feed isn't set yet
+ * error   = the read was attempted and failed. Added Aug 22 2026: a broken
+ *           query used to borrow "waiting", which told the reader to go and set
+ *           a key that was already set. */
 export function SourceBadge({ mode, hint }) {
   const map = {
     live: { l: "LIVE", c: "#006b1a", bg: "var(--success-soft)" },
     sample: { l: "SAMPLE", c: "#92400e", bg: "#fffbeb" },
     waiting: { l: "WAITING ON KEY", c: "var(--ink-dim)", bg: "var(--bg-3)" },
+    error: { l: "READ FAILED", c: "#b42318", bg: "#fef3f2" },
   };
   const t = map[mode] || map.sample;
   return (
     <span
-      title={hint || (mode === "live" ? "Pulled from the real source just now" : mode === "waiting" ? "The screen is wired — it goes live the moment the key is set (SETUP.md)" : "Sample data — preview only")}
+      title={hint || (mode === "live" ? "Pulled from the real source just now" : mode === "error" ? "This read was tried and failed — the reason is on the page" : mode === "waiting" ? "The screen is wired — it goes live the moment the key is set (SETUP.md)" : "Sample data — preview only")}
       style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 8px", borderRadius: 4, background: t.bg, color: t.c, fontSize: 9, fontWeight: 800, fontFamily: "var(--mono)", letterSpacing: "0.08em", cursor: "help" }}
     >
       <span style={{ width: 5, height: 5, borderRadius: 99, background: "currentColor" }} />
@@ -134,19 +138,6 @@ export function MetricCard({ label, value, delta, deltaUp, hint, badge }) {
           {hint && <span style={{ fontSize: 11, color: "var(--ink-faint)", fontFamily: "var(--mono)" }}>{hint}</span>}
         </div>
       )}
-    </div>
-  );
-}
-
-export function Explainer({ icon = "💡", title, body, kicker = "WHAT THIS IS" }) {
-  return (
-    <div className="dash-explainer">
-      <span className="dash-explainer-icon" aria-hidden="true">{icon}</span>
-      <div>
-        <div className="dash-explainer-kicker">{kicker}</div>
-        <div className="dash-explainer-title">{title}</div>
-        <div className="dash-explainer-body">{body}</div>
-      </div>
     </div>
   );
 }

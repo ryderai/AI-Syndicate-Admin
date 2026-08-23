@@ -9,7 +9,7 @@ import { toast } from "../../lib/toast.js";
 import { useScreenContext } from "../../lib/screenContext.js";
 import {
   MetricCard, SourceBadge, Modal, Field, TextInput, Select,
-  EmptyState, Explainer, timeAgo,
+  EmptyState, timeAgo,
 } from "./shared.jsx";
 
 /* Notes — written by the system, from the system.
@@ -137,13 +137,6 @@ export default function NotesPage({ member }) {
 
   return (
     <>
-      <Explainer
-        icon="📝"
-        kicker="WRITTEN BY THE SYSTEM, FROM THE SYSTEM"
-        title="What you have stopped noticing"
-        body="Nobody typed these. Each one was counted from real records — a lead nobody has called, a task past its date, an email somebody is waiting on, a client with a silent week. Every note names the exact rows behind it, and says whether the words were counted or reworded by AI."
-      />
-
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
         <MetricCard label="Needs a follow-up" value={counts.follow_up} badge={<SourceBadge mode={notes.sample ? "sample" : "live"} />} hint="somebody is owed a reply" />
         <MetricCard label="Needs attention" value={counts.attention} hint="stopped moving, or going wrong" />

@@ -1638,3 +1638,1876 @@ login cards · Team · Settings · **Finance** · **Invoices**.
 - Receipts are links, never files.
 - The cost list is the only source of money out, so the profit line is exactly as honest as what
   somebody typed.
+
+---
+
+## §21. Notes, the memory, the always-on assistant, and lead intake — Aug 20 2026 (append-only section)
+
+**Numbering note.** This work was written up as §18/§19 earlier the same day and was lost, then briefly re-filed as §20 which was also already taken: a
+concurrent session building the Finance page rewrote this whole file and took those numbers. Same
+class of collision as the work log used to have — see the note at the end of §22. The work itself
+was never at risk; only these two markdown files were.
+
+Ryder's ask, in his own words: *"a notes page that is AI driven and auto fills notes based on
+what is in circulation and what needs follow ups and what needs attention… i want that brain to
+remember everything and just have an insane amount of context that feeds every AI response…
+a chatbot that runs off that brain that is always on the screen and can see what were looking at
+on the screen for added context and then answer based off of everything in the system and
+actually carry out tasks for us… the leads page needs the import sheets of leads and then also
+scrape leads from the lead generator in the platform… and have the salesperson login that can
+manage and do all of it and have it all talk to each other."*
+
+### The one idea the whole thing rests on
+
+**Every AI answer in this console is written against the real rows, and says what it read.**
+
+Before this, an AI call saw the handful of rules on the Brain page plus whatever the calling
+screen pasted in. So it could follow the house style perfectly and still not know that a client
+had three tasks past their date. It sounded right and knew nothing.
+
+`lib/brain-context.js` reads the actual tables and renders them as plain text. Every `/api` route
+that talks to an AI goes through it. Under the assistant's answer, and under the Brain page's test
+chat, the console prints what was read: `READ 12 clients · 41 tasks · 88 leads …`. A thin answer
+and a thin dataset look identical without that line.
+
+### Files
+
+| Piece | File |
+|---|---|
+| The context engine — what the AI is allowed to see, and how much | `lib/brain-context.js` |
+| The notes engine — counts the notes, no AI involved | `lib/notes-engine.js` |
+| What the assistant may DO, and the code that does it | `lib/assistant-tools.js` |
+| The Anthropic tool-use loop | `lib/ai-agent.js` |
+| Lead cleaning + the duplicate rule | `lib/lead-intake.js` (browser doorway: `src/lib/leadIntakeBrowser.js`) |
+| The assistant endpoint | `api/ai-chat.js` |
+| Writing the Notes page | `api/notes-generate.js` |
+| Running a saved lead search (+ the daily cron) | `api/lead-scrape.js` |
+| A .xlsx reader with no library | `src/lib/sheet.js` |
+| What page you are on, stated by the page | `src/lib/screenContext.js` |
+| The floating assistant | `src/components/admin/Assistant.jsx` |
+| The Notes page | `src/components/admin/NotesPage.jsx` |
+| What the AI has remembered (on the Brain page) | `src/components/admin/brainMemory.jsx` |
+| Import + saved searches | `src/components/admin/leadsIntake.jsx` |
+| Tables | `supabase/migrations/0006_brain_notes_leads.sql` |
+| Tests | `tests/brain/` — `bash tests/brain/run.sh` |
+
+### Rules that must not be broken here
+
+1. **Role scoping lives in `SCOPE_BY_ROLE` and is enforced TWICE.** A sales rep sees leads, lead
+   activity, lead sources, **their own** reminders and the team roster. Nothing else — not
+   fetched, not rendered. `loadSystemContext` decides what to READ; `renderContext` decides what
+   to PRINT, and re-checks. Both are needed: the fetch gate misses any caller that hands over a
+   fuller snapshot. Every `/api` file here runs on the service role, which ignores row-level
+   security, so this JavaScript **is** the guard. Trap #8 is this mistake made once already.
+2. **Every list is fetched at `cap + 1` and printed at `cap`** (`fetchCap()`). That one extra row
+   is what makes "AT LEAST N more were not shown" reachable. Fetch and print at the same number
+   and the warning is dead code — the AI is told it saw everything, every time, and answers
+   "nobody is chasing X" from 90 of 400 leads with total confidence.
+3. **Notes are COUNTED first, reworded second, and the badge says which.** `computeNotes()` does
+   the counting with no AI anywhere near it; if the AI key is missing that is still the whole
+   page and the page is still right. The rewrite is checked with `rewriteIsFaithful` — which
+   compares **numbers only**. Be exact about that: a rewrite that swapped a client's name would
+   pass. That is why the badge and the evidence chips exist.
+4. **A note with no evidence is never created.** `computeNotes` refuses. The evidence array holds
+   the exact rows, and the page prints them.
+5. **A person's decision on a note outlives a re-run.** Done and dismissed hold for 14 days
+   (`DECISION_HOLDS_DAYS`); a re-raise after that is a NEW row, never an edit of the old one.
+   Only OPEN rows are ever marked superseded.
+6. **The assistant cannot delete anything, at any role.** There is no delete tool. It also cannot
+   blank a lead's notes — an empty string is refused rather than written as null.
+7. **Every assistant action is logged before the answer is built** (`admin_assistant_log`), and
+   if the log write fails the person is told in the chat. `logToolRun` must READ the `error` from
+   the insert — Supabase resolves with `{error}` instead of throwing, so `await` inside a
+   try/catch succeeds no matter what went wrong.
+8. **The duplicate rule exists three times and they are checked against each other.**
+   `lib/lead-intake.js` (browser, so an import can say "12 of these are already here" before it
+   saves), `admin_lead_dedupe_key` in 0006 (stamps the key), and the browser doorway that
+   re-exports the first. `bash tests/brain/sql-crosscheck.sh` stands up a real Postgres, applies
+   every migration, and diffs the two answers over `tests/brain/dedupe-cases.json`.
+9. **`dedupe_key` is NOT unique, deliberately.** Two real businesses share a switchboard number.
+   A hard constraint would reject the second at 3am with nobody watching; duplicates are caught
+   and SHOWN at import time, where a person decides.
+10. **Days are counted in the team's calendar, not UTC** (`TEAM_TZ`, America/Chicago). Reminders
+    are stored at `T14:00:00Z` = 9am Central.
+11. **`Date.parse(x || 0)` is banned.** `"0"` parses as the year 2000, so a null date wins every
+    oldest-first sort. Use `parseWhen()`, which gives NaN.
+12. **The screen context is STATED by each page, never scraped from the DOM.** `useScreenContext`
+    takes a page name, the open record, and up to 25 short labels. Scraping would have been less
+    code and would quietly have picked up anything that happened to be rendered.
+
+### Lead scraping — wired for real, waiting on a key
+
+Two providers, either sufficient: `PLATFORM_LEADGEN_URL` (+ optional `PLATFORM_LEADGEN_KEY`) for
+our own lead generator, or `APOLLO_API_KEY`. Neither is set on this project. With no key the
+endpoint returns 503 naming the exact variable, the source card says so, and nothing pretends to
+have run. Three things bound the spend: a per-run cap on the source (`daily_cap`, max 500), one
+page of results per run with no automatic paging, and `auto_daily` off by default. The daily run
+is `GET /api/lead-scrape` behind `CRON_SECRET`; without that secret the scheduled path is closed
+rather than open. `vercel.json` schedules it weekdays at 13:00 UTC (8am Central).
+
+### Reading Excel without a library
+
+`src/lib/sheet.js`. An .xlsx is a zip of XML, and the browser can already unzip
+(`DecompressionStream("deflate-raw")`), so a spreadsheet library — ~800 KB on a page that ships
+under 400 KB — was not worth it for one button. Known limits, written down rather than hidden:
+formulas read as their last saved value; dates come back as Excel's number; only the first tab is
+read. **Which tab is "first" comes from `workbook.xml` + `xl/_rels/workbook.xml.rels`, not from
+the file names** — `sheet1.xml` is creation order, not tab order, so pairing them told the person
+it had read one tab while reading another.
+
+### How it was proven (Aug 20 2026)
+
+- `npm run lint` — 0 problems. `vite build` — clean, 114 modules.
+- `bash tests/brain/run.sh` — **78 passed, 0 failed**, including a real .xlsx fixture read end to
+  end and a set of tests that read the CREATE TABLE statements out of the migrations and check
+  every column the code touches actually exists.
+- `bash tests/inbox/run.sh` — 47 passed, unchanged.
+- `bash tests/brain/sql-crosscheck.sh` — real Postgres 16, all six migrations applied clean and
+  re-applied clean, **24/24 dedupe cases identical** between the JavaScript and the SQL.
+- The four writes that were broken (see §22 finding 1) proven to succeed against that same
+  Postgres, using the exact row shapes the code builds.
+- Playwright walkthrough of the BUILT bundle, screenshot per step: Notes, the note→task modal,
+  the assistant with its screen chip, the Brain's memory block, the rep queue, saved searches,
+  the import mapper, and the duplicate report.
+- A separate agent reviewed the diff adversarially and found **15 real defects**, all fixed —
+  see §22.
+
+### Still open
+
+- Nothing here has run against real Gmail, a real Anthropic key, or a real lead provider. The
+  code up to each boundary is tested; the boundaries are not.
+- The AI rewrite path on the Notes page has never run with a live key. The counted path has.
+- Attachments, paging past one provider page, and per-tab .xlsx choice are all not built.
+- `admin_brain_memory.use_count` is never incremented (only `last_used_at` moves).
+
+---
+
+## §22. Review pass on §21 — Aug 20 2026 (append-only section)
+
+A separate agent was given the diff and told to assume it was wrong. It found **15 real defects**.
+All are fixed. They are written down because most of them are the kind that come back.
+
+### 1. HIGHEST — three files wrote columns the tables do not have
+
+`admin_tasks` has **`name`** and **`latest_report`**. It has no `title` and no `notes`.
+`admin_reminders` has **`body`**, not `title`, and `body` is NOT NULL. `admin_weekly_log` has
+`what_we_did` / `what_moved` / `whats_next`, not `summary`.
+
+What that actually cost:
+
+- `create_task` and `create_reminder` could **never succeed**, for any role.
+- Task search errored every time.
+- The AI's whole task list rendered as `- [todo]  — Harbor, Ryder, due LATE by 3d`. **It never
+  saw a single task name**, and answered questions about tasks anyway.
+- Notes read `The oldest is "undefined" — 6 days past its date`, and those words were written
+  into `admin_ai_notes` and shown on the page.
+- The weekly log read as blank for every client, so the assistant would report a client's log
+  empty while it was full.
+- "Make it a task" and "Remind me" on a note failed 100% of the time — the second also set
+  `link_type = 'note'`, which the old check constraint rejected outright (0006 now widens it).
+
+**Why the tests did not catch it: the fixtures had invented the same wrong names.** A test that
+agrees with the code is not a test. `tests/brain/test.mjs` now reads the CREATE TABLE statements
+out of `supabase/migrations/` and checks every column the code touches against them, plus named
+checks for these three specific mistakes.
+
+### 2. HIGH — a sales rep's context carried every owner's follow-ups
+
+`admin_reminders` was loaded with no `owner_id` filter and rendered in full. A rep could ask the
+assistant to read out the owners' follow-ups. Now filtered at load **and** again at render
+(`canSee` answers yes/no; "their own" is a filter, which it cannot express).
+
+### 3. HIGH — the "rows not shown" warning could never fire
+
+Every list was fetched with `.limit(CAP)` and printed with the same `CAP`, so `lines.length >
+cap` was impossible. The warning the file's own header calls essential never fired once. Fetch is
+now `cap + 1`. Leads were worse: won/lost were filtered **after** the cap, so the section could
+silently show 60 of 400. The won/lost filter moved into the query, and a second small read puts
+the recently-touched leads back — sorting coldest-first had been dropping exactly the leads a
+"what closed this week" question needs.
+
+### 4. HIGH — "every write is logged" was not true
+
+`logToolRun` never read the `error` from its insert and returned `true` regardless, which made
+the "could not be logged" warning in `api/ai-chat.js` unreachable. Deploy before running 0006 and
+the assistant would change leads, tasks and email statuses with nothing written down and no
+warning anywhere.
+
+### 5. HIGH — the SQL and JavaScript duplicate rules disagreed
+
+The SQL stripped `^https?://` **case-sensitively** and never lowercased first, so
+`HTTPS://WWW.X.com/about?q=1` keyed as **`d:https:`** where the browser said `d:x.com`. Every
+hand-added lead with a scheme-prefixed website collapsed onto one shared key, and the same
+business added by hand and then imported would be dialled twice. It also keyed on any non-empty
+email, so a sheet with `email = "N/A"` stamped **every one of those leads `e:n/a`**. The function
+was rewritten to clean each field first and then pick the strongest survivor — the same shape as
+the JavaScript. `tests/brain/sql-crosscheck.sh` now proves it over 24 cases in a real Postgres.
+
+### 6. MEDIUM — an unparseable person silently meant "unassign"
+
+`person()` returned `null` for anything that was not a uuid. "Assign that lead to Andrew" — where
+the model passes the string `"Andrew"` — **unassigned the lead** and printed
+`✓ DID THIS · owner_id → none`. It now returns a sentinel and every caller refuses.
+
+### 7. MEDIUM — a dismissed note came straight back
+
+The generator read only OPEN notes, so a dismissed one had no match and a fresh open row was
+inserted with the same fingerprint (the unique index is partial on open rows, so it allowed it).
+Click "Not a thing", press "Write today's notes", and it was back. Decisions now hold for 14 days
+and a re-raise afterwards is a new row.
+
+### 8. MEDIUM — the AI rewrite could never run on a real console
+
+The whole note set went in one call, and `lib/ai.js` caps context at 6,000 characters and the
+reply at 1,200 tokens. Past about ten notes the prompt was cut mid-note and the page always said
+"the rewrite came back in the wrong shape". Now five per call. The body regex was also cut at its
+first line by `$` under the `/m` flag, so any two-line rewrite lost half of itself.
+
+### 9. MEDIUM — `update_lead` could erase a lead's notes
+
+`clean("")` returns null, and that null was written — in a file whose header says nothing here
+deletes anything. Blanking notes is now refused and stays a human action.
+
+### 10. MEDIUM — days were counted in UTC
+
+A task due today read as "LATE by 1d" from 7pm Central, and the Notes page raised it that
+evening, every evening. Reminders were stored at `09:00Z` = 4am Central, already overdue by
+breakfast. Both fixed (`TEAM_TZ`, `14:00Z`).
+
+### 11. MEDIUM — `Date.parse(x || 0)` reads a missing date as the year 2000
+
+`"0"` parses as 2000-01-01, so a row with no date won every oldest-first sort — and the note then
+read `The oldest arrived unknown.` Replaced with `parseWhen()`, which gives NaN, and the note now
+says "None of them has a date on it" instead.
+
+### 12. LOW — the .xlsx reader named the wrong tab
+
+The sheet parsed was `sheet1.xml` (creation order); the name came from the first `<sheet>` in
+`workbook.xml` (tab order). Reorder tabs in Excel and it read one tab while telling the person,
+in writing, that it read another. It now follows the relationship id through
+`xl/_rels/workbook.xml.rels`, and says "the first tab" rather than guessing a name.
+
+### 13. LOW — the rest
+
+- A malformed XML entity threw `RangeError` out of `String.fromCodePoint` and took down the whole
+  import. Now left as written.
+- The notes engine skipped leads in an unrecognised stage while the Work page treats them as
+  stale after 7 days, and it chased leads who had already become customers. Both aligned.
+- A sales rep's import silently lost its link back to the source file (0006 restricts creating a
+  lead source to admins). The failure is now said out loud.
+- `member.role.toUpperCase()` with no guard blanked the whole screen for a signed-in user whose
+  `admin_users` row had not loaded. Unknown role now falls back to the narrowest one.
+- `search` with `what: "constructor"` found a prototype function and died in destructuring.
+  Now `Object.hasOwn`.
+- Comments cited `tests/leads/test.mjs` and `tests/notes/test.mjs`, neither of which existed, and
+  claimed the rewrite guard checked titles when it only checks numbers. All corrected.
+
+### What the review got right that is worth generalising
+
+Every one of the top five came from **assuming a schema instead of reading it**, or from
+**writing a guard whose failure mode is silence**. The first is now a test that reads the
+migrations. The second is the reason `fetchCap`, the `logToolRun` return value, and the sentinel
+in `person()` all exist: each turns a silent wrong answer into a visible one.
+
+### Not fixed, on purpose
+
+- `admin_brain_memory.use_count` is still never incremented. It is unused; incrementing it on
+  every read would be a write on every question for a number nobody looks at.
+- The `.or()` search filter and the endpoint auth were both reviewed and found sound.
+
+---
+
+### THIS FILE COLLIDES BETWEEN SESSIONS — read before appending
+
+`CONTEXT-FOR-AI.md` and `SETUP.md` have the exact problem the work log was restructured to escape,
+and it bit on Aug 20 2026: two sessions ran that afternoon, one building Finance and one building
+Notes. Both appended. The second to finish rewrote the whole file, and **an entire §18 and §19
+write-up was silently erased** — no error, no conflict, nothing to notice. It was only found the
+next time someone grepped for it. The sections above are the restored copy, and they are numbered
+§21/§22 because §18–§20 had been taken in the meantime.
+
+The code was never at risk. `git status` still showed every new file, and the two sessions' edits
+to `AdminDashboard.jsx`, `Sidebar.jsx`, `Header.jsx`, `data.js` and `vercel.json` merged cleanly —
+because those were small, targeted, single-line insertions. It is the **whole-file markdown append**
+that loses work.
+
+So, before appending here:
+
+1. **`grep -n "^## §" CONTEXT-FOR-AI.md` first.** Never assume the next number. Three numbers were
+   burned on Aug 20 alone.
+2. **Append in ONE shot with a heredoc**, never read-modify-write the whole file.
+3. **Read it back and confirm your section AND the ones before it are still there** — the same
+   rule project memory already has.
+4. **If your section is gone, do not hunt for it in git** — an uncommitted append is not in git.
+   Re-append it under a fresh number and say what happened, as this section does.
+5. The safest long-term fix is the work log's: one file per session in a folder. If this file gets
+   clobbered a second time, split it into `context/NN-topic.md` rather than writing this note again.
+
+---
+
+## §23. The Vault — passwords, cards and keys — Aug 21 2026 (append-only section)
+
+Built at Ryder's ask: *"a passwords section... every customer has passwords that show the name,
+description, login, password, etc... I also want to add credit card option too... similar to how
+Bitwarden works."*
+
+Two choices he made before the build, both on the record because they shape everything below:
+
+| Question | His answer |
+|---|---|
+| Where do the secrets live? | **Encrypted in our own database.** Not "a Bitwarden link only". |
+| Who can do what? | **Owners and admins, everything the same.** Sales: nothing at all. |
+
+**This changes a standing rule.** The old rule was "passwords never go into notes or Notion — a
+Bitwarden link only", and it is still right about notes and Notion. Bitwarden stays the master
+copy: every vault item can carry a Bitwarden link, and the page says so. What changed is that the
+console now also holds them, scrambled, so the team can see WHAT we hold and WHOSE it is without
+opening another app.
+
+### The one idea the whole thing is built on
+
+**The list is open. The secrets are not.**
+
+The readable half — name, client, username, website, card brand, last 4, expiry, notes, tags —
+sits in ordinary columns that anybody with console access can read. The secret half — password,
+two-factor seed, full card number, security code, PIN, API key, private note — is ONE scrambled
+text column, `secret_cipher`, and the key that unscrambles it is not in the database. It is one
+Vercel environment variable, `VAULT_KEY`, that only the server can read.
+
+So a stolen copy of the database is a list of names and last-4s. It is not a list of passwords.
+That is the entire point, and it is why:
+
+- the browser never selects `secret_cipher` (`VAULT_COLUMNS` in `src/lib/data.js`),
+- a database trigger refuses to let anybody but the server write it,
+- and `VAULT_KEY` must never be written into a migration, a note, Notion, or this repo.
+
+### Files
+
+| Piece | Where |
+|---|---|
+| Tables, the guard, the reveal log | `supabase/migrations/0008_vault_reports.sql` |
+| Shared rules — kinds, cards, passwords, validation (pure) | `lib/vault.js` |
+| The scrambling. SERVER ONLY | `lib/vault-crypto.js` |
+| The only door between a secret and a person | `api/vault-secret.js` |
+| Card, modals, reveal, the client-page panel | `src/components/admin/vaultParts.jsx` |
+| The page | `src/components/admin/VaultPage.jsx` |
+| Clipboard, shared with the report | `src/lib/clipboard.js` |
+| Reads and writes, plus the preview store | `src/lib/data.js` (search "THE VAULT") |
+| Tests | `bash tests/vault/run.sh` |
+
+### The rules that must not be broken
+
+1. **`/api/vault-secret` is the only door.** Reveal, copy, save, clear, delete and generate all go
+   through it. It checks the role, writes the log, and only then hands anything back.
+2. **The log is written BEFORE the secret is handed over, and a failed log fails the action.**
+   Nobody reads a secret off the record. The same holds for deleting an item: the log row goes
+   first, and if it cannot be written, nothing is deleted.
+3. **Reveal and copy are different events.** "Looked at it on screen" and "put it on the clipboard"
+   are the distinction that matters when a password turns up somewhere it should not, so the
+   browser always asks the server again for a copy, even when the value is already on screen.
+4. **The reveal log has no insert, update or delete policy for a signed-in person.** Only the
+   server writes it. Its rows outlive the item — `item_id` goes null, the label stays — so deleting
+   an item cannot erase the record of having read it.
+5. **A ciphertext is tied to its row.** The item's id is mixed in as additional authenticated data,
+   so a blob copied onto another row in the SQL editor fails loudly instead of quietly revealing
+   the wrong card under the wrong name.
+6. **The card face is derived from the stored number.** The brand and last 4 are worked out on the
+   server from the number itself — including writing an empty brand when nothing recognises the
+   number, because a wrong brand is worse than none. Both boxes are read-only in the browser while
+   a number is stored, and the database refuses the change too.
+7. **An item's kind cannot change while it holds a secret.** A card holding `{number, cvv}` turned
+   into a login has nowhere to show either, and the number becomes unreachable through every path.
+8. **Nothing about the vault ever reaches the AI.** A client report carries a COUNT of vault items
+   and nothing else — see §24.
+
+### The trigger, and what it can and cannot promise
+
+`admin_vault_secret_guard()` refuses any insert or update that writes `secret_cipher`,
+`secret_fields`, `secret_set_at` or `secret_by` unless the request really is the server. "Really" is
+two things, not one: the database role is `service_role` (which PostgREST sets for a service-key
+request and which a signed-in person cannot set), **and** the JWT claim says so. Checking the claim
+alone was wrong — a reviewer set it by hand in a normal session and walked straight past the guard.
+
+It is deliberately **not** `security definer`: inside a definer function `current_user` is the
+function's owner, so the role half of the check would read `postgres` for everybody.
+
+**Said plainly: a database superuser can turn the trigger off.** The Supabase SQL editor runs as
+one. No trigger can stop the owner of a database. What this stops is every signed-in console user
+and every path the application itself can take.
+
+### VAULT_KEY
+
+`openssl rand -base64 32`, pasted whole into Vercel. `readVaultKey()` accepts that or 64 hex
+characters, and refuses anything that looks chosen rather than generated:
+
+- fewer than 12 distinct bytes (an all-zero key: 43 capital A characters decodes to exactly that),
+- decoded bytes that are almost all printable (a phrase wearing base64, `echo … | base64` included),
+- a base64 string that is not what an encoder would have produced (a typed phrase almost never is),
+- one that contains a word like "secret" or "vault".
+
+Measured: 0 refusals in 1.2 million real keys across four encodings; every sample bad key refused.
+The refusal now says WHICH test failed, because about one real key in 1.7 million trips the word
+test and "run the command you just ran" is not a useful error.
+
+**What it cannot see:** the SHA-256 of a memorable phrase. It has the byte spread of a real key
+because it is a hash. Somebody who hashes "aisyndicate2026" gets a key an attacker can brute-force
+through SHA-256 at billions of guesses a second, and nothing here can tell. That is why the page
+gives the exact command rather than saying "any 32 bytes".
+
+**If the key is lost, everything stored is gone.** Not recoverable, by design. Keep it in Bitwarden.
+
+### Rotating the key
+
+There is no rotation tool yet. A blob carries the first 8 hex characters of the SHA-256 of the key
+it was made with, so a mismatched key produces *"This was saved with a DIFFERENT VAULT_KEY"* rather
+than a crash — and nothing is lost while the old key still exists. Rotating today means: put the old
+key back, reveal each secret, save it again under the new key.
+
+### Who can do what
+
+| Action | Owner | Admin | Sales |
+|---|---|---|---|
+| See the page, the list, the counts | yes | yes | **no** |
+| Reveal, copy, save, clear | yes | yes | no |
+| Add, edit, delete an item | yes | yes | no |
+| Read the reveal log | yes | yes | no |
+
+Enforced in four places, and all four matter: the sidebar does not list the page, the dashboard will
+not route to it, the database refuses the rows, and the endpoint refuses the request. **Hiding a
+button is not a permission.**
+
+
+---
+
+## §24. Generate report — a client page writes itself up — Aug 21 2026 (append-only section)
+
+Built at Ryder's ask: *"a generate report button on a client's page that pulls all of the context
+from operations, emails, everything about that client... when clicking create report I want a text
+field where we can tell it like hey, make it the 10 second version, or go really in depth."*
+
+One button at the top of a client page, and a Reports tab beside it. Press it, say how deep to go in
+your own words, and it reads that client's tasks, weekly log, websites, email threads, follow-ups,
+invoices, support tickets and the notes the team wrote, counts them, and writes it up.
+
+### Files
+
+| Piece | Where |
+|---|---|
+| Counting, the instruction, the checks, the no-AI version (pure) | `lib/client-report.js` |
+| The endpoint | `api/client-report.js` |
+| The panel, the ask box, the reader | `src/components/admin/clientReports.jsx` |
+| The table | `supabase/migrations/0008_vault_reports.sql` |
+| Tests | `bash tests/vault/run.sh` (same suite as the vault) |
+
+It is built on `lib/client-standing.js` — the same counting, the same caps — so a report and the
+"where this client stands" block on the same page can never disagree about how many tasks are done.
+
+### Every report has two layers, always
+
+A 30-second summary that gets forwarded, and the full version that gets filed. That is not a setting;
+it is the shape of the answer. Plus a third tab, **what it could not check**, which is the part most
+reports skip — and skipping it turns "we hold no record of their rankings" into a reader's
+impression that the rankings are fine.
+
+### The five rules, and where each one lives
+
+1. **Every fact is counted server-side from real rows.** `assembleReportFacts()`.
+2. **Those facts, and nothing else, are what the AI is shown.** `buildFactsText()`.
+3. **The facts are saved next to the words** in `admin_client_reports.facts`, so any report can be
+   checked against the same numbers months later. "Check the numbers" opens them.
+4. **With no ANTHROPIC_API_KEY it still works** and returns a counted version, badged COUNTED.
+5. **A draft that breaks a rule is thrown away** and the counted version ships instead, with the
+   reason saved on the row so a pattern of rejections is visible rather than invisible.
+
+### What throws a draft away — `checkReport()`
+
+- a number, a date, or a spelled-out number that is not in the facts;
+- a figure rounded off a real one (`$3,750` when the record says `$3,750.50`);
+- a date in a form our records never use (`30/09/2026`), or a day of the month we do not hold;
+- promise wording — "guarantee", "on track", "we expect", "should be finished by";
+- an amount with no number — "roughly", "a dozen", "half the", "most of the";
+- a loose when — "next Friday", "by the end of the month";
+- **a line that hands work to a person.**
+
+### "A report never hands work to a person" — how it is actually done
+
+This is the rule with the most history in it, because both easy versions are wrong:
+
+- A **stop list of English nouns** rejects honest reports: "Schema must be added to the remaining
+  pages" is a fact about a website. Fixed by ignoring the passive — `must be`, `should come`,
+  `must happen` — and by knowing the client's own name.
+- **Hard-coded names** only ever catch those names. The roster is read from `admin_users` and passed
+  in as `teamNames`, registered whole and in parts, filtered so that a row reading "Support" or
+  "Will" cannot break every report. If the roster read fails, the report SAYS the check ran without
+  it, in its own gaps list.
+- **Quoting.** A report is allowed to show you what a task note says, including a note somebody
+  wrote as "Dana needs to send the login". Two versions of this exemption were wrong:
+  v1 exempted any phrase found anywhere in the facts — one task note unlocked that sentence for the
+  whole report; v2 exempted anything in quote marks — and the model writes the quote marks.
+  **Now: a quoted span is exempt only if its words really are in the records.** The counted report
+  quotes everything it copies, and the prompt tells the model to do the same.
+
+### The fact sheet, and what it does when it will not fit
+
+`buildFactsText()` builds the header and the whole tail FIRST — counts taken at, totals, money,
+tickets, notes, access, earlier reports, and the gaps list — and gives the long lists whatever room
+is left. Only the lists are ever trimmed, and the amount trimmed is **measured**, printed in the
+sheet the AI reads, and repeated in the report's own gaps list.
+
+Two separate losses, both named:
+- the sheet was longer than the budget (rare), and
+- the lists were already capped by `assembleFacts` at 25 done / 25 open / 15 blocked / 8 weeks / 15
+  emails. On a 300-task client that is the real loss, and `missingFrom()` now says
+  *"the newest 25 of 200 open tasks… the COUNTS are complete; the lists are a sample."*
+
+### Money comes from the Finance page's own file
+
+`effectiveInvoiceStatus()` and `invoiceOutstandingCents()` are imported from `lib/finance-math.js`
+rather than written again. Re-deriving them produced a report saying a client owed five times what
+Finance said. Specifically:
+
+- a **draft** is not billed, not owed, and cannot be overdue — it is counted and named separately;
+- **overdue comes from the amounts, not the stored status.** An invoice marked paid that is only
+  part paid and past its date is overdue for the remainder — reading the status hid $600 of real
+  debt as zero;
+- **outstanding is clamped per invoice**, so an overpayment on one cannot cancel a debt on another.
+  (Note: `billedVsCollected` on the Finance page clamps globally and so can still differ. The
+  report matches `agingBuckets`, which is the more correct of the two.)
+
+### What never travels in a report
+
+Nothing from the vault beyond a count: `api/client-report.js` selects `id, secret_set_at` and
+nothing else, and the facts carry four integers. No label, no username, obviously no secret.
+
+**What DOES travel, and the Generate box says so:** the notes your team wrote about this client,
+word for word, and the client's own notes field — into the AI prompt, the saved facts, the report,
+and the markdown download. If somebody pasted something private into a note, it is in the report.
+
+
+---
+
+## §25. STATE BOARD — replaces §20 as the current picture (Aug 21 2026, end of session)
+
+### BUILT AND WORKING (in the repo, still not deployed)
+
+Everything in §20, plus:
+
+- **The Vault** (§23) — Workspace → Vault, and a Vault tab on every client page.
+- **Generate report** (§24) — a button at the top of a client page, and a Reports tab.
+- One repair carried along: `admin_reminders.link_type` accepts `'email'` again. Migration 0006 had
+  dropped it while adding `'note'`, which meant the Inbox's "Remind me" button had been failing on
+  every press, and the report's follow-up count could never see an email reminder.
+
+### STILL NEEDED — in this order
+
+1. **Run `0008_vault_reports.sql`** in the Supabase SQL editor. Nothing about the vault or reports
+   saves until then. Clicks: `SETUP.md` § "Migration 0008".
+2. **Set `VAULT_KEY` in Vercel** — `openssl rand -base64 32`, all three environments. Without it the
+   list works and Reveal and Save refuse, with a banner across the top saying exactly that.
+   **Put the same line in Bitwarden.** Lose it and everything already stored is unreadable.
+3. **Deploy.** None of this has run on admin.aisyndicate.com.
+4. `ANTHROPIC_API_KEY` → the AI wording on reports. The counted version works without it.
+
+### KNOWN GAPS, WRITTEN DOWN RATHER THAN HIDDEN
+
+- **No real reveal has ever been watched against a real Supabase.** Every claim about what happens
+  after the endpoint answers is read from the code and from a mocked Postgres, not observed.
+- **No key rotation tool.** See §23.
+- `readVaultKey()` cannot tell the SHA-256 of a passphrase from a real key. §23 says so out loud.
+- The clipboard wipe is best effort: a browser can refuse the second write, and a copy made outside
+  the app cannot be seen. The toast says "about a minute", never "cleared".
+- Support tickets are matched to a client by contact email, because `admin_tickets` has no
+  `client_id`. A client with no contact email gets a line in the report saying so.
+- The report's "still owed" can differ from the Finance page's headline figure, because that figure
+  clamps globally. Both are in §24; neither is silently wrong.
+- **Three rounds of adversarial review by a separate agent**, 40+ real defects found and fixed,
+  including four regressions the fixes themselves introduced. The review notes are the reason most
+  of the comments in these files exist.
+
+### Proof on record, Aug 21 2026
+
+lint 0 · `vite build` clean, 128 modules · `node tests/vault/test.mjs` **105/105** ·
+`bash tests/vault/sql.sh` **36/36** against a real Postgres 16 with all eight migrations, including
+a simulated redeploy over an older 0008 · `tests/brain` 78/78, `tests/inbox` 47/47,
+`tests/finance` 53/53 unchanged · a Playwright walkthrough of the built bundle, 24 screenshots,
+every step asserted.
+
+## §26. Sales — the page that replaces the outreach spreadsheet — Aug 22 2026 (append-only section)
+
+Built at Ryder's ask: *"make the leads page a sales page and make it operate with the system CJ
+and our sales guys use effectively on both the backend and the salesman/rep side."*
+
+Everything below is in the repo and **has never run on admin.aisyndicate.com**. Migration
+`0009_sales.sql` has not been applied to Supabase. See "Blocked until" at the end.
+
+---
+
+### 26.1 What was actually replaced
+
+CJ's **"Sales Team Outreach Master List"** in Google Sheets
+(`docs.google.com/spreadsheets/d/1f2i2gezVKIkGh5SNELgQSkF4vkTzOCyTibYE-TM-otA`). Read in full on
+Aug 21 2026 before a line was written. Its shape:
+
+* Tabs: `Rules of Engagement` + one per business type — Luxury Agents, Law Firm Marketing
+  Directors, Medspas, Car Dealership, Jewelry, Dental Practices, and more past the tab arrow.
+* Six columns a human fills in — **Sales Owner · Contacted? · Sales Cycle Status · First Contact ·
+  Last Touch · Next Steps/Notes** — then the raw Apollo export.
+* **The Apollo columns are NOT the same on every tab.** Luxury Agents has `# Employees` where Car
+  Dealership has `Departments` and `Industry`. Nothing in the importer may assume a fixed layout.
+
+The Rules of Engagement tab is a complete sales system in writing. Almost none of it can be
+enforced by a spreadsheet, so almost none of it happens:
+
+| The rule | What the sheet does with it |
+|---|---|
+| Claim before you reach out; **one firm, one rep** | Claiming is per ROW. ACME \| SERHANT. has 4 contact rows, Backbeat Homes 4, Agents of LA 3. One claimed row leaves the rest open. |
+| First contact within 3 business days or the claim drops | Nothing counts days. Has never fired. |
+| 14 days cold and the firm reopens | Same. |
+| Score the site first; **90+ = not a prospect** | The Site Score column **does not exist on any tab.** The gate has never once been applied. |
+| 5 touches over ~2 weeks | Honour system. |
+| One text, only to a warm open | Honour system. |
+| Log every touch the same day | "Last Touch" is one cell — overwrite it and the old one is gone. |
+
+Plus the data problems: `Contacted?` and `Sales Cycle Status` say the same thing; "Brandon Roberts"
+and "Brandon R" are the same person on the same tab; dates are text (`8/11/26` and `8/11/2026`);
+and nothing exists after "meeting held" — no proposal, no amount, no reason for a loss.
+
+### 26.2 The decision everything hangs on (Ryder, Aug 21 2026)
+
+1. **The record is the PERSON.** Every sheet row is one lead — a customer profile from the day it
+   arrives — and stays that row for life. `became_customer` flips on the row that already holds the
+   whole chase. A second row would orphan all of it.
+2. **The company is a link on that person, not a wrapper.** It holds the facts that belong to the
+   firm — website, site score, revenue, head count — so scoring ACME once scores it for all four
+   ACME contacts, and the sheet's habit of copying a website onto four rows (where three go stale)
+   stops.
+3. **No locks between reps.** Full read AND edit on everybody's leads. So "one firm, one rep" is a
+   **warning a person reads, not a wall**. The timers still run — that part is about leads going
+   stale, not about trust.
+
+### 26.3 The files
+
+| Piece | Where |
+|---|---|
+| The Rules of Engagement, as pure functions | `lib/sales-rules.js` |
+| Sheet import: column matching, dates, owner matching, firm folding | `lib/sales-import.js` |
+| Companies, lists, proposals, the new lead columns | `supabase/migrations/0009_sales.sql` |
+| Reads and writes | the SALES section at the end of `src/lib/data.js` |
+| The page — My Day / Lists / Pipeline / Firms | `src/components/admin/SalesPage.jsx` |
+| The per-contact drawer | `src/components/admin/salesProfile.jsx` |
+| The importer | `src/components/admin/salesImport.jsx` |
+| Chips and tiles | `src/components/admin/salesParts.jsx` |
+| Run a site score | `api/sales-score.js` |
+| The overnight claim sweep | `api/sales-sweep.js` |
+| Every tab of an .xlsx at once | `parseXlsxAllTabs` in `src/lib/sheet.js` |
+| Tests | `bash tests/sales/run.sh` · `node tests/sales/walkthrough.mjs` |
+
+`LeadsPage.jsx` is gone (moved to `_to_delete/`). `#/dashboard/leads` rewrites itself to
+`#/dashboard/sales`, so old links and bookmarks still work and the address bar stops carrying the
+dead name.
+
+### 26.4 The rules that must not be broken
+
+1. **`lib/sales-rules.js` decides everything, and it is pure.** The page a rep reads at 9am and the
+   sweep that runs at 3am must never disagree about whose claim has run out. `now` is always passed
+   in; there is no clock inside the file.
+2. **Two first-contact columns, because there are two questions.** `first_contact_at` is the
+   relationship's and is **never cleared**. `claim_contacted_at` is the current claim's three-day
+   window and is cleared on every claim, reassign and release. Sharing one column meant a
+   re-claimed lead had to have its real date erased to stop the 3-day timer firing instantly —
+   which deleted the date, dropped the lead out of the speed-to-first-contact sample, and made a
+   proposal-stage lead with nine logged touches report as never contacted.
+3. **The cold clock runs from the LATER of the last touch and the claim.** That is what makes a new
+   claim a new start without erasing anything.
+4. **Nothing is taken that was not warned about first.** `api/sales-sweep.js` refuses to release
+   any claim it cannot find an existing reminder for. Without that rule the backfill in §26.6 would
+   have unassigned the entire sales floor on the first run, overnight, with nobody watching.
+5. **A release never touches `stage`.** Whose it is and how far it got are two different facts.
+6. **Days are counted in America/Chicago via `Intl`, never a fixed offset.** Chicago is UTC-5 in
+   summer and UTC-6 in winter; a hardcoded -5 put every 11pm-to-midnight timestamp on the wrong day
+   for half the year, and a test suite with an August clock can never see it.
+7. **The one-text rule is enforced by the database**, `admin_lead_claim_text()`, in one statement.
+   A browser-side `texts_sent + 1` is a read-modify-write that two open tabs both win.
+8. **A score outside 0-100, an empty string, or an unreadable counter all read as UNKNOWN, never as
+   a passing value.** `Number("")` is 0, which would have made an unscored firm the widest gap on
+   the list and sent a rep in hardest.
+9. **The 90+ gate applies only before a conversation exists** (`new`, `researching`). It is a rule
+   about who to spend a touch on, not who to abandon — applying it to everybody dropped a
+   proposal-stage deal off a rep's day because somebody scored the site late.
+10. **The importer's duplicate check must DECIDE, not just count.** It produces a `skip` Set that
+    the import reads. The first version printed "412 already in the pipeline" and imported all 412.
+11. **Company identity is domain-first, normalised.** `normaliseDomain()` everywhere:
+    `https://www.x.com`, `x.com` and `x.com/` are one firm. And ids returned from a batch insert are
+    matched on **name + website together** — name alone collapses two same-named firms in different
+    states onto one id.
+
+### 26.5 What the page does
+
+**My Day** (a rep lands here) — cards in the order to work them, each saying WHY it is there:
+claims that have run out · first contact due · gone cold · going cold · touches owed by the cadence
+· free to claim. **Lists** (owners land here) — the sheet's tabs as a grid, grouped by firm, with a
+health strip (claimed / actually contacted / score run) and a "2 reps working this firm" flag.
+**Pipeline** — a board by stage. **Firms** — one row per company, worst score first.
+
+**The profile** has five tabs: Work (what is owed, and the buttons to do it, plus the 5-touch dots),
+Timeline (append-only, nothing ever overwritten), Details (person fields vs firm fields), Proposals
+(amount, sent, viewed, won/lost and why — the half the sheet had nowhere to put), Playbook (the 7
+moves and the cadence, on the screen where the work happens).
+
+### 26.6 The migration
+
+`0009_sales.sql` adds `admin_companies`, `admin_lead_lists`, `admin_proposals`, the
+`admin_lead_claim_text()` function, ~18 columns on `admin_leads`, a wider stage ladder (12 stages)
+and a wider activity-type list. Additive, `admin_`-prefixed, re-runnable.
+
+Two triggers matter. `admin_lead_activity_touch` sets `last_touch_at`/`claim_contacted_at` from a
+call, email, text or LinkedIn row — and uses `least()` for `first_contact_at`, so a back-dated touch
+corrects it rather than recording the insertion order. A status change is deliberately **not** a
+touch. **Honest limit:** the table has no direction column, so an inbound email logged by hand
+counts exactly like an outbound one.
+
+The backfill stamps `claimed_at` on existing owned leads and fills `first_contact_at` only where
+real activity exists. It never invents a first-contact date — see rule 4 for why that is safe.
+
+### 26.7 Proof on record (Aug 22 2026)
+
+`npx eslint .` **0 problems** · `npm run build` clean, **133 modules** · `node tests/sales/test.mjs`
+**84/84** · `bash tests/sales/sql.sh` **20/20 against a real Postgres 16**, every migration applied
+in order and 0009 re-run to prove it is safe twice · every other suite unchanged: brain 78/78,
+inbox 47/47, finance 53/53, vault 105/105 + 36 database checks · `node tests/sales/walkthrough.mjs`
+drives the **built bundle** in Chromium through 19 checks and 19 screenshots with no console errors,
+including **importing the same list twice and confirming the second run writes nothing**.
+
+**Two separate adversarial review agents were run.** The first found 24 defects; the second, run
+only on the fixes, found 6 more including two severe ones the first pass had introduced. All
+material findings are fixed and covered by a test. Four defects were found by watching the built
+page rather than by reading the code — the 90+ gate dropping a live deal, the legacy URL never
+rewriting itself, and two assertions that were themselves wrong.
+
+### 26.8 Blocked until
+
+1. **Run `0009_sales.sql`** in the Supabase SQL editor. Nothing on this page saves until then.
+   (0008 and 0009 are independent and can be run in either order.)
+2. **Deploy.** None of this has run on admin.aisyndicate.com.
+3. **`PLATFORM_SCORE_URL`** (+ optional `PLATFORM_SCORE_KEY`) → the Run-score button. Without it
+   the endpoint returns 503 naming the variable and the chip keeps saying NO SCORE. **No score is
+   ever invented** — a rep would quote it.
+4. **`CRON_SECRET`** → the overnight sweep. Without it the scheduled path is closed, not open. Point
+   a daily cron at `GET /api/sales-sweep` with `Authorization: Bearer <CRON_SECRET>`.
+5. **Import the real sheet.** Sales → Import a sheet → pick the .xlsx → tick the tabs → check the
+   columns → read the plan → import.
+
+### 26.9 Known gaps, written down rather than hidden
+
+* **"They replied and you have not answered" does not exist.** It would be the most important card
+  on My Day, and there is nowhere to read it from — `admin_lead_activity` has no direction and
+  nothing marks an inbound thread as unanswered on the lead. An earlier draft had the branch,
+  ranked top, with a heading and a test, for a code path no user could reach. It was removed rather
+  than left looking finished.
+* **Marking a lead Won does not create the client record.** `admin_companies.client_id` exists and
+  is written by nothing. The toast says so.
+* **Email is not sent from this page.** Touches are logged, not sent. The 7-move templates are
+  guidance a rep reads, not merge fields.
+* **Open tracking is not wired**, so the text gate stays shut until `email_opened_at` is set by
+  something. Nothing sets it yet.
+* **Caps:** the page reads the newest 2,000 leads and 4,000 activity rows and **says so on screen**
+  when it hits either. The sweep handles 500 claims a run and reports the remainder.
+* **Import grouping:** where one firm name has two websites AND some rows have no website, the
+  blank rows are grouped together by name. There is genuinely nothing in the sheet that separates
+  them; the plan screen warns rather than pretending it knew.
+* One lint error in the other session's `Overview.jsx` (`fmtNum` and an unused `i`) was fixed in
+  passing so the repo lints clean. That file was rebuilt by the concurrent Vault/Reports session
+  after this session's snapshot, so the Sales edits were re-applied onto their version rather than
+  written over it.
+
+---
+
+## §27. The Overview page, rebuilt as the daily snapshot — Aug 22 2026 (append-only section)
+> **Superseded on WHAT EXISTS by §33 (the current spec) and §34 (the state board).** Keep reading this section for the *why* — the reasoning behind several rules lives only here — but trust §33 on how it behaves today.
+
+
+### What changed and why
+
+Overview started life as the money page. Finance took that job on Aug 20 (§18), so Overview was
+showing a second, slightly different set of the same numbers — a big MRR hero, a revenue-versus-AI-spend
+chart, and a payments table. Ryder asked for it to become the page you open first: your tasks for the
+day, your reminders, and everything you should know, in one screen.
+
+**The Work page stays.** That was a decision, not an oversight. Work is the deep page you grind
+through; Overview is the page you look at. Two rules keep them from becoming the same page:
+
+1. Every block on Overview is capped and links to the page that owns it. Nothing on Overview is a
+   list you work down.
+2. The only actions allowed inline are one-click ones — tick a reminder, mark a task done, dismiss a
+   note. Anything needing a form sends you to the owning page.
+
+### The page, top to bottom
+
+| Block | What it reads | Notes |
+|---|---|---|
+| Today banner | `getMyWork` | Greeting, the team's date, one plain sentence, and a START HERE button pointing at the single most urgent thing |
+| Red "some of this page is missing" panel | every read's `.error` | Only appears when something failed. Names each one. |
+| Your five numbers | `getMyWork` | Late · Due today · Reminders due · People to contact · Tickets on you. All click through. |
+| Do these today | `getMyWork().tasks` | Late + due-today, capped at 6, inline **Done** |
+| Reminders due | `getMyWork().reminders` | Capped at 6, inline tick-off, plus a one-line "coming up" |
+| What the console noticed | `listAiNotes({statuses:["open"]})` | Top 6 by urgency, inline **Dismiss**, each card labelled COUNTED / AI-WRITTEN / WRITTEN BY A PERSON |
+| Where everything stands | `listClients`, `listEmailThreads`, `listTickets`, `listLeads` | Active clients · Emails needing a reply · Open tickets · Pipeline · New leads this month |
+| Clients that need attention | `listTasks()` across every client | Late and blocked task counts per active client, top 5 |
+| Money, one line | `/api/stripe-metrics`, `listInvoices`, `listUsage` | Recurring revenue · Still owed · AI spend this month. Each with its own source badge. |
+| What changed lately | `listActivity(8)` | |
+| Jump in | — | Work · Leads · Operations · Inbox |
+
+Removed with it: the MRR hero, the money chart, the recent-payments table, the token-ingest explainer
+modal, and the `MoneyBars` / `MetricCard` / `CountUp` imports. All of that still exists on Finance.
+
+### The date bug this page exposed, and the file that now owns it
+
+**`src/lib/teamDay.js` is new. Every judgement about lateness anywhere in the console should go
+through it.** Three separate date bugs shipped in the first two drafts of this page, and every one of
+them was invisible in a Chicago browser at midday:
+
+1. `Date.parse(ymd + "T00:00:00Z")` was used as "midnight Central". It is midnight in **London**. The
+   team's day therefore ended at **18:59 Central**, so a reminder set for 8pm was filed under
+   "coming up" while its own label read "today".
+2. Fixing the zone but keeping `start + 24h - 1` is still wrong: **two days a year are not 24 hours
+   long.** That put the end of 2026-11-01 at 22:59 and the end of 2026-03-08 at 00:59 the *next*
+   morning — reproducing bug 1 for the last hour of every fall-back night, and printing tomorrow's
+   date on anything due on a spring-forward day. `teamDayEndOf` now walks to the next midnight.
+3. `getMyWork()` buckets tasks on **the browser's** clock, while the label on the row beside them was
+   computed on the team's clock. A New York browser at 00:30 showed a task in the red "Late" pile with
+   a pill next to it reading TODAY; a Los Angeles browser at 22:00 showed one under "Due today" whose
+   pill read "1 DAY LATE". Overview now **re-buckets everything itself** through `teamDay.js` and
+   ignores the buckets `getMyWork` attached.
+
+`getMyWork`'s own bucketing is still browser-local. That is a live open bug on the Work page — it is
+written down under "Still open" below rather than fixed here, because Work was not in scope and the fix
+belongs with a test of its own.
+
+### Other real defects found and fixed on this page
+
+Two rounds of adversarial review by separate agents found 22 and then 15 defects. The ones worth
+carrying forward as rules:
+
+- **Note urgency runs 3 → 1, with 3 the most urgent.** The first draft read it the other way, which
+  put the calm notes on top and hid the urgent ones behind the "6 more" link.
+- **There is no `paused` client status.** The values are `active | prospect | holding | closed`
+  (`0001_admin_init.sql:120`). Filtering on `paused` counted prospects and closed accounts as active.
+- **There is no way to ask when a lead was won.** `admin_leads` has no `won_at`, and
+  `last_activity_at` moves whenever anyone logs anything. "Won this month" was unanswerable, so the
+  tile now counts **new leads this month** off `created_at`, which is `not null default now()`.
+- **`written_by` has three values, not two** — `counted`, `ai_written`, `person`. A note a human typed
+  was being labelled AI-WRITTEN.
+- **A failed read must never render as a zero.** Six of nine reads failed silently in the first draft.
+  Every tile now takes a `broken` prop and shows a dash, the red panel names each failure, and the
+  words "nothing is late" are suppressed whenever anything failed. There is a fault-injection browser
+  test for exactly this.
+- **`SourceBadge` has a new `error` mode → READ FAILED.** A broken query used to borrow `waiting`,
+  which reads as WAITING ON KEY and tells you to go and set a key that is already set.
+- **`getMyWork`'s error union was missing `listAllLeadActivity`.** That read decides "never contacted"
+  and "no contact in N days", so losing it silently mis-counted People to contact with nothing on
+  screen to say so. Fixed in `data.js`.
+- **`Date.parse(x || 0)` is a trap.** `Date.parse(0)` is the year 2000, so a null sorted as 26 years
+  old. Use `parsedOr0`.
+- **A single shared `busyId` does not guard concurrent actions** — clicking Done on task A then task B
+  re-enabled A's button mid-flight. It is a `Set` now, and loads are sequenced with a `loadSeq` ref so
+  a slow earlier load cannot overwrite a fast later one.
+- **A ref written before the sequence guard leaks.** The Stripe result was stored in a ref before the
+  guard and read after it, so an inline action could publish the initial `unknown` state and render
+  "preview mode · WAITING ON KEY" on a live console until someone pressed Refresh. There is now an
+  explicit `unread` state that says "not read yet — hit Refresh", and the ref is written after the
+  guard.
+- **`.adm-charts-row` was never defined in any stylesheet.** The old Overview's two columns never
+  collapsed on a narrow window. Use `repeat(auto-fit, minmax(320px, 1fr))`.
+- **`useScreenContext(..., [view])` blinks.** `view` is a new object every time the clock ticks, and
+  each new identity tears the context down and rebuilds it. Key it on a summary string instead.
+
+### Read caps, said out loud on the page
+
+`listEmailThreads` caps at 400 rows, `listLeads` at 1,000, `listTasks` at 500, `listUsage` at 5,000
+**ascending** (so an overflow drops the *newest* rows). A caption under the agency tiles names all
+four, because "every mailbox" over a capped read is a claim the code cannot support.
+
+### Proof on record, Aug 22 2026
+
+- `eslint src/` clean · `vite build` clean, 129 modules
+- **`tests/overview/run.sh` — 41 assertions × 5 timezones = 205, all passing.** Chicago, New York,
+  Los Angeles, UTC and Auckland, because every bug above was invisible in one of them. Includes a
+  365-day sweep asserting every day of 2026 ends at 23:59 Central, and two brute-force sweeps
+  (~180,000 comparisons) asserting no label can contradict its bucket, across both clock changes.
+- Existing suites unchanged: finance 53/53, vault 36/36 against a real Postgres, inbox 47/47,
+  brain 78/78. (Brain's SQL cross-check cannot run in the cloud container — `initdb` refuses to run
+  as root. Not related to this change.)
+- **Playwright against the built bundle**, three passes: the full page in Chicago (≈70 assertions
+  covering copy, badges, routing, all three inline actions, double-click safety, and 400px width);
+  the tile-versus-pill agreement check in four timezones; and the page with its clock frozen to
+  23:30 Central on the 2026 fall-back night.
+- **A fourth pass builds a second bundle whose every read returns an error** and asserts the page
+  names each failure, dashes all ten tiles, badges READ FAILED, and never prints "nothing is late".
+- Screenshots: `/tmp/pw/shots/` in that session.
+
+### Still open after this session
+
+- `getMyWork()` in `data.js` still buckets on the browser's clock, so the **Work page** can disagree
+  with Overview by one day for a browser outside Central. Overview is right; Work is not. The fix is
+  to route `getMyWork` through `src/lib/teamDay.js` and give it the same five-timezone test.
+- `listUsage` orders `ts` ascending with a 5,000-row limit, so above 5,000 events in the window the
+  newest are the ones dropped. Should be descending.
+- The reminder tick-box is a 20px `<button role="checkbox">`. It is correctly named, but a real
+  `<input type="checkbox">` would be better.
+- None of this has run against a real Supabase. Every claim above is from the sample store, a
+  fault-injected bundle, and the code.
+
+## §28. STATE BOARD — replaces §25 as the current picture (Aug 22 2026, end of session)
+
+> **Superseded by §34.** Kept as the picture at the end of Aug 22.
+
+
+Written after **two sessions ran in parallel on Aug 22** — one built the Sales page (§26), one
+rebuilt Overview (§27). §25 predates both and no longer describes the console. Read this one.
+
+### BUILT AND WORKING (in the repo, still not deployed)
+
+Everything in §25, plus:
+
+- **Sales** (§26) — the Leads page is gone. Four views: My Day, Lists, Pipeline, Firms; a five-tab
+  profile per contact; an importer that reads every tab of a workbook at once. The Rules of
+  Engagement are enforced in code: claims, the 3-business-day and 14-day timers, the 5-touch
+  cadence, the 90+ score gate, the one-text rule.
+- **Overview rebuilt** (§27) as the daily snapshot.
+- **The "information card" is gone from every page.** The `Explainer` component, its CSS and all
+  eight usages were deleted at Ryder's ask, Aug 22: *"those aren't needed in the CRM."*
+- `#/dashboard/leads` rewrites itself to `#/dashboard/sales`, so old links and bookmarks work and
+  the address bar stops carrying the dead name.
+
+### STILL NEEDED — in this order
+
+1. **Run `0008_vault_reports.sql`** — nothing about the Vault or reports saves until then.
+   Clicks: `SETUP.md` § "Migration 0008".
+2. **Run `0009_sales.sql`** — nothing on the Sales page saves until then. Clicks: `SETUP.md`
+   § "Migration 0009". 0008 and 0009 are independent and can be run in either order.
+3. **Deploy.** None of this has ever run on admin.aisyndicate.com. That has now been true across
+   seven build sessions; it is the single biggest thing standing between this console and anybody
+   using it.
+4. **`VAULT_KEY`** in Vercel → Reveal and Save in the Vault. Put the same line in Bitwarden.
+5. **`PLATFORM_SCORE_URL`** (+ `PLATFORM_SCORE_KEY` if the endpoint needs one) → the Run-score
+   button on Sales. Without it the endpoint returns 503 naming the variable and **no score is ever
+   invented**.
+6. **`CRON_SECRET`** + a daily `GET /api/sales-sweep` with `Authorization: Bearer <secret>` → the
+   claim timers actually hand stale firms back. Without it that path is closed, not open.
+7. **`ANTHROPIC_API_KEY`** → AI wording on reports and Notes, and the assistant. Every counted
+   version works without it.
+8. **Import the real outreach sheet** and get the sales floor off Google Sheets.
+
+### WHAT IS TRUE ABOUT THE WHOLE CONSOLE NOW
+
+| Page | State |
+|---|---|
+| Overview · Work | rebuilt Aug 22, the daily snapshot (§27) |
+| **Sales** | **new Aug 22, replaces Leads (§26)** |
+| Operations · Clients · client page | §16-§18 |
+| Finance · Invoices | §18-§19, needs Stripe keys |
+| Inbox · Tickets | §17, needs the Gmail OAuth pair |
+| Notes · AI Brain · the assistant | §21-§22, needs `ANTHROPIC_API_KEY` |
+| Vault · client reports | §23-§24, needs `VAULT_KEY` |
+| Team · Settings · Our platform | §16 |
+
+Migrations `0001` → `0009`. Two are unrun: **0008 and 0009**.
+
+### KNOWN GAPS, WRITTEN DOWN RATHER THAN HIDDEN
+
+Everything in §25 still stands. Added by this session:
+
+- **Nothing has ever run against a real Supabase.** Every migration is proven against a real
+  Postgres 16 in the test container, and every page is proven against the preview store — but the
+  join between them has never been watched. Expect a first-deploy afternoon.
+- **Sales sends no email.** Touches are logged, not sent. No open tracking, so the text gate stays
+  shut until something sets `email_opened_at`.
+- **"They replied and you have not answered" does not exist** on My Day, and cannot until a lead
+  can know an inbound message is unanswered. Deliberately removed rather than left as a dead code
+  path that looked finished.
+- **Marking a lead Won does not create the client record.** `admin_companies.client_id` exists and
+  nothing writes it. The console says so when you click.
+- An inbound email logged by hand counts as a cadence touch and resets the 14-day timer. The
+  activity table has no direction column.
+- Sales reads the newest 2,000 leads / 4,000 activity rows and **says so on screen** at the cap.
+- Cosmetic, left alone because it is in another session's file: `Overview.jsx` still says the word
+  "leads" in one error string (`fail("leads", leads)`), on a console where the page is called
+  Sales. Not a route id — it cannot break anything.
+
+### Proof on record, Aug 22 2026
+
+lint **0** · `vite build` clean, **133 modules** · `node tests/sales/test.mjs` **84/84** ·
+`bash tests/sales/sql.sh` **20/20** against a real Postgres 16, all nine migrations in order and
+0009 re-run to prove it is safe twice · `tests/vault` 105/105 + 36 database · `tests/brain` 78/78 ·
+`tests/inbox` 47/47 · `tests/finance` 53/53 — all unchanged by this work ·
+`node tests/sales/walkthrough.mjs` drives the **built bundle** in Chromium through 19 checks and 19
+screenshots with no console errors, including importing the same list twice and proving the second
+run writes nothing. Screenshots are in `tests/sales/shots/`.
+
+**Two adversarial review agents.** The first found 24 defects; the second, run only on the fixes,
+found 6 more — including two severe ones the first round of fixes had introduced. All material
+findings fixed and covered by a test. Four defects were found by *watching the built page*, not by
+reading code.
+
+## §29. The Aug 22 collision, and how the repo was put back together — Aug 22 2026 (append-only section)
+
+**This section corrects §26 and §28 on one point: for about ninety minutes the console could not
+build, and both parallel sessions caused it.** It is written down rather than quietly fixed,
+because the shape of the mistake is more useful than the fix.
+
+### What broke
+
+Two sessions ran on Aug 22 — one rebuilt Overview (§27), one built Sales (§26). Both used the same
+pattern: stage a copy of the repo, edit it in a cloud container for an hour, commit the files back
+with `force: true`.
+
+- **22:57–22:58** — the Sales session committed nine new Sales files plus `src/lib/data.js`,
+  `Header.jsx` and `shared.jsx`.
+- **22:58:42** — the Overview session committed `src/lib/data.js` and `shared.jsx` from a snapshot
+  it had taken at **22:00**.
+
+The later write won and it was an hour stale. `data.js` reverted to a version that predated the
+Sales work, so the entire SALES section at the end of the file vanished and thirteen exports
+`SalesPage.jsx` imports stopped existing — `getSalesBoard`, `claimLead`, `releaseLead`,
+`claimTextSend`, `upsertCompany`, `insertCompaniesBatch`, `findExistingCompanies`,
+`upsertLeadList`, `findLeadListByTab`, `listProposals`, `upsertProposal`, `deleteProposal`,
+`LEAD_STAGE_HELP`. `Header.jsx` lost the Sales page's title entry. `shared.jsx` lost a deletion.
+
+**`vite build` failed.** Neither session noticed, because both had reported success from a build run
+against their own container copy — not against what was actually on disk afterwards.
+
+### How it was repaired
+
+The Overview session found it and wrote it up honestly, including that it could not prove which
+write had caused what. The Sales session read that note, checked the live files, and merged:
+
+1. **Checked state, not timestamps.** `grep` for the exports that should exist. An mtime tells you
+   when a file was written, never what is in it.
+2. **Diffed in both directions.** The useful question is not "what is missing from mine" but "what
+   does the on-disk file have that mine lacks". In `data.js` that was exactly one real hunk — the
+   Overview session's fix adding `activity.error` to `getMyWork`'s error chain. Carried across by
+   hand and kept.
+3. **Took the on-disk file as the base** and re-applied the Sales hunks onto it, not the reverse.
+   In `Header.jsx` that meant keeping the new Overview title and renaming `leads:` to `sales:`. In
+   `shared.jsx` it meant keeping the new `error` / READ FAILED badge mode and removing the
+   `Explainer` card.
+4. **Proved it before writing anything.** The merged tree was assembled in `/tmp`, then lint,
+   `vite build`, all five unit suites, the SQL suite against a real Postgres and the Playwright
+   walkthrough were run against it.
+5. **Committed with `expectedMtimeMs` from a stage call seconds old, and no `force`.**
+
+Result: lint 0 · build clean at **134 modules** · brain 78/78 · inbox 47/47 · finance 53/53 ·
+vault 105/105 · sales 84/84 · SQL 20/20 · walkthrough 19/19 with no console errors. Nothing from
+either session was lost — but only because each still had its own container copy. That is luck, not
+a process.
+
+### The rule that comes out of it
+
+**Never `device_stage_files` → edit → `device_commit_files` a source file another session might
+touch, and never pass `force: true` on one.** Edit shared source in place with `device_bash`, read
+and write seconds apart. If you must stage and commit, pass the `mtimeMs` from the stage call as
+`expectedMtimeMs` and let a refusal happen — a refusal is the tool working.
+
+And: **build once more against what is actually on disk, after the last commit.** Both sessions
+skipped that single step, and it would have caught this in under a minute.
+
+§11 of this file exempted "live artifacts" like source code from the append-only rule. That
+exemption was too broad. A source file two sessions are both editing is exactly as collision-prone
+as a log; it just fails louder.
+
+### One more thing this surfaced: two date systems
+
+The Overview session added `src/lib/teamDay.js` as the console's single date authority, after three
+date bugs shipped in one day. `lib/sales-rules.js` had independently grown its own Chicago-day
+maths.
+
+They cannot be merged into one file: `teamDay.js` imports `TEAM_TZ` from `lib/brain-context.js`,
+which imports `isOpenStage` from `lib/sales-rules.js` — so sales-rules importing teamDay is a
+cycle. And `sales-rules.js` must stay import-free, because `api/sales-sweep.js` runs it on the
+server and the tests run it with no bundler.
+
+So there are two copies on purpose — the same arrangement as `dedupeKey()` and the SQL function it
+mirrors. Two copies are only acceptable if something proves they still agree, so
+`tests/sales/teamday-crosscheck.mjs` now runs every day of 2026 at seven hours each through both,
+in **five timezones** (Chicago, New York, Los Angeles, UTC, Auckland), including both clock-change
+days. **2,555 instants, all agreeing, in each zone.** It is wired into `tests/sales/run.sh`.
+
+Still open, and not this section's to fix: `getMyWork()` in `src/lib/data.js` is still
+browser-local, so the **Work page** can be a day out for anyone outside Central. Overview is
+correct; Work is not. See §27 and the `team-time-dates-in-the-console` memory note.
+
+---
+
+## §30. Overview realigned onto the Sales rules — Aug 23 2026 (append-only section)
+> **Superseded on WHAT EXISTS by §33 (the current spec) and §34 (the state board).** Keep reading this section for the *why* — the reasoning behind several rules lives only here — but trust §33 on how it behaves today.
+
+
+Follows §27, which built the Overview snapshot, and §26, which built Sales. The two landed within
+minutes of each other in parallel sessions, so §27 was written against a repo that did not have Sales
+in it yet. This is the reconciliation. **Nothing in the Sales build was changed.** The only file
+touched is `src/components/admin/Overview.jsx`, plus three new cases in `tests/overview/test.mjs`.
+
+### What was wrong after the two builds met
+
+**1. Overview linked to a page that no longer exists.** Sales renamed `leads` → `sales`.
+`AdminDashboard`'s `setSection` silently falls back to the landing page for an unknown id, so three
+tiles, the START HERE button and a jump card all bounced the user back to Overview instead of failing
+loudly. Fixed.
+
+**2. Overview was running the retired lead rules.** Its "People to contact" tile read
+`getMyWork().contactable`, which buckets on `STALE_AFTER_DAYS` — stale-after-N-days-per-stage. That
+predates the claim window, the cold clock and the cadence. So Overview and the Sales page gave two
+different answers to "who owes a contact", and Overview's was the obsolete one.
+
+**3. A guessed stage list.** An interim fix named the finished stages by hand and got five of seven
+wrong (`cold`, `dead`, `unqualified`, `disqualified`, `nurture` do not exist; `skip_90` and
+`bad_contact` were missed). `lib/sales-rules.js` already exports `isOpenStage` for this.
+
+### How it works now
+
+Overview imports the Sales rules rather than keeping a copy:
+
+```js
+import { salesQueue, isOpenStage } from "../../../lib/sales-rules.js";
+import { listAllLeadActivity, touchCountsByLead } from "../../lib/data.js";
+```
+
+- **`Leads owed a contact`** is `salesQueue(...)` filtered by
+  `c.over !== null && c.over >= 0 && c.reason !== "unclaimed"` — the same expression `SalesPage.jsx`
+  uses for its own `owed` count, character for character. The tile's hint carries the near-misses
+  (`going_cold`, `first_contact_due`) as "N more going cold or due soon".
+- **`touchCounts`** is **their** `touchCountsByLead()` over `listAllLeadActivity(90)` — the same
+  function and the same window `getSalesBoard()` reads. An interim version counted the four touch
+  types itself from the documented list; that was right on the day and would have drifted the first
+  time somebody added a type in one place only.
+- **Pipeline** is `stage !== "new" && isOpenStage(stage)`.
+- **START HERE** takes `owed[0]`, already ranked by `salesQueue` (expired claims, then cold, then
+  cadence), and prints the card's own `headline` and `detail`.
+
+### The one difference, stated on the page
+
+`salesQueue` takes a `scoreOf` to apply the 90-and-above skip gate. Site scores live on
+`admin_companies`, and reading them here would mean a second full companies fetch on a page that is
+meant to be one glance — so Overview passes `scoreOf: () => null` and the gate does not run. That
+gate only applies at `new` and `researching`, so the effect is bounded: Overview can count a
+very-high-scoring firm that Sales leaves out of those two stages.
+
+That is printed under the agency tiles in plain words, next to the read caps. **An unexplained
+difference between two pages is a bug; an explained one is a limit.** If a companies reader ever
+lands on this page, pass it in and delete the sentence.
+
+### Also carried over
+
+- `listLeads()` and `listAllLeadActivity()` now return a `truncated` message. Overview prints it
+  verbatim rather than naming a round number of its own.
+- `getMyWork().contactable` is no longer read by any page. It is still exported and still used by
+  the Work page — that page has not been realigned, so **Work still uses the retired stale-lead
+  rules.** Written into the open list below rather than changed here.
+
+### Proof on record, Aug 23 2026
+
+Everything re-run against the **real** post-Sales repo, not a stub:
+
+- `eslint src/` clean · `vite build` clean, 133 modules
+- `tests/overview/run.sh` — **44 assertions × 5 timezones = 220**, up from 205. The three new cases
+  pin the agreement: the `owed` filter (an expired claim and a cold firm are owed; unclaimed, someone
+  else's, `won`, `skip_90` and `bad_contact` are not; the expired claim outranks the cold one), that
+  `isOpenStage` splits all twelve declared stages the way `0009` declares them, and that touch
+  counting matches what `cadenceState` documents.
+- **Their suites untouched: `tests/sales` 84/84 plus its SQL checks**, finance 53/53, inbox 47/47.
+- Playwright over the built bundle: the full page in Chicago (~70 assertions), tile-vs-pill agreement
+  in four timezones, the clock frozen to 23:30 on the 2026 fall-back night, and a fault-injected
+  bundle where every read errors — which still dashes all ten tiles, names each failure, badges READ
+  FAILED and never prints "nothing is late".
+- Clicking through to the real Sales page from Overview raises no console errors.
+
+### The collision itself, and the rule it produced
+
+The Sales session and the Overview session both edited `src/lib/data.js` and
+`src/components/admin/shared.jsx` within a minute of each other on the night of Aug 22. The Overview
+session had staged those files an hour earlier, edited its stale copies, and committed them back with
+`force: true` — which switches off the bridge's "has this file changed since you staged it?" guard.
+The Sales data layer was absent from disk afterwards and had to be re-saved from the Sales session.
+
+Whether the force-write destroyed it or it had never landed could not be established, which is
+itself the lesson: **turning off the mtime guard is what made the question unanswerable.** The rule
+now, recorded in project memory as `never-force-commit-a-shared-source-file`: edit a shared source
+file in place, and if you must stage and commit, pass `expectedMtimeMs` and let a refusal happen. All
+three commits after that point used the guard, and the last one was verified to be the only
+difference between the container and the disk before it was sent.
+
+### Still open
+
+- **`getMyWork()` has two problems and the Work page has both.** It buckets tasks on the browser's
+  clock rather than the team's (see §27), and its `contactable` still uses `STALE_AFTER_DAYS` rather
+  than the Sales rules. Overview is right on both counts; Work is not. The fix is to route
+  `getMyWork` through `src/lib/teamDay.js` and `lib/sales-rules.js` and give it the five-timezone
+  test both already have.
+- `listUsage` orders `ts` ascending with a 5,000-row limit, so an overflow drops the newest rows.
+- Migrations 0008 and 0009 have not been run, and none of this has been deployed.
+
+---
+
+## §31. The Overview generator — ask for anything, written from the records — Aug 23 2026 (append-only section)
+> **Superseded on WHAT EXISTS by §33 (the current spec) and §34 (the state board).** Keep reading this section for the *why* — the reasoning behind several rules lives only here — but trust §33 on how it behaves today.
+
+
+Ryder: *"can we also add a ai overview generator that when filled with a prompt and clicked it pulls
+all data from the entire admin and pltform and makes up whatever the person prompts."*
+
+A box on Overview. You type what you want, press one button, and it reads everything the console
+holds and writes it. Built on the machinery that already existed rather than beside it.
+
+### Two things had to be said plainly before building
+
+**1. "Pulls from the platform" is not possible.** The console has three links to the platform and
+none of them is a read: SSO out (`api/platform-sso.js` hands a human a browser tab), token-spend
+pings in (`api/usage-ingest.js`), and one 0-100 website score per sales firm
+(`api/sales-score.js`, needs `PLATFORM_SCORE_URL`). There are **no scan results, no citation
+history, no module state and no GEO score for a paying client** anywhere in this database. So the
+generator says so, in the fact sheet, in the modal, and in the saved row's cannot-answer list. It is
+not promised anywhere.
+
+**2. The console's AI was blind to Sales and to money.** `loadSystemContext()` — which the
+assistant, the notes engine and now this all read — had no `admin_companies`, no
+`admin_lead_lists`, no `admin_proposals`, no invoices and no expenses. `"money"` had been in the
+owner/admin scope list since Aug 20 **with no loader behind it.** An "everything" answer would have
+silently omitted the entire pipeline and every invoice, and answered as if that meant there were
+none. Fixed at the source, so the existing assistant gained the same sight.
+
+### What was added to `lib/brain-context.js`
+
+| Part | Cap | Roles | Notes |
+|---|---|---|---|
+| `companies` | 60 | owner, admin, **sales** | ordered by `site_score` desc. A null score prints "no score yet", never 0 |
+| `leadLists` | 25 | owner, admin, **sales** | active only |
+| `proposals` | 30 | owner, admin, **sales** | newest first, decided ones included so "we lost Summit" is answerable |
+| `invoices` | 60 | owner, admin | whole rows; overdue is derived from dates and amounts, never the stored status |
+| `expenses` | 40 | owner, admin | recurring monthly total is computed in the render |
+
+Plus a new closing section in `renderContext`, **`## WHAT THESE RECORDS CANNOT ANSWER`**, naming the
+platform, Stripe, unlogged work, and email direction. Without it the AI treats an absent subject as
+an absent fact — the difference between "no GEO scores" and "we hold no GEO scores".
+
+### The two modes
+
+This was Ryder's call, offered as a choice because a strict gate would refuse a perfectly good sales
+pitch and a free-only version could not be forwarded to anybody.
+
+- **`records`** — the client report's **entire check suite** (`checkReport` from
+  `lib/client-report.js`) pointed at the console-wide fact sheet. Every number, date and name must
+  appear in it. Invented figures, promise wording, vague amounts, loose dates, slash dates, and any
+  line that hands a named person a job all fail. **A failing draft is thrown away whole, never
+  edited**, and the counted version is saved with the reason on the row.
+- **`free`** — writes what was asked: a pitch, a plan, an outreach email, a script. It may propose
+  things the records do not prove. It still may not hand a named teammate a job, and it is told to
+  leave a blank (`[their current score]`) rather than invent a figure — an invented figure in a draft
+  is one somebody forwards. Badged `DRAFT · NUMBERS UNCHECKED` on the row, in the reader, and in the
+  downloaded file, which carries its own warning with no app around it.
+
+Sharing the check suite rather than copying it is deliberate. **Two copies of an honesty rule is one
+copy that quietly stops matching.**
+
+### Files
+
+| File | What |
+|---|---|
+| `lib/console-report.js` | **new**, pure. Modes, presets, the instruction for each mode, the gate, the counted fallback, the markdown export |
+| `api/console-report.js` | **new**. POST `{instruction, mode, preset}`, owner/admin |
+| `src/components/admin/consoleReports.jsx` | **new**. The panel, the box, the reader, "check the numbers" |
+| `supabase/migrations/0010_console_reports.sql` | **new**. `admin_console_reports`, append-only, owner/admin RLS |
+| `tests/console-report/` | **new**. 35 assertions, run in two timezones |
+| `lib/brain-context.js` | the five new sections above |
+| `lib/ai-agent.js` | `converse()` takes an optional `maxTokens`, clamped 256–8000, default unchanged |
+| `src/lib/data.js` | `listConsoleReports`, `deleteConsoleReport`, `generateConsoleReportPreview` |
+| `src/components/admin/Overview.jsx` | the panel, under "what the console noticed" |
+
+### Decisions worth not re-litigating
+
+- **It uses `converse()` from `ai-agent.js`, not `draft()` from `ai.js`.** `draft()` caps input at
+  24,000 characters and a full console snapshot runs past 60,000. Truncating it means writing from
+  part of the story with no way for a reader to tell which they got. `converse()` has no input cap.
+- **It is given NO TOOLS.** The assistant is the thing that acts. A generator that could write rows
+  while writing about them would be impossible to audit.
+- **`cappedOut` is a hard failure**, exactly like `inputTruncated` on the client report. Half an
+  answer reads exactly like a whole one.
+- **Owner/admin only, in the endpoint AND in row-level security.** One of these rows can summarise
+  every client, lead and invoice at once, so a rep reading one would walk straight around the role
+  scoping in `brain-context.js`.
+- **The vault is never in it.** `loadSystemContext` does not read it, so no label, username or secret
+  can reach a saved report that gets forwarded.
+- **Money keys are ABSENT for a role that cannot see money, not zero.** `"owedCents": 0` for a sales
+  rep would be a lie with a number on it. The fallback checks `!== undefined` before printing them.
+- **A preset only fills the box** — the same rule as the client report — and it also switches the
+  mode, because an outreach email cannot pass the strict gate and a Monday update must never skip it.
+- **Length asked for in words beats the preset button.** The button seeded the box; if the person
+  then wrote "keep it short", 250 words is what they asked for, not the button's 600.
+- **The counted fallback passes its own strict check.** Tested. If it could not, a rejection would
+  hand back a second unusable answer.
+
+### Proof on record, Aug 23 2026
+
+Run against the repo **as it stands on disk**, unpacked fresh, not against the authoring copy:
+
+- `eslint .` clean · `vite build` clean
+- `tests/console-report/run.sh` — **35 assertions × 2 timezones**, including every refusal: an
+  invented number, an invented date, promise wording, an amount with no number, a loose date, and a
+  named teammate given a job in either mode.
+- **Every other suite unchanged: overview 44 × 5 timezones, sales 84 + SQL, vault 105 + 36 SQL,
+  brain 78, inbox 47, finance 53.**
+- Playwright over the built bundle: a new 44-check pass driving the real panel — the modal, both
+  modes, a preset filling the box and switching the mode, the character limit disabling the button,
+  a generate, the counts panel, nested-modal Escape, the saved history, reading it back, a free run
+  badged differently, and 400px width. Plus the existing full-page, four-timezone and
+  every-read-fails passes, still green.
+
+### Before it works
+
+1. **Run `0010_console_reports.sql`** in the Supabase SQL editor. Until then the words come back but
+   the row does not save, and the panel says so rather than pretending.
+2. **`ANTHROPIC_API_KEY`** in Vercel. Without it the button still answers — with the counted
+   version, and the modal says that in advance.
+3. Deploy. None of this has run on admin.aisyndicate.com.
+
+### Still open
+
+- No platform read exists. If one is ever built, the single honest place to add it is a loader in
+  `lib/brain-context.js` plus a line removed from the cannot-answer list — nowhere else.
+- `listUsage` orders `ts` ascending with a 5,000-row limit, so an overflow drops the newest rows.
+- `getMyWork()` still buckets on the browser's clock and still uses the retired stale-lead rules, so
+  the **Work page** is a day out for anyone outside Central. See §27 and §30.
+- Nothing here has been watched against a real Supabase or a real API key. Every claim above comes
+  from the sample store, the pure tests, and the built bundle.
+
+### §31 addendum — the generator is collapsed by default (Aug 23 2026)
+
+Ryder, on seeing it: *"put the ai generator as like a small box but when you click open it enlarges
+the box with the full thing."*
+
+The first version was a full-height panel with a section header, a paragraph and an empty state. It
+pushed the agency numbers below the fold on a laptop, which is the opposite of what a snapshot page
+is for.
+
+Now: **one strip, 71px tall**, sitting between the AI notes and the agency numbers. It carries the
+name, the source badge, four examples of what to ask for, how many are saved, and `Open ▾`. Clicking
+it unfolds the **whole thing in place** — starting points, the box, the mode switch, the never-sees
+line, and everything written before — with `Close ▴` to put it back. **Not a modal**: one click from
+the strip to a cursor in the textarea, and the page underneath stays where it was.
+
+`GenerateModal` became `GenerateForm`, rendered inline. The `SectionHeader` above it was removed —
+a heading plus a subtitle over a one-line box is more chrome than content. The Read/facts modals
+stay modals, because a 1,200-word report needs the room.
+
+Open state is deliberately **not** remembered across loads: small is the default every time you land
+on Overview.
+
+Proof: the browser pass now asserts the collapsed height is under 110px, that no textarea exists
+while closed, that opening renders the form **without** a modal, that the open box is more than three
+times the strip's height, and that Close returns it. 51 checks, all green, plus every suite unchanged.
+
+### §31 addendum 2 — the generator strip sits second on the page (Aug 23 2026)
+
+Ryder: *"put this card at the top of the page."*
+
+Order on Overview is now: the greeting banner → the red "some of this page is missing" panel, when
+there is one → **the generator strip** → the five personal counters → your day → what the console
+noticed → the agency → money → what changed → jump in.
+
+Two things about that placement are deliberate and should not be swapped:
+
+- **Below the banner, not above it.** The banner is what orients you — the date, what you have on,
+  and START HERE. The strip is the first thing you can *act* on. Measured at a 1,100px window: the
+  banner ends at 474px, the strip sits at 498px and is 68px tall, so both are above the fold with
+  room to spare.
+- **Below the red failure panel, never between it and the banner.** The banner's own sentence says
+  "Some of the page is missing — see below" about that panel. Anything inserted between the two makes
+  that sentence point at the wrong thing.
+
+The browser pass now measures this rather than trusting it: it asserts the strip's top is below the
+banner's bottom, above the first counter tile, and inside the first 1,100 pixels.
+
+One test bug worth remembering: Playwright's `hasText` matches the **raw DOM text**, not what CSS
+renders. The counter labels are uppercased by `.label` in CSS, so `hasText: /^LATE/` never matched —
+the DOM says "Late". Use a `:text-is()` selector on the label, or match the real casing.
+
+---
+
+## §32. The generator: one mode, everything read, and a rating that changes the next answer — Aug 23 2026 (append-only section)
+> **Superseded on WHAT EXISTS by §33 (the current spec) and §34 (the state board).** Keep reading this section for the *why* — the reasoning behind several rules lives only here — but trust §33 on how it behaves today.
+
+
+Ryder, on the first version: *"for this i want it to always come from real stats, it should never be
+free or make up anything. thats just a way for it to hallucinate. it has to always pull from the admin
+platform and pull all clients, thier info, recent reports, operation, finances, EVERYTHING! and also
+after the prompt and the message comes out i want a how was this response then like a five star review
+system and a small text box for how you could do better."*
+
+Three changes. All three are corrections to §31, not additions.
+
+### 1. The free draft is GONE
+
+There were two modes; there is one. Every answer is checked against the counts: an invented number,
+date or name, promise wording, a vague amount, a loose date, or a line handing a named person a job
+all cause the **whole draft to be thrown away** and a counted version to be saved with the reason.
+
+**Why he was right.** The free mode carried a purple `DRAFT · NUMBERS UNCHECKED` badge and a warning
+inside the downloaded file. That is not a control. **The person who forwards a document is not the
+person who read the badge on it.** A generator that is allowed to invent a figure will eventually
+have one of its figures quoted to a client, and the badge will not be in the room.
+
+What replaced the useful half of free mode: the instruction now tells it to write a **square-bracket
+blank** — `[their current score]` — wherever it wants a figure the records do not hold. An outreach
+email still gets written; the gap is visible instead of filled.
+
+Mechanically:
+- `MODES` is `["records"]`, kept as a one-item list rather than deleted so old rows still parse and
+  so adding a second mode has to be a deliberate act.
+- **`modeOf()` ignores its argument entirely.** An old browser tab, a hand-made POST or a typo all
+  land on the checked path. There is a test that passes `"free"` and asserts it comes back
+  `"records"`, and another that asserts `buildConsoleInstruction` produces byte-identical output when
+  handed `mode: "free"`.
+- `checkConsoleReport` has one path. The looser branch is deleted, not disabled.
+- `assignsWorkIn` — the free-mode-only guard — was **deleted rather than left unused.** Dead code
+  that looks like a control is worse than no code.
+- Migration `0011` moves any existing `mode = 'free'` row to `'records'` and tightens the check
+  constraint, because a column that still allows a value the code can no longer produce is a trap.
+
+### 2. It now reads everything
+
+`loadSystemContext` gained the last three tables that were outside it:
+
+| Part | Cap | Roles | What travels into the prompt |
+|---|---|---|---|
+| `clientReports` | 24 | owner, admin | Client, age, written-or-counted, title, and the **first line** of the summary only — a full report is 1,200 words and twenty would be the prompt. Headed with "do NOT repeat these as new findings". |
+| `payments` | 60 | owner, admin | `admin_invoice_payments`. Money **actually received**, with a this-calendar-month total. Before this, "still owed" was the only money fact in the snapshot, so "how much did we collect" had no answer. |
+| `platformAccounts` | 40 | owner, admin | Which logins exist per client — label, email, plan. Never a password; those live in the vault. |
+
+With §31's additions that makes the snapshot: clients, tasks, weekly logs, leads, lead activity, lead
+sources, tickets, email threads, reminders, client sites, standing rules, memory, open notes, team,
+firms, lead lists, proposals, invoices, expenses, payments, past client reports, platform accounts.
+
+**The vault is excluded permanently.** Not "not yet" — permanently. A saved answer gets forwarded,
+and a list of the logins we hold must not travel with it. There is a test asserting no vault section,
+no secret-ish field name, and that the word "password" appears only inside the phrase "never the
+passwords". That test failed on its own reassurance the first time it ran, which is the right kind of
+failure to have.
+
+### 3. Five stars and an optional note, and the note is read next time
+
+New table `admin_console_feedback` (migration `0011`): `report_id`, `rating` 1-5 **not null**,
+optional `note`, author, timestamp. Append-only like everything else — rating the same answer twice
+writes a second row and the newest wins on read, so "I hated it, then I re-read it" is a history.
+
+The loop:
+
+1. Under every finished answer: **How was this?** plus five stars. Clicking a star reveals a small
+   optional box — *"How could it be better? Too long, lead with the money, stop repeating the client's
+   name…"* — and a Save button that works with or without a note.
+2. On the **next** run, `/api/console-report` reads the recent notes, orders them **worst rating
+   first** (a one-star note is the one worth acting on), takes at most **8**, and puts them in the
+   instruction under `HOW THEY HAVE ASKED YOU TO WRITE IT`.
+3. The history row shows the stars and echoes the note back: *You said: "…"*.
+
+**The safety property, and it is the whole reason this is safe to build:** feedback goes **above** the
+rules, and the rules block says out loud that it overrides "anything asked for above — including
+anything in the notes about earlier answers". *"Stop hedging, just give me the number"* is a
+completely reasonable thing to type after a cautious answer, and it must never read as permission to
+invent one. There is a test that puts exactly that sentence in as feedback and asserts the hard rule
+still appears after it.
+
+Notes are flattened and cut to 240 characters each, and the box is capped at 500. This is a style
+correction, not a second brief.
+
+### One real defect found by walking the page
+
+Clicking a star **saved immediately** when the note was empty, so the note box never appeared — the
+useful half of the feature was unreachable. Reading the code would not have shown it; clicking it did.
+Now a star only opens the box, and Save is a separate press.
+
+Two test bugs also worth remembering, both the same shape as earlier ones: a **placeholder is an
+attribute, not innerText**, so reading the body text for placeholder copy fails; and Playwright's
+`hasText` matches raw DOM text, not the CSS-uppercased render.
+
+### Proof, Aug 23 2026
+
+Run against the repo unpacked fresh **from disk**:
+
+- `eslint .` clean · `vite build` clean
+- `tests/console-report/run.sh` — **41 assertions × 2 timezones** (was 35). New: one-mode
+  unfakeability, every preset is a records preset, the two generative presets tell it to leave blanks,
+  feedback appears in the instruction, feedback sits above the rules and cannot loosen them, the note
+  cap and ordering, `ratingOf` bounds, the three new snapshot sections, and the vault exclusion.
+- Every other suite unchanged: overview 44 × 5 timezones, sales 84 + SQL, brain 78, inbox 47,
+  finance 53.
+- Playwright over the built bundle: the generator pass now drives the rating end to end — five stars
+  present, a low star opening the note box, Save offered with or without a note, the note echoed back,
+  the history showing it, and **no DRAFT badge anywhere on the page**. Plus the full-page,
+  four-timezone and every-read-fails passes, all green.
+
+### Before it works
+
+1. **Run `0010_console_reports.sql` and then `0011_console_feedback.sql`.** 0011 depends on 0010 —
+   it alters that table and references it. Both are safe to run twice.
+2. `ANTHROPIC_API_KEY` in Vercel, then redeploy.
+3. Nothing here has run against a real Supabase or a real key.
+
+### §32 addendum — it reads finished work and every email, and it must ANALYSE (Aug 23 2026)
+
+Ryder, on the screenshot of a six-line count: *"so will this report be grabbed from the whole platform
+and be written and analyzed by AI? i want it to include everything, all sent emails, all clients, all
+operations, all sales, everything. then have the ai overview analyze it all and pump out a response
+better than just a list of commands."*
+
+**First, the answer to the question:** what he was looking at was the **counted fallback**, not the AI.
+He is running `VITE_NO_SIGNIN=true` — no database key, no AI key — and the panel said so in the yellow
+line: *"preview mode — nothing was sent to an AI"*. Worth knowing for the next time somebody reports
+that the generator "only makes lists": check the provenance line first.
+
+**Three real holes he was right about, now closed:**
+
+| Was | Now |
+|---|---|
+| `tasks` read `status != done`, so **finished work was invisible** — a Monday update could say what was late but not what shipped | A **second read**, `tasksDone` (cap 80, newest-updated first), rendered as `## WORK FINISHED` with the note "these are DONE — use them to say what moved, never to say something is still open". Two reads, for the same reason the leads use two: one list cannot be both "what is open, soonest first" and "what we finished" |
+| `emails` read only `needs_reply, waiting, scheduled`, so **sent and finished threads were absent** | Every status. The section is now `## EMAIL THREADS`, carries `last_direction` as "WE spoke last" / "THEY spoke last", the message count, and the snippet |
+| Caps sized for five clients | clients 40→60, tasks 120→200, leads 90→220, leadActivity 60→120, tickets 30→50, emails 45→120 |
+
+A full snapshot is now roughly 40–60k tokens. Sonnet reads that in one pass through `converse()`,
+which has no input cap, so **the ceiling here is cost, not capability.**
+
+**What it still cannot do, and now says so:** we do not store email bodies. Only subject, sender,
+snippet and status; the message text lives in Gmail and only the Inbox page fetches it. The
+cannot-answer block now says *"Never quote an email body; quote the snippet and say it is a snippet."*
+
+### The shape changed, because a count is not an answer
+
+The old `SHAPE` asked for bullets, so it produced bullets — six numbers restated, which the person can
+already see in the tiles on the same page. The new one demands the two things a list cannot do:
+
+- **SUMMARY bullets must be judgements.** *"Lakeside has had nothing planned for eleven days while we
+  invoiced them on the 1st"* is a summary line. *"3 clients, 10 open tasks"* is the input.
+- **The REPORT must connect things** — a client with late work AND an unpaid invoice AND a quiet
+  mailbox is one story, not three rows — **rank by consequence rather than by table**, and explain
+  every number in the same sentence it appears in.
+- **HOUSE gained:** *"ANALYSE, do not tally. If a paragraph could be replaced by the numbers it
+  contains, it is not worth writing."*
+- **An explicit ban on the opening move:** no section may start with "There are", "We have",
+  "Currently there are", or a bare count. A model told to analyse will still open with a total unless
+  it is told not to.
+
+The instruction also now states plainly that it is reading the whole console and that *"the answer is
+usually in how two sections line up, not in either one alone."*
+
+### The counted fallback names rows now
+
+It was six totals, which is exactly what he pushed back on. `assembleConsoleFacts` gained a
+`highlights` block — the actual late tasks with their clients, blocked tasks, active clients with
+**nothing planned at all**, overdue invoices with amounts, unanswered email subjects, recently
+finished work — and the fallback prints those instead of counts. It also says *why* it reads like a
+list: *"with no model there is nothing to reason with, so it names the rows instead of guessing at
+their meaning."*
+
+Every name it prints also appears in the fact sheet, so the fallback still passes its own strict
+check. There is a test for that, and it is the reason the fallback cannot be made cleverer without
+care.
+
+### Proof
+
+`eslint .` clean · build clean · `tests/console-report` **45 × 2 timezones** (was 41) · every other
+suite unchanged (overview 44 × 5 tz, sales 84 + SQL, inbox 47, brain 78, finance 53) · the browser
+pass asserts the strip's new copy, that the open box says "open and finished work" and "not a list of
+totals", that email bodies are named as never stored, and that the counted version **names a real
+task** rather than only counting.
+
+One fixture bug worth keeping: a test called "with nothing wrong" gave an active client no tasks — and
+"active client with nothing planned" is a finding, so the code was right and the fixture was wrong.
+That check exists because an active client with no open work is the quiet failure nothing else on the
+page catches.
+
+---
+
+## §33. THE OVERVIEW PAGE AND ITS GENERATOR — the current spec (Aug 23 2026)
+
+**Read this instead of §27, §30, §31, §32 and their addenda.** Those are the history of how it got
+here and they are worth keeping — the *why* behind several rules lives only in them — but they read as
+five overlapping accounts. This is one description of what exists now. If this section and an earlier
+one disagree, **this one is right and the earlier one is what we used to believe.**
+
+---
+
+### PART A — the Overview page
+
+`src/components/admin/Overview.jsx`. Owner and admin only; a `sales` role never sees it and lands on
+Work. Order on the page, and every position in it is deliberate:
+
+| # | Block | Notes |
+|---|---|---|
+| 1 | **The banner** | Greeting, the team's date, one plain sentence of what you have on, and a START HERE button pointing at the single most urgent thing |
+| 2 | **"Some of this page is missing"** | Red, only when a read failed, and it must stay directly under the banner because the banner says "see below" about it |
+| 3 | **The generator strip** | 68–87px. Part B below |
+| 4 | **Your five numbers** | Late · Due today · Reminders due · Leads owed a contact · Tickets on you |
+| 5 | **Your day** | Late and due-today tasks with an inline **Done**; reminders due with a tick-box; a one-line "coming up" |
+| 6 | **What the console noticed** | The AI notes, most urgent first, with an inline **Dismiss** |
+| 7 | **Where everything stands** | Active clients · Emails needing a reply · Open tickets · Pipeline · New leads this month, then the read-caps caption |
+| 8 | **Clients that need attention** | Late and blocked task counts per **active** client |
+| 9 | **Money, one line** | Recurring revenue · still owed · AI spend this month, each with its own badge |
+| 10 | **What changed lately** | The activity log |
+| 11 | **Jump in** | Work · Sales · Operations · Inbox |
+
+**The rules that keep it from becoming a second Work page:** every block is capped and links to the
+page that owns it; the only inline actions are one-click ones (tick, done, dismiss) — anything needing
+a form sends you elsewhere.
+
+**Where its numbers come from, and this is the part people get wrong:**
+
+- **Dates** go through `src/lib/teamDay.js`, never the browser's clock. See §27 for the three bugs that
+  taught us this. `getMyWork()`'s own buckets are **ignored** — Overview re-buckets on the team
+  calendar itself, because `getMyWork` is still browser-local.
+- **"Leads owed a contact"** is `salesQueue()` from `lib/sales-rules.js`, filtered by the *same
+  expression* `SalesPage.jsx` uses for its own `owed` count, with **their** `touchCountsByLead()` over
+  the same 90 days. The two pages cannot disagree by construction. The one difference — no site score,
+  so no 90+ skip gate — is printed on the page.
+- **Pipeline** uses their `isOpenStage`, never a hand-written stage list.
+- **A failed read shows a dash and names itself.** Never a zero. Ten tiles take a `broken` prop, a red
+  panel names each failure, and the words "nothing is late" are suppressed whenever anything failed.
+
+---
+
+### PART B — the generator: "Ask for anything, written from the records"
+
+One strip on Overview. Click it and the whole thing unfolds **in place** — five starting points, the
+box, and everything written before. Not a modal: one click from the strip to a cursor in the textarea.
+
+#### What it does
+
+You type what you want. `POST /api/console-report` reads the whole console, Claude writes it, the
+answer is checked against the counts, and the row is filed with the counted figures beside it.
+
+Five presets **only fill the box** — the typed text is the only thing that travels, so what you send is
+always what you can see: *where everything stands · what is about to go wrong · ready for a client
+call · an outreach email · a plan for the week*.
+
+#### ONE mode. There is no unchecked path
+
+Every answer is gated. An invented number, date or name; promise wording; a vague amount; a loose
+date; a slash date; a line handing a named person a job — any of those and **the whole draft is thrown
+away**, not edited, and a counted version is saved with the reason on the row.
+
+There used to be a "free draft" that skipped this. It is gone, and the reason is the rule:
+**a badge is not a control, because the person who forwards a document is not the person who read the
+badge on it.**
+
+Made unfakeable rather than merely removed:
+- `MODES` is `["records"]`, a one-item list so adding a second is a deliberate act.
+- **`modeOf()` ignores its argument.** An old tab, a hand-made POST or a typo all land on the checked
+  path. Tested by passing `"free"` and asserting `"records"` comes back.
+- `checkConsoleReport` has one branch. The looser one is deleted.
+- The free-only guard `assignsWorkIn` was **deleted, not left unused** — dead code that looks like a
+  control is worse than no code.
+- Where it wants a figure we do not hold it writes a **square-bracket blank**, `[their current
+  score]`, for a person to fill in.
+
+The checks themselves are `checkReport` from `lib/client-report.js`, imported not copied. **Two copies
+of an honesty rule is one copy that quietly stops matching.**
+
+#### What it reads — 23 tables, via `loadSystemContext()`
+
+| | |
+|---|---|
+| **Delivery** | clients (60) · open tasks (200) · **finished tasks (80)** · weekly logs (40) · client sites (60) |
+| **Sales** | leads (220 + 40 recent) · lead activity (120) · lead sources (20) · firms (60) · lead lists (25) · proposals (30) |
+| **Comms** | **every email thread, any status (120)** · tickets (50) |
+| **Money** | invoices (60) · payments (60) · expenses (40) |
+| **Knowledge** | standing rules (60) · memory (60) · open notes (40) · past client reports (24) |
+| **People/access** | team (25) · reminders (40) · platform accounts (40) |
+
+Role-scoped by the same `SCOPE_BY_ROLE` the assistant uses. Money is owner/admin only; firms, lists and
+proposals are visible to `sales` too.
+
+A full read is roughly **40–60k tokens**, which is why it goes through `converse()` from
+`lib/ai-agent.js` (no input cap) and **never** `draft()` from `lib/ai.js` (hard cap 24,000 chars).
+Truncating would mean writing from part of the story with no way for a reader to tell. **The ceiling
+here is cost, not capability.**
+
+Given **no tools**. The assistant acts; a generator that could write rows while writing about them
+would be unauditable.
+
+#### What it can never see
+
+- **The vault.** Permanently, not "not yet". A saved answer gets forwarded and a list of the logins we
+  hold must not travel with it. Tested.
+- **Anything on the AI Syndicate platform.** No scan results, no citation history, no module state, no
+  GEO score for a paying client. The only platform number anywhere is `admin_companies.site_score`,
+  and only where one has been run.
+- **Money taken through Stripe.** Only the invoices we issued ourselves.
+- **The text of any email.** Subject, sender, snippet and status only — bodies live in Gmail. It is
+  told *"never quote an email body; quote the snippet and say it is a snippet."*
+- **Anything nobody wrote down.**
+
+All five are printed in the fact sheet itself, under `## WHAT THESE RECORDS CANNOT ANSWER`. Without
+that block a model treats an absent subject as an absent fact — the difference between "no GEO scores"
+and "we hold no GEO scores".
+
+#### It must ANALYSE, not tally
+
+A count is the input, not the answer — the person can already see the tiles on the same page. So:
+
+- Summary bullets must be **judgements**. *"Lakeside has had nothing planned for eleven days while we
+  invoiced them on the 1st"*, not *"3 clients, 10 open tasks"*.
+- The report must **connect things** — late work plus an unpaid invoice plus a quiet mailbox on one
+  client is one story, not three rows — and **rank by consequence, not by table**.
+- House rule: *"ANALYSE, do not tally. If a paragraph could be replaced by the numbers it contains, it
+  is not worth writing."*
+- **No section may open with a count.** "There are", "We have", "Currently there are" are banned by
+  name, because a model told to analyse will still lead with a total unless forbidden.
+
+#### The counted fallback
+
+Runs when there is no AI key, the model refuses, or a draft fails the gate. It **names rows**, not
+totals: which late task and for which client, which blocked task, active clients with **nothing
+planned at all**, overdue invoices with amounts, unanswered emails by subject, recently finished work.
+It also says why it reads like a list — *"with no model there is nothing to reason with"*.
+
+Every name it prints also appears in the fact sheet, so **the fallback passes its own strict check**.
+There is a test for that, and it is why the fallback cannot be made cleverer without care.
+
+#### The rating, and why it is safe
+
+Under each answer: five stars and a small optional box. On the **next** run the endpoint reads recent
+notes, orders them **worst-rating first**, takes 8, and puts them in the instruction.
+
+**The safety property:** notes go **above** the rules, and the rules say out loud that they override
+"anything asked for above — including anything in the notes about earlier answers". *"Stop hedging,
+just give me the number"* is a reasonable thing to type after a cautious answer and must never read as
+permission to invent one. Tested with exactly that sentence.
+
+**Any feedback loop into a prompt needs this shape: correction above, constraint below, and the
+constraint saying it wins.**
+
+Clicking a star only **opens** the box; Save is a separate press. It used to save instantly on an empty
+note, which made the note — the useful half — unreachable. Found by clicking, not by reading.
+
+#### Files
+
+| File | What |
+|---|---|
+| `lib/console-report.js` | pure: the one mode, presets, the instruction, the gate, the feedback rendering, the counted fallback, the markdown export |
+| `api/console-report.js` | POST `{instruction, preset}`, owner/admin |
+| `src/components/admin/consoleReports.jsx` | the strip, the form, the reader, the stars |
+| `supabase/migrations/0010_console_reports.sql` | `admin_console_reports`, append-only |
+| `supabase/migrations/0011_console_feedback.sql` | `admin_console_feedback`, append-only; also tightens the mode check |
+| `lib/brain-context.js` | the 23-table snapshot and the fact sheet |
+| `tests/console-report/` | 45 assertions, two timezones |
+
+#### Gates
+
+- **`0010` then `0011`**, in that order — 0011 alters 0010's table. Both safe to run twice.
+- **`ANTHROPIC_API_KEY`** in Vercel. Without it the button still answers, with the counted version,
+  and the box says so before you press it.
+- Owner/admin in the endpoint **and** in row-level security, on both tables. One saved row can
+  summarise every client, lead and invoice at once.
+
+---
+
+## §34. STATE BOARD — replaces §28 as the current picture (Aug 23 2026, end of session)
+
+Nothing in this repo has ever run on admin.aisyndicate.com. Every claim below is from the sample
+store, the pure test suites, a real Postgres for the SQL suites, and Playwright over the built bundle.
+
+### THE PAGES
+
+| Page | Roles | State |
+|---|---|---|
+| **Overview** | owner, admin | Rebuilt Aug 22 as the daily snapshot, realigned onto the Sales rules Aug 23, and now carries the generator strip. §33 |
+| **Finance** → Invoices | owner, admin | Aug 20. §18, §19 |
+| **Customers** | owner, admin | Stripe customers |
+| **Work** | all | Aug 17. **Still uses the browser's clock and the retired stale-lead rules — see the gaps** |
+| **Sales** | all | Replaced Leads on Aug 22. Claims, the 3-day first-contact window, the 14-day cold clock, the 5-touch cadence, the 90+ gate. §26 |
+| **Operations** | owner, admin | The Notion-format task database. §12 |
+| **Inbox** | owner, admin | Shared growth@ mailbox with AI drafting. §14 |
+| **Tickets** | owner, admin | Support desk |
+| **Notes / AI Brain / Our platform** | owner, admin | AI notes, the memory and standing rules, a static description of the platform. §21 |
+| **Vault / Team / Settings** | owner, admin | Encrypted secrets, the roster, config. §23 |
+
+### THE ENDPOINTS — 24
+
+`ai-chat` · `ai-draft` · `client-report` · `client-standing` · **`console-report`** · `gmail-accounts`
+· `gmail-auth-start` · `gmail-callback` · `gmail-drafts` · `gmail-modify` · `gmail-send` ·
+`gmail-thread` · `gmail-threads` · `health` · `invite` · `lead-scrape` · `notes-generate` ·
+`platform-sso` · `sales-score` · `sales-sweep` · `stripe-customers` · `stripe-finance` ·
+`stripe-metrics` · `usage-ingest` · `vault-secret`
+
+### MIGRATIONS — 11, and **four have never been run**
+
+| | State |
+|---|---|
+| 0001–0006 | run |
+| **0007** finance | **not run** |
+| **0008** vault + client reports | **not run** |
+| **0009** sales | **not run** |
+| **0010** console reports | **not run** |
+| **0011** console feedback | **not run** — and it must go **after 0010** |
+
+*(0007 and 0008's state should be confirmed in Supabase rather than trusted from here — earlier boards
+disagree about 0007.)*
+
+### KEYS AND VARS
+
+| Var | For | State |
+|---|---|---|
+| `VITE_SUPABASE_URL` / `_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | everything | set |
+| `ANTHROPIC_API_KEY` | the assistant, client reports, notes, **the generator** | **not set** |
+| `VAULT_KEY` | the vault | **not set**, and losing it makes stored secrets unreadable for ever — put it in Bitwarden the same minute |
+| `STRIPE_SECRET_KEY` | Finance, Customers | not set |
+| `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` / `GMAIL_REDIRECT_URI` | Inbox | not set |
+| `USAGE_INGEST_KEY` | the platform's token-spend feed | not set |
+| `PLATFORM_SCORE_URL` (+ `PLATFORM_SCORE_KEY`) | the Run-score button on a firm | not set. **Not reported by `/api/health` and not in `.env.example`** — a real gap |
+| `CRON_SECRET` | the overnight claim sweep | not set |
+| `PLATFORM_URL` / `PLATFORM_ACCOUNT_EMAIL` | SSO into the platform | partial |
+| `PLATFORM_LEADGEN_URL` / `_KEY`, `APOLLO_API_KEY` | lead scraping | not set |
+
+### TESTS — seven suites
+
+| Suite | Count |
+|---|---|
+| `overview` | 44 × **5 timezones** |
+| `console-report` | 45 × 2 timezones |
+| `sales` | 84 + 20 SQL against a real Postgres |
+| `vault` | 105 + 36 SQL |
+| `brain` | 78 (its SQL cross-check cannot run as root in a container) |
+| `inbox` | 47 — **run it with `bash tests/inbox/run.sh`**, a bare `node test.mjs` fails on its stubs |
+| `finance` | 53 |
+
+Plus four Playwright passes over the **built bundle**: the full Overview page; tile-vs-pill agreement
+in four timezones; the clock frozen to 23:30 on the 2026 fall-back night; and a second bundle where
+**every read returns an error**, asserting the page names each failure, dashes all ten tiles and never
+says "nothing is late".
+
+### DO THIS NEXT, IN ORDER
+
+1. `npm run build` in Cursor. Confirm it passes on the Mac, then push and deploy.
+2. Run the migrations: **0007, 0008, 0009, 0010, 0011** — 0011 last.
+3. Set `ANTHROPIC_API_KEY` and `VAULT_KEY` (Bitwarden), then **redeploy** — env vars only reach a build.
+4. Press the generator against real rows. Rate one badly on purpose and check the next answer changes.
+5. Then the rest of the keys as the features are wanted.
+
+### KNOWN GAPS, written down rather than hidden
+
+- **The Work page is a day out for anyone outside Central**, and its "people to contact" still uses the
+  retired stale-lead rules. Overview is right on both counts; Work is not. Route `getMyWork()` through
+  `src/lib/teamDay.js` and `lib/sales-rules.js` and give it the five-timezone test both already have.
+  **This is the top of the list.**
+- `listUsage` orders `ts` **ascending** with a 5,000-row limit, so an overflow drops the **newest**
+  rows and AI spend reads low. Should be descending.
+- `/api/health` does not report `PLATFORM_SCORE_URL`, and it is missing from `.env.example`.
+- **No platform read exists.** Three links only: SSO out, token spend in, one site score per firm. If
+  one is ever built, the single honest place to add it is a loader in `lib/brain-context.js` plus a
+  line removed from the cannot-answer list — nowhere else.
+- Support tickets are matched to a client by contact email; `admin_tickets` has no `client_id`.
+- Marking a lead Won does not create the client record. `admin_companies.client_id` is written by
+  nothing.
+- "They replied and you have not answered" cannot be built: `admin_lead_activity` has no direction
+  column and `admin_email_threads` carries only `last_direction`.
+- No vault key rotation tool. A wrong key says so plainly; rotating means revealing and re-saving each
+  secret while the old key is still set.
+- **Nothing has been watched against a real Supabase or a real API key.** Every "it works" in this
+  document is the sample store, a pure test, or a fault-injected bundle.

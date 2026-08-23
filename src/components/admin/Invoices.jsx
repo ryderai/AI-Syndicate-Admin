@@ -3,6 +3,7 @@ import { apiFetch } from "../../lib/adminApi.js";
 import { isConfigured } from "../../lib/supabase.js";
 import { toast } from "../../lib/toast.js";
 import { listClients } from "../../lib/data.js";
+import { useScreenContext } from "../../lib/screenContext.js";
 import {
   listInvoices, listInvoiceItems, listPayments, saveInvoice, markInvoiceSent,
   voidInvoice, deleteInvoice, addPayment, deletePayment, getFinanceSettings, saveFinanceSettings,
@@ -120,6 +121,19 @@ export default function Invoices({ member }) {
     }
     return list;
   }, [all, filter, q]);
+
+  /* What the assistant may see here. Invoice NUMBERS and states, never
+   * amounts — same rule as the Finance page: the shape of the page travels,
+   * the ledger does not. It reads the real rows itself under the role gate in
+   * lib/brain-context.js if it needs a figure. */
+  useScreenContext(() => ({
+    page: "Invoices",
+    label: `${shown.length} of ${all.length} invoices shown${filter !== "all" ? `, filtered to ${filter}` : ""}`,
+    record: openInvoice
+      ? { type: "invoice", id: openInvoice.id, label: `${openInvoice.number} for ${openInvoice.bill_to_name}` }
+      : null,
+    visible: shown.slice(0, 20).map((x) => `${x.number} — ${x.bill_to_name} (${effectiveInvoiceStatus(x)})`),
+  }), [shown, all.length, filter, openInvoice]);
 
   /* ---- actions ---- */
 

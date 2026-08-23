@@ -8,9 +8,10 @@ import {
 import { toast } from "../../lib/toast.js";
 import { StandingCard, SitesPanel } from "./clientPage.jsx";
 import { PlatformAccountsPanel, usePlatformAccounts } from "./platformAccounts.jsx";
+import { VaultPanel, useVaultItems } from "./vaultParts.jsx";
+import { ClientReportsPanel, useClientReports } from "./clientReports.jsx";
 import {
-  SourceBadge, Modal, Field, TextInput, TextArea, Select, EmptyState, Explainer,
-} from "./shared.jsx";
+  SourceBadge, Modal, Field, TextInput, TextArea, Select, EmptyState, } from "./shared.jsx";
 import TaskDatabase, {
   TaskBoard, COLUMNS, DEFAULT_COLUMNS, GROUP_OPTIONS, plusDaysISO, isOverdue, isGroupBy,
 } from "./opsTable.jsx";
@@ -195,13 +196,6 @@ export default function Operations({ member }) {
 
   return (
     <>
-      <Explainer
-        icon="🗂"
-        kicker="THE NOTION REPLACEMENT"
-        title="Every client task in one table — the same layout as Notion"
-        body="Click any cell to change it: status, client, who owns it, priority, due date. Nothing saves twice, nothing needs a form. The tabs are views of the same list — All tasks grouped by client, This week for what's due, Board to drag a task along, and Clients for the week-by-week log."
-      />
-
       {/* view tabs */}
       <div className="adm-db-head">
         <div className="aia-tabs" role="tablist" aria-label="Operations views">
@@ -405,6 +399,7 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
   const [sites, setSites] = useState([]);
   const [emailCount, setEmailCount] = useState(null);
   const [tab, setTab] = useState("tasks");
+  const [reportAuto, setReportAuto] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [weekModal, setWeekModal] = useState(null);
 
@@ -421,6 +416,16 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
   /* The platform login cards for this client. Owned here, handed to the panel,
    * so the tab count and the panel can never disagree. */
   const accounts = usePlatformAccounts(client.id);
+
+  /* The vault items for this client, owned here and handed to the panel, so
+   * the tab count and the panel can never disagree. Same rule as the platform
+   * login cards above. */
+  const vault = useVaultItems(client.id);
+
+  /* Same reason as the vault above: the tab badge and the panel read from one
+   * list. The badge was hard-coded to 0, so a client with nine saved reports
+   * showed no badge at all. */
+  const reports = useClientReports(client.id);
 
   /* Only the email COUNT is read here, to tell whether the standing summary has
    * gone out of date. The emails themselves live on the Inbox page. */
@@ -459,6 +464,13 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
               if (res.ok) { toast.success("Stage moved", `${client.name} → ${e.target.value}`); reloadClients(); }
               else toast.error("Couldn't move stage", res.error);
             }} options={CLIENT_STAGES.map((s) => [s, s])} />
+            {/* The report button sits up here, next to Edit, because "write me
+                a report on this client" is a thing you arrive wanting to do —
+                not something you go hunting through tabs for. It jumps to the
+                Reports tab AND opens the box in one press. */}
+            <button className="btn btn-accent" onClick={() => { setTab("reports"); setReportAuto(true); }}>
+              Generate report
+            </button>
             <button className="btn" onClick={() => setEditOpen(true)}>Edit</button>
           </div>
         </div>
@@ -483,7 +495,7 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
       </div>
 
       <div className="aia-tabs" role="tablist" aria-label="Client sections" style={{ marginBottom: 16 }}>
-        {[["tasks", "Tasks", openCount], ["websites", "Websites", sites.length], ["platform", "Platform login", accounts.rows.length], ["weekly", "Weekly log", 0]].map(([id, label, count]) => (
+        {[["tasks", "Tasks", openCount], ["websites", "Websites", sites.length], ["platform", "Platform login", accounts.rows.length], ["vault", "Vault", vault.rows.length], ["reports", "Reports", reports.rows.length], ["weekly", "Weekly log", weekly.length]].map(([id, label, count]) => (
           <button key={id} onClick={() => setTab(id)} role="tab" aria-selected={tab === id} className={`aia-tab ${tab === id ? "active" : ""}`}>
             <span className="aia-tab-dot" aria-hidden="true" />
             {label}
@@ -499,6 +511,10 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
         <SitesPanel client={client} sites={sites} reload={loadSites} />
       ) : tab === "platform" ? (
         <PlatformAccountsPanel client={client} accounts={accounts} />
+      ) : tab === "vault" ? (
+        <VaultPanel client={client} vault={vault} />
+      ) : tab === "reports" ? (
+        <ClientReportsPanel client={client} reports={reports} autoOpen={reportAuto} onAutoOpened={() => setReportAuto(false)} />
       ) : tab === "tasks" ? (
         tasks.length ? (
           <TaskDatabase

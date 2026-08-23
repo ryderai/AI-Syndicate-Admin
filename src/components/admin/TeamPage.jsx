@@ -4,7 +4,7 @@ import { apiFetch } from "../../lib/adminApi.js";
 import { isConfigured } from "../../lib/supabase.js";
 import { toast } from "../../lib/toast.js";
 import {
-  SourceBadge, Modal, Field, TextInput, Select, Explainer, timeAgo,
+  SourceBadge, Modal, Field, TextInput, Select, timeAgo,
 } from "./shared.jsx";
 
 /* Team — who can sign in, and as what. Invite-only. */
@@ -54,13 +54,6 @@ export default function TeamPage({ member }) {
 
   return (
     <>
-      <Explainer
-        icon="🔐"
-        kicker="WHO GETS IN"
-        title="Invite-only, role-gated"
-        body="Owners and admins see everything. Sales reps sign in with the same door and see only the Leads pages — the database enforces it, not just the menu. Deactivating someone locks them out instantly but keeps everything they logged."
-      />
-
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         <SourceBadge mode={team.sample ? "sample" : "live"} />
         <button className="btn btn-accent" onClick={() => setInviteOpen(true)}>+ Invite teammate</button>

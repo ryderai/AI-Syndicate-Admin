@@ -1,0 +1,869 @@
+import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  LEAD_STAGES, LEAD_STAGE_LABELS, LEAD_STAGE_HELP,
+  listLeadActivity, addLeadActivity, listProposals, upsertProposal, deleteProposal,
+  claimLead, releaseLead, upsertLead, upsertCompany, claimTextSend, logActivity,
+} from "../../lib/data.js";
+import {
+  claimState, cadenceState, scoreGate, textGate, companyClaimWarning,
+  CADENCE, SEVEN_MOVES, ROE,
+} from "../../../lib/sales-rules.js";
+import { apiFetch } from "../../lib/adminApi.js";
+import { toast } from "../../lib/toast.js";
+import { Modal, Field, TextInput, TextArea, Select, timeAgo } from "./shared.jsx";
+import { StagePill, ClaimChip, ScoreChip, FirmWarning, money, SiteLink } from "./salesParts.jsx";
+
+/* THE PROFILE — one person, everything about them, in one place.
+ *
+ * This is the thing a spreadsheet cannot be. The sheet has one row per person
+ * and six editable cells; overwrite "Last Touch" and what was there before is
+ * gone forever. Here every call, email, note, stage change, claim and score
+ * run is a row that is never edited and never deleted, so "what has actually
+ * happened with this firm" is a question with an answer.
+ *
+ * Five tabs, in the order a rep actually needs them:
+ *   Work      — what is owed right now, and the buttons to do it
+ *   Timeline  — everything that has happened, newest first
+ *   Details   — the person and the firm, editable in place
+ *   Proposals — what was sent, for how much, and what came back
+ *   Playbook  — the 7 moves and the cadence, so nobody has to remember them
+ */
+
+const OUTCOMES = [
+  ["talked", "Talked to them"], ["voicemail", "Left a voicemail"], ["no_answer", "No answer"],
+  ["booked", "Booked a meeting"], ["not_interested", "Not interested"], ["bad_number", "Bad number"],
+];
+
+const TABS = [
+  ["work", "Work"], ["timeline", "Timeline"], ["details", "Details"],
+  ["proposals", "Proposals"], ["playbook", "Playbook"],
+];
+
+export default function SalesProfile({
+  lead, company, siblings, member, team, teamName, now,
+  touches, onClose, reload,
+}) {
+  const [tab, setTab] = useState("work");
+  const [activity, setActivity] = useState(null);
+  const [proposals, setProposals] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [scoring, setScoring] = useState(false);
+  const [logOpen, setLogOpen] = useState(null);       // 'call' | 'email' | 'text' | 'linkedin' | 'note'
+  const [proposalOpen, setProposalOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    const [a, p] = await Promise.all([listLeadActivity(lead.id), listProposals(lead.id)]);
+    setActivity(a.rows);
+    setProposals(p.rows);
+  }, [lead.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const claim = claimState(lead, now);
+  const cadence = cadenceState(lead, now, touches);
+  const gate = scoreGate(company?.site_score);
+  const text = textGate(lead);
+  const warning = companyClaimWarning(lead, siblings, teamName, now, member.user_id);
+
+  const patch = async (p, note) => {
+    setBusy(true);
+    const res = await upsertLead({ id: lead.id, ...p });
+    setBusy(false);
+    if (!res.ok) { toast.error("Save failed", res.error); return false; }
+    if (note) await addLeadActivity({ leadId: lead.id, actor: member.user_id, type: "status_change", body: note });
+    await load();
+    await reload();
+    return true;
+  };
+
+  const doClaim = async (withSiblings) => {
+    const also = withSiblings ? siblings.filter((s) => !s.owner_id).map((s) => s.id) : [];
+    setBusy(true);
+    const res = await claimLead(lead.id, member.user_id, {
+      alsoSiblings: also, name: member.full_name || member.email,
+    });
+    setBusy(false);
+    if (!res.ok) { toast.error("Could not claim it", res.error); return; }
+    toast.success(
+      res.count > 1 ? `Claimed ${res.count} contacts` : "Claimed",
+      `First contact is due within ${ROE.FIRST_CONTACT_BUSINESS_DAYS} business days, or it goes back to the floor.`
+    );
+    await load();
+    await reload();
+  };
+
+  const doRelease = async () => {
+    setBusy(true);
+    const res = await releaseLead(lead.id, {
+      actor: member.user_id,
+      why: `${member.full_name || member.email} handed this back to the floor.`,
+    });
+    setBusy(false);
+    if (!res.ok) { toast.error("Could not release it", res.error); return; }
+    toast.info("Back on the floor", "Anybody can claim it now.");
+    await load();
+    await reload();
+  };
+
+  const runScore = async () => {
+    if (!company) { toast.warn("No firm on this contact", "Add a company in Details first — the score belongs to the firm."); return; }
+    if (!company.domain) { toast.warn("No website to score", "Add the firm's website in Details first."); return; }
+    setScoring(true);
+    const res = await apiFetch("/api/sales-score", { method: "POST", body: { companyId: company.id, domain: company.domain } });
+    setScoring(false);
+    if (!res.ok) {
+      toast.error("Could not run the score", res.preview
+        ? "Preview mode — scoring needs the Supabase keys and PLATFORM_SCORE_URL. See SETUP.md."
+        : res.error);
+      return;
+    }
+    const g = scoreGate(res.data.score);
+    toast[g.skip ? "warn" : "success"](`Scored ${res.data.score}`, g.why);
+    await load();
+    await reload();
+  };
+
+  const flipToClient = async () => {
+    if (!await patch({ stage: "won", became_customer: true, closed_at: new Date().toISOString() }, "Won — flipped to a paying client.")) return;
+    await logActivity({ actor: member.user_id, kind: "lead_won", title: `Won: ${lead.name || lead.company}` });
+    /* NOT DONE HERE, and not pretended: creating the row on the Clients page
+     * and pointing admin_companies.client_id at it. The previous version called
+     * upsertCompany with the value it had just read — which wrote nothing at
+     * all while looking like a hand-off. The record, its history and its
+     * proposals are all still here under Won; the delivery side has to be
+     * started by hand on the Clients page for now. */
+    toast.success("Marked as won",
+      "Same record, same history. Start them on the Clients page when onboarding begins — that link is not automatic yet.");
+  };
+
+  return createPortal(
+    <>
+      <div className="adm-drawer-backdrop" onClick={onClose} />
+      <div className="adm-drawer adm-sl-drawer" role="dialog" aria-modal="true" aria-label={`Lead: ${lead.name || lead.company}`}>
+        {/* ---- head ---- */}
+        <div className="adm-drawer-head">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+            <div style={{ minWidth: 0 }}>
+              <div className="adm-sl-name">{lead.name || lead.company || "Contact"}</div>
+              <div className="adm-sl-sub">
+                {[lead.title, company?.name || lead.company, lead.city ? `${lead.city}${lead.state ? `, ${lead.state}` : ""}` : null]
+                  .filter(Boolean).join(" · ")}
+              </div>
+            </div>
+            <button className="adm-modal-x" onClick={onClose} aria-label="Close">×</button>
+          </div>
+
+          <div className="adm-sl-chips">
+            <StagePill stage={lead.stage} />
+            <ClaimChip lead={lead} now={now} />
+            <ScoreChip score={company?.site_score} onRun={runScore} busy={scoring} />
+            {lead.owner_id && (
+              <span className="adm-sl-owner">
+                {lead.owner_id === member.user_id ? "Yours" : `Claimed by ${teamName(lead.owner_id)}`}
+              </span>
+            )}
+          </div>
+
+          <FirmWarning warning={warning} />
+
+          {/* The 90+ banner is about who to SPEND A TOUCH ON, so it only shows
+              before a conversation exists. Telling a rep at proposal stage that
+              a live deal is "not a prospect" — because somebody scored the
+              website after the conversation started — is advice nobody can act
+              on, and it teaches people to scroll past the banner. */}
+          {gate.skip && ["new", "researching"].includes(lead.stage) && (
+            <div className="adm-sl-warn adm-sl-warn-flat" role="status">
+              <strong>Not a prospect.</strong> {gate.why} The rules say mark it Skip and move on rather than
+              spend a touch here.
+            </div>
+          )}
+          {gate.skip && !["new", "researching"].includes(lead.stage) && (
+            <div className="adm-sl-warn adm-sl-warn-flat" role="status">
+              <strong>This firm scores {gate.score}.</strong> Normally that is a pass — but you are already
+              in conversation, so keep going. Just do not lead with the gap.
+            </div>
+          )}
+
+          <div className="adm-sl-tabs">
+            {TABS.map(([id, label]) => (
+              <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>
+                {label}
+                {id === "proposals" && proposals.length ? <span className="adm-sl-tabn">{proposals.length}</span> : null}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* ---- body ---- */}
+        <div className="adm-drawer-body">
+          {tab === "work" && (
+            <WorkTab
+              lead={lead} member={member} team={team}
+              claim={claim} cadence={cadence} text={text} gate={gate}
+              busy={busy} onClaim={doClaim} onRelease={doRelease}
+              siblings={siblings} onLog={setLogOpen} onPatch={patch}
+              onFlip={flipToClient} teamName={teamName}
+            />
+          )}
+
+          {tab === "timeline" && <TimelineTab activity={activity} teamName={teamName} />}
+
+          {tab === "details" && (
+            <DetailsTab lead={lead} company={company} onPatch={patch} reload={reload} />
+          )}
+
+          {tab === "proposals" && (
+            <ProposalsTab
+              proposals={proposals} lead={lead} member={member}
+              onAdd={() => setProposalOpen(true)} reload={load} onPatch={patch}
+            />
+          )}
+
+          {tab === "playbook" && <PlaybookTab lead={lead} company={company} cadence={cadence} />}
+        </div>
+      </div>
+
+      {logOpen && (
+        <LogModal
+          kind={logOpen} lead={lead} member={member} text={text}
+          onClose={() => setLogOpen(null)}
+          reload={async () => { await load(); await reload(); }}
+        />
+      )}
+      {proposalOpen && (
+        <ProposalModal
+          lead={lead} company={company} member={member}
+          onClose={() => setProposalOpen(false)}
+          reload={async () => { await load(); await reload(); }}
+        />
+      )}
+    </>,
+    document.body
+  );
+}
+
+/* ================================================================== */
+/* WORK — what is owed right now                                       */
+/* ================================================================== */
+
+function WorkTab({
+  lead, member, team, claim, cadence, text, gate, busy,
+  onClaim, onRelease, siblings, onLog, onPatch, onFlip, teamName,
+}) {
+  const unclaimedSiblings = siblings.filter((s) => !s.owner_id && s.id !== lead.id);
+  const mine = lead.owner_id === member.user_id;
+
+  return (
+    <>
+      {/* WHAT TO DO NEXT — one box, one instruction. */}
+      <div className="adm-sl-next">
+        <div className="adm-sl-next-k">WHAT TO DO NEXT</div>
+        {!lead.owner_id ? (
+          <>
+            <div className="adm-sl-next-t">Claim it before you reach out</div>
+            <div className="adm-sl-next-b">
+              The rules say the claim comes first, so nobody else starts the same conversation.
+              {gate.known ? ` ${gate.why}` : " Run the site score first — you need the gap to talk about."}
+            </div>
+            <div className="adm-sl-next-a">
+              <button className="btn btn-accent" disabled={busy} onClick={() => onClaim(false)}>
+                Claim this contact
+              </button>
+              {unclaimedSiblings.length > 0 && (
+                <button className="btn" disabled={busy} onClick={() => onClaim(true)}>
+                  Claim the whole firm ({unclaimedSiblings.length + 1} people)
+                </button>
+              )}
+            </div>
+          </>
+        ) : claim.state === "claim_expired" ? (
+          <>
+            <div className="adm-sl-next-t">Your claim has run out</div>
+            <div className="adm-sl-next-b">{claim.why} Log a first contact now and it is yours again, or hand it back.</div>
+            <div className="adm-sl-next-a">
+              <button className="btn btn-accent" onClick={() => onLog("email")}>Log the first email</button>
+              <button className="btn" disabled={busy} onClick={onRelease}>Hand it back</button>
+            </div>
+          </>
+        ) : cadence.finished ? (
+          <>
+            <div className="adm-sl-next-t">All five touches are done</div>
+            <div className="adm-sl-next-b">
+              The breakup email has gone. The rules say set the status and move on rather than keep poking.
+            </div>
+            <div className="adm-sl-next-a">
+              <button className="btn" onClick={() => onPatch({ stage: "lost", lost_reason: "No reply after the full cadence.", closed_at: new Date().toISOString() }, "Lost — no reply after all five touches.")}>
+                Mark lost — no reply
+              </button>
+              <button className="btn" onClick={() => onPatch({ stage: "follow_up" }, "Kept for a later follow-up.")}>
+                Keep for later
+              </button>
+            </div>
+          </>
+        ) : cadence.step ? (
+          <>
+            <div className="adm-sl-next-t">
+              {cadence.step.label} — day {cadence.step.day}
+              {cadence.over > 0 ? ` · ${cadence.over} day${cadence.over === 1 ? "" : "s"} late` : cadence.over === 0 ? " · due today" : ` · ${Math.abs(cadence.over)} days from now`}
+            </div>
+            <div className="adm-sl-next-b">{cadence.step.hint}</div>
+            <div className="adm-sl-next-a">
+              <button className="btn btn-accent" onClick={() => onLog(cadence.step.kind)}>
+                Log {cadence.step.kind === "call" ? "a call" : "the email"}
+              </button>
+              <button className="btn" onClick={() => onLog("note")}>Add a note</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="adm-sl-next-t">Nothing is owed right now</div>
+            <div className="adm-sl-next-b">{claim.why}</div>
+            <div className="adm-sl-next-a">
+              <button className="btn" onClick={() => onLog("note")}>Add a note</button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* THE FIVE TOUCHES, as a row of dots you can read in one glance. */}
+      {lead.owner_id && (
+        <div className="adm-sl-cadence">
+          <div className="label">The 5-touch cadence</div>
+          <div className="adm-sl-dots">
+            {CADENCE.map((c) => {
+              const done = cadence.done >= c.n;
+              const current = cadence.step?.n === c.n;
+              return (
+                <div key={c.n} className={`adm-sl-dot${done ? " done" : ""}${current ? " current" : ""}`} title={`${c.label} — day ${c.day}. ${c.hint}`}>
+                  <span className="adm-sl-dot-n">{done ? "✓" : c.n}</span>
+                  <span className="adm-sl-dot-l">{c.label}</span>
+                  <span className="adm-sl-dot-d">Day {c.day}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="adm-sl-cadence-note">
+            {cadence.done} of {CADENCE.length} logged. Counted from real calls and emails on the timeline —
+            nothing here is a number somebody types in.
+          </div>
+        </div>
+      )}
+
+      {/* LOG SOMETHING */}
+      <div className="adm-sl-actions">
+        <div className="label" style={{ marginBottom: 8 }}>Log what you did</div>
+        <div className="adm-sl-actrow">
+          <button className="btn" onClick={() => onLog("call")} disabled={!lead.phone} title={lead.phone ? undefined : "No phone number on this contact"}>Call</button>
+          <button className="btn" onClick={() => onLog("email")} disabled={!lead.email} title={lead.email ? undefined : "No email on this contact"}>Email</button>
+          <button className="btn" onClick={() => onLog("linkedin")} disabled={!lead.linkedin_url} title={lead.linkedin_url ? undefined : "No LinkedIn on this contact"}>LinkedIn</button>
+          <button className="btn" onClick={() => onLog("text")} disabled={!text.allowed} title={text.reason}>Text</button>
+          <button className="btn" onClick={() => onLog("note")}>Note</button>
+        </div>
+        {/* The refusal is always written out. A greyed button with no reason
+            reads as a broken button, and then people stop trusting the page. */}
+        {!text.allowed && <div className="adm-sl-gate">Texting: {text.reason}</div>}
+      </div>
+
+      {/* STAGE + OWNER */}
+      <div className="adm-sl-two">
+        <label className="adm-sl-fieldwrap">
+          <div className="label">Stage</div>
+          <select className="adm-input" value={lead.stage} onChange={(e) => onPatch(
+            { stage: e.target.value, ...(["won", "lost", "skip_90", "bad_contact"].includes(e.target.value) ? { closed_at: new Date().toISOString() } : { closed_at: null }) },
+            `${LEAD_STAGE_LABELS[lead.stage]} → ${LEAD_STAGE_LABELS[e.target.value]}`
+          )}>
+            {LEAD_STAGES.map((s) => <option key={s} value={s}>{LEAD_STAGE_LABELS[s]}</option>)}
+          </select>
+          <div className="adm-sl-help">{LEAD_STAGE_HELP[lead.stage]}</div>
+        </label>
+        <label className="adm-sl-fieldwrap">
+          <div className="label">Whose is it</div>
+          <select className="adm-input" value={lead.owner_id || ""} onChange={(e) => {
+            const v = e.target.value || null;
+            const stamp = new Date().toISOString();
+            /* A NEW owner gets a NEW clock. Keeping the previous rep's
+             * `claimed_at` handed the next person a claim that was already
+             * three weeks old, so their card read "run out" the moment they
+             * got it and the sweep took it back that night. Unassigning clears
+             * the cadence too, so the next claimer does not inherit a sequence
+             * that started weeks ago. */
+            onPatch(
+              v
+                ? (v === lead.owner_id
+                  ? { owner_id: v }
+                  : { owner_id: v, claimed_at: stamp, cadence_started_at: stamp, claim_contacted_at: null })
+                : { owner_id: null, claimed_at: null, cadence_started_at: null, claim_contacted_at: null },
+              v ? `Assigned to ${teamName(v)}` : "Handed back to the floor"
+            );
+          }}>
+            <option value="">Nobody — on the floor</option>
+            {team.filter((t) => t.active).map((t) => <option key={t.user_id} value={t.user_id}>{t.full_name || t.email}</option>)}
+          </select>
+          <div className="adm-sl-help">
+            {lead.imported_owner_name
+              ? `The sheet said "${lead.imported_owner_name}".`
+              : "Anybody on the team can take or move this — there are no locks between reps."}
+          </div>
+        </label>
+      </div>
+
+      {/* NEXT STEP — free text, because half of selling is a sentence you
+          wrote to yourself last Tuesday. */}
+      <div style={{ marginTop: 18 }}>
+        <div className="label" style={{ marginBottom: 6 }}>Next step</div>
+        <NextStep lead={lead} onPatch={onPatch} />
+      </div>
+
+      {mine && ["proposal", "meeting"].includes(lead.stage) && (
+        <button className="btn btn-accent" style={{ marginTop: 18 }} onClick={onFlip}>
+          They signed — mark as won
+        </button>
+      )}
+    </>
+  );
+}
+
+function NextStep({ lead, onPatch }) {
+  const [v, setV] = useState(lead.next_step || "");
+  const [dirty, setDirty] = useState(false);
+  // Never clobber an unsaved edit — see LeadField.
+  useEffect(() => {
+    setV((cur) => (dirty ? cur : lead.next_step || ""));
+  }, [lead.id, lead.next_step]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setDirty(false); }, [lead.id]);
+  return (
+    <>
+      <TextArea
+        value={v}
+        onChange={(e) => { setV(e.target.value); setDirty(true); }}
+        placeholder="What you will do next, in your own words…"
+        style={{ minHeight: 64 }}
+      />
+      {dirty && (
+        <button className="btn" style={{ marginTop: 6 }} onClick={async () => {
+          if (await onPatch({ next_step: v.trim() || null })) { setDirty(false); toast.success("Saved"); }
+        }}>Save the next step</button>
+      )}
+    </>
+  );
+}
+
+/* ================================================================== */
+/* TIMELINE                                                            */
+/* ================================================================== */
+
+const TYPE_LABEL = {
+  call: "Call", email: "Email", text: "Text", linkedin: "LinkedIn",
+  note: "Note", status_change: "Stage change", assigned: "Assigned",
+  claim: "Claimed", unclaim: "Unclaimed", reopen: "Back on the floor",
+  score: "Site score", proposal: "Proposal", import: "Imported",
+  cadence: "Cadence", open: "They opened an email",
+};
+
+function TimelineTab({ activity, teamName }) {
+  if (activity === null) return <div className="adm-sl-loading">Reading the timeline…</div>;
+  if (!activity.length) {
+    return (
+      <div className="adm-sl-empty">
+        <strong>Nothing has happened yet.</strong>
+        <div>The first call or email you log starts the timeline. Nothing here is ever
+          overwritten — that is the whole difference from the spreadsheet.</div>
+      </div>
+    );
+  }
+  return (
+    <div className="adm-timeline">
+      {activity.map((a) => (
+        <div key={a.id} className="adm-timeline-item">
+          <div className="adm-sl-tl-top">
+            <span className="adm-sl-tl-type">{TYPE_LABEL[a.type] || a.type}</span>
+            {a.outcome && <span className="adm-sl-tl-out">{a.outcome.toUpperCase().replace(/_/g, " ")}</span>}
+            <span className="adm-sl-tl-when">{timeAgo(a.created_at).toUpperCase()}</span>
+          </div>
+          {a.body && <div className="adm-sl-tl-body">{a.body}</div>}
+          <div className="adm-sl-tl-who">{a.actor ? teamName(a.actor) || "someone" : "the system"}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ================================================================== */
+/* DETAILS                                                             */
+/* ================================================================== */
+
+/* The person's fields live on the lead, the firm's on the company. That split
+ * is the point: change the website here and it changes for everybody at the
+ * firm, which is what stops the sheet's four-copies-three-stale problem. */
+
+function DetailsTab({ lead, company, onPatch, reload }) {
+  const [c, setC] = useState(company || null);
+  const [cDirty, setCDirty] = useState(false);
+  /* Keyed on the firm's ID, not the object.
+   *
+   * `company` is a fresh object out of a Map rebuilt on every load, so
+   * depending on the object meant ANY background refresh — logging a call in
+   * another tab of this same drawer, the adm-refresh event — replaced the form
+   * mid-keystroke and made the Save button vanish. Depending on the id means
+   * the form only resets when it is genuinely a different firm.
+   *
+   * The trade-off, stated: if somebody else edits this firm while you are
+   * typing, you will not see their change until you save or reopen. Losing
+   * somebody's typing with no message is worse. */
+  useEffect(() => { setC(company || null); setCDirty(false); }, [company?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveCompany = async () => {
+    const res = await upsertCompany({
+      id: c.id, name: c.name, domain: c.domain || null, phone: c.phone || null,
+      city: c.city || null, state: c.state || null, vertical: c.vertical || null,
+      employees: c.employees === "" ? null : Number(c.employees) || null,
+      annual_revenue: c.annual_revenue === "" ? null : Number(c.annual_revenue) || null,
+      notes: c.notes || null,
+    });
+    if (!res.ok) { toast.error("Could not save the firm", res.error); return; }
+    setCDirty(false);
+    toast.success("Firm saved", "Everybody at this firm sees the change.");
+    await reload();
+  };
+
+  return (
+    <>
+      <div className="label" style={{ marginBottom: 8 }}>The person</div>
+      <div className="adm-sl-grid2">
+        <LeadField lead={lead} k="name" label="Name" onPatch={onPatch} />
+        <LeadField lead={lead} k="title" label="Job title" onPatch={onPatch} />
+        <LeadField lead={lead} k="email" label="Email" onPatch={onPatch} />
+        <LeadField lead={lead} k="phone" label="Phone" onPatch={onPatch} />
+        <LeadField lead={lead} k="seniority" label="Seniority" onPatch={onPatch} />
+        <LeadField lead={lead} k="department" label="Department" onPatch={onPatch} />
+        <LeadField lead={lead} k="linkedin_url" label="LinkedIn" onPatch={onPatch} />
+        <LeadField lead={lead} k="city" label="City" onPatch={onPatch} />
+      </div>
+
+      <div className="label" style={{ margin: "22px 0 8px" }}>
+        The firm{c ? "" : " — none linked"}
+      </div>
+      {!c ? (
+        <div className="adm-sl-empty">
+          <strong>This contact has no firm attached.</strong>
+          <div>Company facts — the website, the score, the revenue — live on the firm so they are
+            not copied onto every person and left to go stale. Imported rows get one automatically.</div>
+        </div>
+      ) : (
+        <>
+          <div className="adm-sl-grid2">
+            {[["name", "Company"], ["domain", "Website"], ["phone", "Phone"], ["vertical", "Industry"],
+              ["city", "City"], ["state", "State"], ["employees", "Employees"], ["annual_revenue", "Annual revenue"]].map(([k, label]) => (
+              <Field key={k} label={label}>
+                <TextInput value={c[k] ?? ""} onChange={(e) => { setC({ ...c, [k]: e.target.value }); setCDirty(true); }} />
+              </Field>
+            ))}
+          </div>
+          <Field label="Notes about the firm">
+            <TextArea value={c.notes ?? ""} onChange={(e) => { setC({ ...c, notes: e.target.value }); setCDirty(true); }} />
+          </Field>
+          {c.site_score !== null && c.site_score !== undefined && (
+            <div className="adm-sl-scored">
+              Site score <strong>{c.site_score}</strong>, measured{" "}
+              {c.site_score_at ? timeAgo(c.site_score_at) : "at an unknown time"}.
+              {c.site_score_note ? ` ${c.site_score_note}` : ""}
+            </div>
+          )}
+          {cDirty && <button className="btn btn-accent" onClick={saveCompany}>Save the firm</button>}
+        </>
+      )}
+
+      {lead.imported_owner_name && (
+        <div className="adm-sl-imported">
+          Imported from a spreadsheet. The Sales Owner column said{" "}
+          <strong>&ldquo;{lead.imported_owner_name}&rdquo;</strong>. That text is kept exactly as it was
+          typed so a wrong match can be found later.
+        </div>
+      )}
+    </>
+  );
+}
+
+function LeadField({ lead, k, label, onPatch }) {
+  const [v, setV] = useState(lead[k] ?? "");
+  const [dirty, setDirty] = useState(false);
+  /* Same reason as DetailsTab: `lead` is a new object on every refresh, so
+   * depending on it wiped whatever was half-typed. Depend on the id and the
+   * saved value, and never overwrite an unsaved edit. */
+  useEffect(() => {
+    setV((cur) => (dirty ? cur : lead[k] ?? ""));
+  }, [lead.id, lead[k], k]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setDirty(false); }, [lead.id, k]);
+  return (
+    <Field label={label}>
+      <TextInput
+        value={v}
+        onChange={(e) => { setV(e.target.value); setDirty(true); }}
+        onBlur={async () => {
+          if (!dirty) return;
+          if (await onPatch({ [k]: v.trim() || null })) setDirty(false);
+        }}
+      />
+    </Field>
+  );
+}
+
+/* ================================================================== */
+/* PROPOSALS                                                           */
+/* ================================================================== */
+
+const PROPOSAL_STATUS = [
+  ["draft", "Draft"], ["sent", "Sent"], ["viewed", "They opened it"],
+  ["won", "Won"], ["lost", "Lost"], ["withdrawn", "Withdrawn"],
+];
+
+function ProposalsTab({ proposals, lead, member, onAdd, reload, onPatch }) {
+  return (
+    <>
+      <div className="adm-sl-rowbetween">
+        <div className="label">Proposals</div>
+        <button className="btn btn-accent" onClick={onAdd}>+ New proposal</button>
+      </div>
+
+      {!proposals.length ? (
+        <div className="adm-sl-empty">
+          <strong>No proposal yet.</strong>
+          <div>The spreadsheet stops at &ldquo;meeting held&rdquo;, so there is no record of what was offered
+            or why it was lost — which is the half that would tell us what to do differently.</div>
+        </div>
+      ) : proposals.map((p) => (
+        <div key={p.id} className="adm-sl-prop">
+          <div className="adm-sl-prop-top">
+            <div>
+              <div className="adm-sl-prop-t">{p.title}</div>
+              <div className="adm-sl-prop-s">
+                {[p.package, p.term, p.sent_at ? `sent ${timeAgo(p.sent_at)}` : "not sent yet",
+                  p.viewed_at ? `opened ${timeAgo(p.viewed_at)}` : null].filter(Boolean).join(" · ")}
+              </div>
+            </div>
+            <div className="adm-sl-prop-amt">{money(p.amount_cents)}</div>
+          </div>
+          <div className="adm-sl-prop-foot">
+            <select className="adm-input" style={{ width: 170 }} value={p.status} onChange={async (e) => {
+              const status = e.target.value;
+              const now = new Date().toISOString();
+              const res = await upsertProposal({
+                id: p.id, status,
+                ...(status === "sent" && !p.sent_at ? { sent_at: now } : {}),
+                ...(status === "viewed" && !p.viewed_at ? { viewed_at: now } : {}),
+                ...(["won", "lost", "withdrawn"].includes(status) ? { decided_at: now } : {}),
+              });
+              if (!res.ok) { toast.error("Could not save", res.error); return; }
+              await addLeadActivity({ leadId: lead.id, actor: member.user_id, type: "proposal", body: `Proposal "${p.title}" → ${status}.` });
+              if (status === "won") await onPatch({ stage: "won", became_customer: true, closed_at: now }, "Proposal won.");
+              if (status === "lost") await onPatch({ stage: "lost", closed_at: now }, "Proposal lost.");
+              await reload();
+            }}>
+              {PROPOSAL_STATUS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            {p.doc_url && <a className="adm-sl-link" href={p.doc_url} target="_blank" rel="noopener noreferrer">Open the document</a>}
+            <button className="btn btn-sm" onClick={async () => {
+              const res = await deleteProposal(p.id);
+              if (!res.ok) { toast.error("Could not delete", res.error); return; }
+              toast.info("Proposal deleted");
+              await reload();
+            }}>Delete</button>
+          </div>
+          {p.lost_reason && <div className="adm-sl-prop-lost">Lost because: {p.lost_reason}</div>}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/* ================================================================== */
+/* PLAYBOOK                                                            */
+/* ================================================================== */
+
+/* The Rules of Engagement tab, on the screen where the work happens. It lived
+ * in a spreadsheet tab nobody opened twice. */
+
+function PlaybookTab({ lead, company, cadence }) {
+  const g = scoreGate(company?.site_score);
+  return (
+    <>
+      <div className="label" style={{ marginBottom: 8 }}>The 7 moves — every strong cold touch hits these, in order</div>
+      {SEVEN_MOVES.map((m) => (
+        <div key={m.n} className="adm-sl-move">
+          <span className="adm-sl-move-n">{m.n}</span>
+          <div>
+            <div className="adm-sl-move-t">{m.name}</div>
+            <div className="adm-sl-move-b">{m.body}</div>
+            {m.n === 3 && (
+              <div className="adm-sl-move-x">
+                For this one: ask ChatGPT &ldquo;best {company?.vertical || lead.vertical || "business"} in{" "}
+                {company?.city || lead.city || "their city"}&rdquo; and screenshot who comes up instead of them.
+              </div>
+            )}
+            {m.n === 6 && g.known && (
+              <div className="adm-sl-move-x">
+                For this one: their site scores <strong>{g.score}</strong>. {g.why} Name the gap — never the fixes.
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+
+      <div className="label" style={{ margin: "22px 0 8px" }}>The cadence — 5 touches over about 2 weeks</div>
+      {CADENCE.map((c) => (
+        <div key={c.n} className={`adm-sl-cad${cadence.done >= c.n ? " done" : ""}`}>
+          <span className="adm-sl-cad-d">Day {c.day}</span>
+          <span className="adm-sl-cad-l">{c.label}</span>
+          <span className="adm-sl-cad-h">{c.hint}</span>
+        </div>
+      ))}
+
+      <div className="adm-sl-rules">
+        <div><strong>Keep it high level.</strong> Reference the score and the gap — never hand over the specific
+          fixes. The audit is what they pay for.</div>
+        <div><strong>Scarcity is real.</strong> One client per market. Say so.</div>
+        <div><strong>Texting.</strong> Only after they have opened an email, and only one. Cold-blasting texts
+          gets our numbers flagged and burns the whole list.</div>
+        <div><strong>{ROE.SKIP_SCORE_AT_OR_ABOVE} or above is not a prospect.</strong> Mark it Skip and spend the
+          touch somewhere it can land.</div>
+      </div>
+    </>
+  );
+}
+
+/* ================================================================== */
+/* MODALS                                                              */
+/* ================================================================== */
+
+function LogModal({ kind, lead, member, text, onClose, reload }) {
+  const [outcome, setOutcome] = useState(kind === "call" ? "talked" : "talked");
+  const [body, setBody] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    if (kind === "note" && !body.trim()) { toast.warn("Write the note first"); return; }
+    /* No client-side re-check here on purpose. Re-running textGate against the
+     * same object the drawer already used is not a check — it evaluates
+     * identical inputs and can never disagree. The real check is the database
+     * claim below, which is the only one a second tab cannot beat. */
+    setBusy(true);
+    /* THE COUNTER IS BUMPED BEFORE THE TIMELINE ROW, not after.
+     *
+     * The other way round, a failed counter write left the text on the record
+     * with `texts_sent` still 0 — so the gate opened again, and again. Failing
+     * on the counter now means nothing is logged at all, which is recoverable;
+     * failing the other way meant unlimited texts, which is the one thing this
+     * gate exists to prevent. */
+    /* THE TEXT IS CLAIMED FROM THE DATABASE BEFORE ANYTHING IS LOGGED.
+     *
+     * `texts_sent = texts_sent + 1` in the browser is a read-modify-write: two
+     * open tabs both read 0 and both write 1, so two texts go out under a
+     * counter that says one. claimTextSend is one statement that only
+     * increments if the lead is still under the limit, so exactly one caller
+     * wins. And it happens FIRST — a failure here means nothing is logged,
+     * which is recoverable, where the other order meant the text was on the
+     * record with the gate still open. */
+    if (kind === "text") {
+      const claimed = await claimTextSend(lead.id);
+      if (!claimed.ok) {
+        setBusy(false);
+        toast.error("That text was not logged", claimed.error);
+        return;
+      }
+    }
+    const res = await addLeadActivity({
+      leadId: lead.id, actor: member.user_id, type: kind,
+      outcome: kind === "note" ? null : outcome, body: body.trim() || null,
+    });
+    setBusy(false);
+    if (!res.ok) { toast.error("Could not log that", res.error); return; }
+    await logActivity({
+      actor: member.user_id, kind: `lead_${kind}`,
+      title: `${kind === "note" ? "Note on" : `${kind[0].toUpperCase()}${kind.slice(1)} to`} ${lead.name || lead.company || "a lead"}`,
+      body: body.trim() || outcome,
+    });
+    toast.success("Logged", "It is on the timeline and the timers have reset.");
+    onClose();
+    await reload();
+  };
+
+  const LABEL = { call: "a call", email: "an email", text: "a text", linkedin: "a LinkedIn touch", note: "a note" };
+
+  return (
+    <Modal open onClose={onClose} kicker="SALES" title={`Log ${LABEL[kind]}`} width={520}
+      footer={<>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-accent" onClick={save} disabled={busy}>{busy ? "Saving…" : "Log it"}</button>
+      </>}>
+      {kind === "text" && (
+        <div className="adm-sl-warn adm-sl-warn-flat">
+          <strong>This is your one text.</strong> {text.reason} After this the button locks for good.
+        </div>
+      )}
+      {kind !== "note" && (
+        <Field label="How did it go" hint="This is what the rep stats count, so it is worth being honest about.">
+          <Select value={outcome} onChange={(e) => setOutcome(e.target.value)} options={OUTCOMES} />
+        </Field>
+      )}
+      <Field label={kind === "note" ? "The note" : "Anything worth remembering (optional)"}>
+        <TextArea value={body} onChange={(e) => setBody(e.target.value)} autoFocus />
+      </Field>
+    </Modal>
+  );
+}
+
+function ProposalModal({ lead, company, member, onClose, reload }) {
+  const [f, setF] = useState({ title: "", package: "", amount: "", term: "monthly", doc_url: "", notes: "" });
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  const save = async () => {
+    if (!f.title.trim()) { toast.warn("Give the proposal a name"); return; }
+    /* `"abc".replace(/[^0-9.]/g,"")` is "", and `Number("")` is 0 — finite, so
+     * the obvious guard passed and "TBD" saved as $0.00. Check the digits are
+     * actually there. */
+    // A leading minus was silently stripped, so "-500" saved as $500.
+    if (/^\s*-/.test(f.amount || "")) { toast.warn("An amount cannot be negative"); return; }
+    const digits = String(f.amount ?? "").replace(/[^0-9.]/g, "");
+    const cents = digits ? Math.round(Number(digits) * 100) : null;
+    if (f.amount.trim() && (!digits || !Number.isFinite(cents))) {
+      toast.warn("That amount is not a number", `Write it in dollars, like 4500. "${f.amount.trim()}" would save as $0.`);
+      return;
+    }
+    setBusy(true);
+    const res = await upsertProposal({
+      lead_id: lead.id, company_id: company?.id || null,
+      title: f.title.trim(), package: f.package.trim() || null,
+      amount_cents: cents, term: f.term, doc_url: f.doc_url.trim() || null,
+      notes: f.notes.trim() || null, status: "draft", created_by: member.user_id,
+    });
+    setBusy(false);
+    if (!res.ok) { toast.error("Could not save", res.error); return; }
+    await addLeadActivity({ leadId: lead.id, actor: member.user_id, type: "proposal", body: `Proposal drafted: ${f.title.trim()}.` });
+    toast.success("Proposal saved", "Set it to Sent once it goes out.");
+    onClose();
+    await reload();
+  };
+
+  return (
+    <Modal open onClose={onClose} kicker="SALES" title="New proposal" width={560}
+      footer={<>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn btn-accent" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save proposal"}</button>
+      </>}>
+      <Field label="What is it called"><TextInput value={f.title} onChange={set("title")} placeholder="Radar Pro — 6 month GEO package" autoFocus /></Field>
+      <div className="adm-sl-grid2">
+        <Field label="Package"><TextInput value={f.package} onChange={set("package")} placeholder="Radar Pro" /></Field>
+        <Field label="Amount" hint="Dollars. 4500 means $4,500.">
+          <TextInput value={f.amount} onChange={set("amount")} placeholder="4500" inputMode="decimal" />
+        </Field>
+        <Field label="How often">
+          <Select value={f.term} onChange={set("term")} options={[["monthly", "Every month"], ["one-off", "One-off"], ["annual", "Yearly"]]} />
+        </Field>
+        <Field label="Link to the document"><TextInput value={f.doc_url} onChange={set("doc_url")} placeholder="https://…" /></Field>
+      </div>
+      <Field label="Notes"><TextArea value={f.notes} onChange={set("notes")} /></Field>
+    </Modal>
+  );
+}

@@ -14,12 +14,58 @@ import { getSupabase, isConfigured } from "./supabase.js";
  * counting rules — a client page that counted differently from the saved
  * summary would be worse than no summary. */
 import { assembleFacts, deterministicStanding } from "../../lib/client-standing.js";
+import { assembleConsoleFacts, deterministicConsoleReport } from "../../lib/console-report.js";
+/* Same reason, one level up: the report's counting is shared with
+ * api/client-report.js so preview mode and the real thing count identically. */
+import { assembleReportFacts, deterministicReport, buildFactsText } from "../../lib/client-report.js";
+/* The Rules of Engagement engine. Pure, and shared with api/sales-sweep.js and
+ * tests/sales — the page a rep reads and the job that runs overnight must
+ * never disagree about whose claim has run out. */
+import { isOpenStage as isOpen } from "../../lib/sales-rules.js";
+import { normaliseDomain } from "../../lib/sales-import.js";
 
-export const LEAD_STAGES = ["new", "contacted", "follow_up", "meeting", "proposal", "won", "lost"];
+/* ONE STAGE LADDER, replacing the outreach sheet's two overlapping columns.
+ *
+ * The sheet has "Contacted?" (Yes - Email / No) AND "Sales Cycle Status"
+ * (Contacted / Closed - Lost / Bad contact info). Reps fill one or the other,
+ * so neither can be trusted. These are the twelve the database accepts —
+ * migration 0009's admin_leads_stage_check is the same list, and
+ * tests/sales/test.mjs reads that constraint out of the SQL file and checks
+ * the two have not drifted. */
+export const LEAD_STAGES = [
+  "new", "researching", "contacted", "in_conversation", "follow_up",
+  "meeting", "proposal", "won", "lost", "skip_90", "bad_contact", "reopened",
+];
 export const LEAD_STAGE_LABELS = {
-  new: "New", contacted: "Contacted", follow_up: "Follow up",
+  new: "New", researching: "Researching", contacted: "Contacted",
+  in_conversation: "In conversation", follow_up: "Follow up",
   meeting: "Meeting", proposal: "Proposal", won: "Won", lost: "Lost",
+  skip_90: "Skip – 90+", bad_contact: "Bad contact info", reopened: "Reopened",
 };
+/* What each one means, shown in the picker. Same reason as the email statuses:
+ * a status nobody can explain out loud does not get used. */
+export const LEAD_STAGE_HELP = {
+  new: "Nobody has worked this yet.",
+  researching: "Claimed. Reading up on them before the first touch.",
+  contacted: "We have reached out. No reply yet.",
+  in_conversation: "They answered. This is a live conversation.",
+  follow_up: "Waiting on them, with a reason to chase.",
+  meeting: "A meeting is booked or has happened.",
+  proposal: "A proposal is out with them.",
+  won: "They signed. Flip them to a client from here.",
+  lost: "Decided against us, or not a fit.",
+  skip_90: "Their site scores 90 or above — already doing well, so not a prospect.",
+  bad_contact: "The email bounces or the number is dead. Nobody's fault.",
+  reopened: "Was claimed, went quiet, came back to the floor.",
+};
+/* The stages nobody should be chasing. `skip_90` and `bad_contact` are in here
+ * on purpose — they are not failures, but a rep who keeps being nagged about a
+ * firm they were told to skip stops reading the nags. Before Aug 21 2026 four
+ * different places wrote a bare ["won","lost"], which is how a skipped lead
+ * would have kept turning up on the Work page forever. lib/sales-rules.js
+ * exports the same list; this re-export is so the pages that already import
+ * from data.js do not need a second import. */
+export { CLOSED_STAGES as LEAD_CLOSED_STAGES, isOpenStage as isLeadOpen } from "../../lib/sales-rules.js";
 export const TASK_STATUSES = ["todo", "in_progress", "done", "blocked"];
 export const TASK_STATUS_LABELS = { todo: "To do", in_progress: "In progress", done: "Done", blocked: "Blocked" };
 /* Notion parity — these are the Operations database's own option lists, copied
@@ -97,11 +143,23 @@ const previewStore = {
     { id: "w2", client_id: "c1", week_no: 2, target_date: daysAgo(10).slice(0, 10), week_status: "complete", readiness: "verified", what_we_did: "GEO head package + AI files shipped.", what_moved: "AI intent 42 → 100.", whats_next: "Listing schema.", talking_points: null, created_at: daysAgo(10) },
     { id: "w3", client_id: "c1", week_no: 3, target_date: daysAgo(3).slice(0, 10), week_status: "in_progress", readiness: "draft", what_we_did: "Listing schema rollout in progress.", what_moved: null, whats_next: null, talking_points: null, created_at: daysAgo(3) },
   ],
+  /* Every state the Sales page has to be able to draw, on purpose:
+   * l1  a live meeting with a proposal out
+   * l2  a claim that has gone COLD — 16 days quiet, the sweep will reopen it
+   * l3  a claim whose FIRST CONTACT is late — claimed, never touched
+   * l4  won, already a client
+   * l5  unclaimed, at a firm somebody else is already working (the warning)
+   * l6  the second contact at that same firm, claimed by another rep
+   * l7  a firm scoring 93 — Skip - 90+, and it must stay out of every queue
+   */
   leads: [
-    { id: "l1", name: "Sarah Chen", company: "Chen Dental Studio", domain: "chendental-sample.com", email: "sarah@sample.com", phone: "(555) 201-8890", city: "Austin", state: "TX", vertical: "medspa", source: "platform", stage: "meeting", owner_id: "preview-user", score: 86, notes: "Booked for Tuesday 2pm. Interested in the Radar plan.", became_customer: false, created_at: daysAgo(9), last_activity_at: daysAgo(1), next_follow_up_at: daysAgo(0), follow_up_note: "Send the audit first." },
-    { id: "l2", name: "Tom Rivera", company: "Rivera & Sons HVAC", domain: "riverahvac-sample.com", email: "tom@sample.com", phone: "(555) 318-2244", city: "Birmingham", state: "AL", vertical: "generic", source: "csv", stage: "contacted", owner_id: "preview-user", score: 71, notes: "Left voicemail. Callback Friday.", became_customer: false, created_at: daysAgo(6), last_activity_at: daysAgo(2), next_follow_up_at: daysAgo(1), follow_up_note: "Second attempt — try the mobile." },
-    { id: "l3", name: "Priya Patel", company: "Patel Realty", domain: "patelrealty-sample.com", email: "priya@sample.com", phone: null, city: "Destin", state: "FL", vertical: "realtor", source: "platform", stage: "new", owner_id: "preview-user", score: 92, notes: null, became_customer: false, created_at: daysAgo(1), last_activity_at: null },
-    { id: "l4", name: "Greg Olson", company: "Olson Law PLLC", domain: "olsonlaw-sample.com", email: "greg@sample.com", phone: "(555) 442-9012", city: "Tampa", state: "FL", vertical: "lawyer", source: "manual", stage: "won", owner_id: "preview-user", score: 88, notes: "Signed Radar Pro. Handed to onboarding.", became_customer: true, created_at: daysAgo(30), last_activity_at: daysAgo(12) },
+    { id: "l1", name: "Sarah Chen", company: "Bright Coast Medspa", company_id: "co3", list_id: "li3", title: "Owner", seniority: "Owner", department: null, linkedin_url: null, domain: "brightcoast-sample.com", email: "sarah@sample.com", phone: "(555) 201-8890", city: "Destin", state: "FL", vertical: "medspa", source: "platform", stage: "proposal", owner_id: "preview-user", score: 86, notes: "Booked for Tuesday 2pm. Wants the audit first.", next_step: "Send the audit before the 2pm call", became_customer: false, created_at: daysAgo(9), last_activity_at: daysAgo(1), claimed_at: daysAgo(9), first_contact_at: daysAgo(8), claim_contacted_at: daysAgo(8), last_touch_at: daysAgo(1), cadence_started_at: daysAgo(9), cadence_paused: false, email_opened_at: daysAgo(7), texts_sent: 0, last_text_at: null, imported_owner_name: null, next_follow_up_at: daysAgo(0), follow_up_note: "Send the audit first." },
+    { id: "l2", name: "Tom Rivera", company: "Westpoint Auto Group", company_id: "co2", list_id: "li2", title: "Internet Director", seniority: "Director", department: "Marketing", linkedin_url: null, domain: "westpointauto-sample.com", email: "tom@sample.com", phone: "(555) 318-2244", city: "San Francisco", state: "California", vertical: "car dealership", source: "sheet", stage: "contacted", owner_id: "preview-user", score: 71, notes: "Left voicemail. Callback Friday.", next_step: "Try the mobile", became_customer: false, created_at: daysAgo(30), last_activity_at: daysAgo(16), claimed_at: daysAgo(30), first_contact_at: daysAgo(28), claim_contacted_at: daysAgo(28), last_touch_at: daysAgo(16), cadence_started_at: daysAgo(30), cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: "Brandon R" },
+    { id: "l3", name: "Priya Patel", company: "Harborline Realty Group", company_id: "co1", list_id: "li1", title: "Licensed Realtor", seniority: null, department: null, linkedin_url: null, domain: "harborline-sample.com", email: "priya@sample.com", phone: null, city: "Los Angeles", state: "California", vertical: "realtor", source: "sheet", stage: "new", owner_id: "preview-user", score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(9), last_activity_at: null, claimed_at: daysAgo(9), first_contact_at: null, claim_contacted_at: null, last_touch_at: null, cadence_started_at: daysAgo(9), cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: "Larry Pike" },
+    { id: "l4", name: "Greg Olson", company: "Olson Law PLLC", company_id: null, list_id: null, title: "Managing Partner", seniority: "Owner", department: null, linkedin_url: null, domain: "olsonlaw-sample.com", email: "greg@sample.com", phone: "(555) 442-9012", city: "Tampa", state: "FL", vertical: "lawyer", source: "manual", stage: "won", owner_id: "preview-user", score: 88, notes: "Signed Radar Pro. Handed to onboarding.", next_step: null, became_customer: true, created_at: daysAgo(30), last_activity_at: daysAgo(12), claimed_at: daysAgo(30), first_contact_at: daysAgo(29), claim_contacted_at: daysAgo(29), last_touch_at: daysAgo(12), cadence_started_at: daysAgo(30), cadence_paused: false, email_opened_at: daysAgo(28), texts_sent: 1, last_text_at: daysAgo(27), imported_owner_name: null, closed_at: daysAgo(12) },
+    { id: "l5", name: "Marcus Webb", company: "Harborline Realty Group", company_id: "co1", list_id: "li1", title: "Business Development Manager", seniority: "Manager", department: "Sales", linkedin_url: null, domain: "harborline-sample.com", email: "marcus@sample.com", phone: "(555) 310-5460", city: "Los Angeles", state: "California", vertical: "realtor", source: "sheet", stage: "new", owner_id: null, score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(9), last_activity_at: null, claimed_at: null, first_contact_at: null, claim_contacted_at: null, last_touch_at: null, cadence_started_at: null, cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: null },
+    { id: "l6", name: "Dana Whitfield", company: "Harborline Realty Group", company_id: "co1", list_id: "li1", title: "Internet Sales Director", seniority: "Director", department: "Sales", linkedin_url: null, domain: "harborline-sample.com", email: "dana@sample.com", phone: "(555) 310-5461", city: "Los Angeles", state: "California", vertical: "realtor", source: "sheet", stage: "contacted", owner_id: "preview-rep", score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(9), last_activity_at: daysAgo(2), claimed_at: daysAgo(8), first_contact_at: daysAgo(7), claim_contacted_at: daysAgo(7), last_touch_at: daysAgo(2), cadence_started_at: daysAgo(8), cadence_paused: false, email_opened_at: daysAgo(6), texts_sent: 0, last_text_at: null, imported_owner_name: "Hunter Grant" },
+    { id: "l7", name: "Elena Ruiz", company: "Bright Coast Medspa", company_id: "co3", list_id: "li3", title: "Marketing Director", seniority: "Director", department: "Marketing", linkedin_url: null, domain: "brightcoast-sample.com", email: "elena@sample.com", phone: "(555) 201-8891", city: "Destin", state: "FL", vertical: "medspa", source: "sheet", stage: "skip_90", owner_id: null, score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(4), last_activity_at: null, claimed_at: null, first_contact_at: null, claim_contacted_at: null, last_touch_at: null, cadence_started_at: null, cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: null },
   ],
   notes: [
     { id: "n1", author_id: "preview-user", title: "Michelle domain cutover", body: "Registrar is GoDaddy. Nameservers stay, just the A record.\nAsk CJ for the go-ahead before the swap — she has an open house Saturday.", pinned: true, link_type: null, link_id: null, created_at: daysAgo(2), updated_at: daysAgo(1) },
@@ -233,6 +291,64 @@ const previewStore = {
     { id: "et7", mailbox: "growth@aisyndicate.com", thread_id: "s7", status: "done", client_id: "c1", lead_id: null, assigned_to: "preview-user", priority: "normal", subject: "Week 3 report - looks good", from_name: "Dana W.", from_email: "dana@sample.com", snippet: "Got it, thanks - nothing needed from us this week.", last_message_at: new Date(Date.now() - 9 * 86400e3).toISOString(), message_count: 3, last_direction: "in", notes: null, status_changed_at: daysAgo(9), status_changed_by: "preview-user", created_at: daysAgo(11), updated_at: daysAgo(9) },
     { id: "et8", mailbox: "growth@aisyndicate.com", thread_id: "s8", status: "ignored", client_id: null, lead_id: null, assigned_to: null, priority: "low", subject: "The AI search weekly", from_name: "The AI Search Weekly", from_email: "noreply@newsletter-sample.com", snippet: "Perplexity ships a shopping feed.", last_message_at: new Date(Date.now() - 2 * 86400e3).toISOString(), message_count: 1, last_direction: "in", notes: null, status_changed_at: daysAgo(2), status_changed_by: "preview-user", created_at: daysAgo(2), updated_at: daysAgo(2) },
   ],
+
+  /* ---------------- SAMPLE VAULT ----------------
+   * Nothing here is real, and nothing here is scrambled: preview mode has no
+   * server and therefore no VAULT_KEY, so the sample secrets sit in memory in
+   * plain text and vanish on reload. That is stated on the page itself, in the
+   * banner above the list, because a vault that looks encrypted and is not is
+   * the single most dangerous thing this file could pretend to be.
+   *
+   * secret_set_at / secret_fields mirror the real columns so the list, the
+   * badges and the counts behave exactly as they will with a real key. */
+  vaultItems: [
+    { id: "v1", client_id: null, kind: "login", label: "GoDaddy (ours)", description: "Where our own domains are registered.", username: "billing@aisyndicate.com", url: "https://sso.godaddy.com", card_brand: null, card_last4: null, card_exp_month: null, card_exp_year: null, card_holder: null, card_zip: null, secret_set_at: daysAgo(30), secret_fields: ["password", "totp"], secret_by: "preview-user", vault_url: "https://vault.bitwarden.com/#/vault?itemId=sample-1", notes: "Two-factor is on. The codes are in the vault entry.", tags: ["domains"], favorite: true, active: true, sort: 0, added_by: "preview-user", created_at: daysAgo(30), updated_at: daysAgo(30) },
+    { id: "v2", client_id: null, kind: "card", label: "Business card — Chase", description: "The card every subscription is on.", username: null, url: null, card_brand: "Visa", card_last4: "4242", card_exp_month: 11, card_exp_year: 2028, card_holder: "AI SYNDICATE LLC", card_zip: "32541", secret_set_at: daysAgo(30), secret_fields: ["cvv", "number"], secret_by: "preview-user", vault_url: null, notes: "Anthropic, Vercel and Supabase all bill to this.", tags: ["money"], favorite: true, active: true, sort: 1, added_by: "preview-user", created_at: daysAgo(30), updated_at: daysAgo(30) },
+    { id: "v3", client_id: "c1", kind: "login", label: "Lakeside — WordPress admin", description: "Their own website's back end.", username: "aisyndicate", url: "https://lakesiderealty-sample.com/wp-admin", card_brand: null, card_last4: null, card_exp_month: null, card_exp_year: null, card_holder: null, card_zip: null, secret_set_at: daysAgo(21), secret_fields: ["password"], secret_by: "preview-user", vault_url: null, notes: "Editor rights only — they kept the owner account.", tags: ["client site"], favorite: false, active: true, sort: 0, added_by: "preview-user", created_at: daysAgo(21), updated_at: daysAgo(21) },
+    { id: "v4", client_id: "c2", kind: "api_key", label: "Harbor Injury — Cloudflare token", description: "Lets us change their firewall rules.", username: null, url: "https://dash.cloudflare.com", card_brand: null, card_last4: null, card_exp_month: null, card_exp_year: null, card_holder: null, card_zip: null, secret_set_at: null, secret_fields: [], secret_by: null, vault_url: null, notes: "Waiting on the token. Nothing works until it exists.", tags: [], favorite: false, active: true, sort: 0, added_by: "preview-user", created_at: daysAgo(3), updated_at: daysAgo(3) },
+  ],
+  vaultReveals: [
+    { id: "vr1", item_id: "v1", item_label: "GoDaddy (ours)", client_id: null, actor: "preview-user", actor_email: "you@aisyndicate.com", action: "reveal", fields: ["password"], created_at: daysAgo(2) },
+    { id: "vr2", item_id: "v2", item_label: "Business card — Chase", client_id: null, actor: "preview-user", actor_email: "you@aisyndicate.com", action: "reveal", fields: ["number", "cvv"], created_at: daysAgo(5) },
+  ],
+  clientReports: [],
+
+  /* ---- THE SALES SYSTEM (Aug 21 2026) --------------------------------
+   * Shaped like CJ's real outreach sheet rather than like a tidy demo: two
+   * people at the same firm, a claim that has run out, one that has gone cold,
+   * a firm that scores 90+ and is therefore not a prospect at all. If preview
+   * mode only ever showed the happy case, nobody would see the warnings until
+   * they hit them on real data. */
+  companies: [
+    { id: "co1", name: "Harborline Realty Group", name_key: "harborlinerealtygroup", domain: "harborline-sample.com", city: "Los Angeles", state: "California", country: "United States", phone: "(555) 310-5460", vertical: "realtor", employees: 21, annual_revenue: 11026000, linkedin_url: null, facebook_url: null, twitter_url: null, site_score: 58, site_score_at: daysAgo(2), site_score_note: null, client_id: null, notes: null, created_at: daysAgo(9) },
+    { id: "co2", name: "Westpoint Auto Group", name_key: "westpointautogroup", domain: "westpointauto-sample.com", city: "San Francisco", state: "California", country: "United States", phone: "(555) 750-8300", vertical: "car dealership", employees: 90, annual_revenue: 10000000, linkedin_url: null, facebook_url: null, twitter_url: null, site_score: null, site_score_at: null, site_score_note: null, client_id: null, notes: null, created_at: daysAgo(6) },
+    { id: "co3", name: "Bright Coast Medspa", name_key: "brightcoastmedspa", domain: "brightcoast-sample.com", city: "Destin", state: "FL", country: "United States", phone: "(555) 201-8890", vertical: "medspa", employees: 8, annual_revenue: null, linkedin_url: null, facebook_url: null, twitter_url: null, site_score: 93, site_score_at: daysAgo(1), site_score_note: "Already strong — not a prospect.", client_id: null, notes: null, created_at: daysAgo(4) },
+  ],
+  leadLists: [
+    { id: "li1", name: "Luxury Agents", vertical: "realtor", description: "Apollo pull, LA + South Florida", sheet_tab: "Luxury Agents", source_id: "ls1", active: true, sort: 0, created_at: daysAgo(9) },
+    { id: "li2", name: "Car Dealership", vertical: "car dealership", description: "Apollo pull, California", sheet_tab: "Car Dealership", source_id: "ls1", active: true, sort: 1, created_at: daysAgo(6) },
+    { id: "li3", name: "Medspas", vertical: "medspa", description: "Gulf coast", sheet_tab: "Medspas", source_id: "ls2", active: true, sort: 2, created_at: daysAgo(4) },
+  ],
+  proposals: [
+    { id: "pr1", lead_id: "l1", company_id: "co3", title: "Radar Pro — 6 month GEO package", package: "Radar Pro", amount_cents: 450000, currency: "usd", term: "monthly", status: "sent", sent_at: daysAgo(2), viewed_at: daysAgo(1), decided_at: null, lost_reason: null, doc_url: null, notes: null, created_at: daysAgo(2) },
+  ],
+};
+
+/* Sample secrets. In-memory, plain text, preview mode only. There is no key in
+ * the browser and there never will be — see the banner note above. */
+/* Which VALUES somebody actually typed in this tab, as opposed to the made-up
+ * ones seeded below. Keyed "<item id>:<field>", not by item: marking the whole
+ * item meant typing a new password into the sample GoDaddy entry made the
+ * untouched two-factor code claim to be something you had typed.
+ *
+ * Reveal used to call everything "a made-up value from the sample data" —
+ * including a real password somebody had pasted in despite the banner, which is
+ * the exact opposite of the warning preview mode exists to give. */
+const previewTyped = new Set();
+const previewSecrets = {
+  v1: { password: "sample-not-a-real-password-1", totp: "SAMPLEOTPSEED2345" },
+  v2: { number: "4242424242424242", cvv: "123" },
+  v3: { password: "sample-not-a-real-password-3" },
 };
 
 let previewSeq = 100;
@@ -366,9 +482,32 @@ export async function upsertWeekly(patch) {
 /* LEADS                                                                */
 /* ------------------------------------------------------------------ */
 
+/* THE CAP, AND WHY IT IS FETCHED AT +1.
+ *
+ * Every tile, every list and every number on the Sales page is computed from
+ * what this returns. A silent cap therefore does not hide "some old leads" —
+ * it makes the whole page quietly wrong, while the page promises the tiles and
+ * the list are counting the same thing. Import CJ's eight tabs and 1,000 is
+ * reachable in one afternoon.
+ *
+ * So: ask for one more than the cap. That extra row is the only thing that can
+ * tell "exactly 2,000" apart from "2,000 and there are more", and it is what
+ * makes the warning on screen possible. Fetching and printing the same number
+ * means the page is told it saw everything, every time. */
+export const LEAD_FETCH_CAP = 2000;
+export const ACTIVITY_FETCH_CAP = 4000;
+
 export async function listLeads() {
   if (!live()) return { rows: [...previewStore.leads], sample: true };
-  return selectAll("admin_leads", { order: "created_at", ascending: false, limit: 1000 });
+  const res = await selectAll("admin_leads", { order: "created_at", ascending: false, limit: LEAD_FETCH_CAP + 1 });
+  if (res.rows.length > LEAD_FETCH_CAP) {
+    return {
+      ...res,
+      rows: res.rows.slice(0, LEAD_FETCH_CAP),
+      truncated: `Only the ${LEAD_FETCH_CAP} newest contacts were loaded. Everything on this page is counted from those — filter to a list to see the rest.`,
+    };
+  }
+  return res;
 }
 
 export async function upsertLead(patch) {
@@ -395,11 +534,38 @@ export async function insertLeadsBatch(rows) {
   if (!live()) {
     const inserted = rows.map((r) => ({ id: pid("l"), stage: "new", source: "csv", became_customer: false, created_at: new Date().toISOString(), ...r }));
     previewStore.leads.unshift(...inserted);
-    return { ok: true, count: inserted.length, sample: true };
+    return { ok: true, count: inserted.length, ids: inserted.map((r) => r.id), sample: true };
   }
-  const { error, data } = await getSupabase().from("admin_leads").insert(rows).select("id");
-  if (error) return { ok: false, error: error.message };
-  return { ok: true, count: data?.length || rows.length };
+  /* Chunked, for the same reason insertCompaniesBatch is: one statement of two
+   * thousand rows is one thing that can fail, and ONE bad cell fails all of it.
+   * A single unreadable date in row 1,400 used to throw away the other 1,399 —
+   * after the firms for that tab had already been written. Chunking means a
+   * failure names how far it got. */
+  const supabase = getSupabase();
+  let count = 0;
+  /* The ids come back so the caller can write each contact's first timeline
+   * line, paired by position within the chunk.
+   *
+   * Position is only safe here because Postgres returns multi-row
+   * INSERT ... RETURNING in insertion order, and that is worth stating rather
+   * than assuming: it is the one thing standing between a correct import note
+   * and one person's history written onto somebody else's record. Two guards
+   * back it up — the row count must match, and the emails must line up
+   * wherever both sides have one. Anything off and the ids are dropped, so the
+   * caller writes NO notes rather than wrong ones. */
+  const ids = [];
+  for (let i = 0; i < rows.length; i += 200) {
+    const chunk = rows.slice(i, i + 200);
+    const { error, data } = await supabase.from("admin_leads").insert(chunk).select("id, email");
+    if (error) return { ok: false, error: error.message, count, ids, partial: count > 0 };
+    count += data?.length || 0;
+    const rows = data || [];
+    const aligned = rows.length === chunk.length
+      && rows.every((r, j) => !r.email || !chunk[j].email || r.email === chunk[j].email);
+    if (aligned) ids.push(...rows.map((r) => r.id));
+    else return { ok: true, count, ids: [], shortReturn: true };
+  }
+  return { ok: true, count, ids };
 }
 
 export async function listLeadActivity(leadId) {
@@ -416,9 +582,21 @@ export async function listAllLeadActivity(sinceDays = 30) {
   if (!live()) return { rows: [...previewStore.leadActivity], sample: true };
   const since = new Date(Date.now() - sinceDays * 86400000).toISOString();
   const { data, error } = await getSupabase()
-    .from("admin_lead_activity").select("*").gte("created_at", since).order("created_at", { ascending: false }).limit(1000);
+    .from("admin_lead_activity").select("*").gte("created_at", since)
+    .order("created_at", { ascending: false }).limit(ACTIVITY_FETCH_CAP + 1);
   if (error) return { rows: [], error: error.message, sample: false };
-  return { rows: data || [], sample: false };
+  const rows = data || [];
+  if (rows.length > ACTIVITY_FETCH_CAP) {
+    /* This one matters more than it looks: the cadence counts touches from
+     * these rows, so a truncated read makes a lead with all five touches logged
+     * reappear on somebody's day asking for email #1. */
+    return {
+      rows: rows.slice(0, ACTIVITY_FETCH_CAP),
+      sample: false,
+      truncated: `Only the ${ACTIVITY_FETCH_CAP} most recent activity records were loaded, so touch counts and rep numbers below may be low.`,
+    };
+  }
+  return { rows, sample: false };
 }
 
 export async function addLeadActivity({ leadId, actor, type, outcome, body }) {
@@ -738,7 +916,10 @@ export async function getMyWork(userId) {
     if (!prev || a.created_at > prev) lastTouch[a.lead_id] = a.created_at;
   }
   const contactable = leads.rows
-    .filter((l) => mine(l.owner_id) && !["won", "lost"].includes(l.stage) && !l.became_customer)
+    /* isOpen, not a bare ["won","lost"]: a lead marked Skip – 90+ or Bad
+     * contact info is finished with too, and nagging somebody about a firm
+     * they were told to skip is how this list stops being read. */
+    .filter((l) => mine(l.owner_id) && isOpen(l.stage) && !l.became_customer)
     .map((l) => {
       const touched = l.last_activity_at || lastTouch[l.id] || null;
       const idle = daysSince(touched);
@@ -768,7 +949,12 @@ export async function getMyWork(userId) {
 
   return {
     sample,
-    error: clients.error || tasks.error || leads.error || tickets.error || reminders.error || null,
+    /* activity.error was missing here until Aug 22 2026 (carried over from the
+     * parallel Overview session). That read decides "never contacted" and "no
+     * contact in N days", so losing it silently mis-counted People to contact
+     * with nothing on screen to say so. */
+    error: clients.error || tasks.error || leads.error || tickets.error || reminders.error
+      || activity.error || null,
     clients: clients.rows,
     tasks: myTasks,
     contactable,
@@ -1486,7 +1672,7 @@ export async function findExistingLeadKeys(keys) {
  * staleness rules as the Work page, so the two can never disagree. */
 export function buildCallQueue(leads, userId, { includeUnclaimed = true } = {}) {
   const rows = (leads || []).filter((l) => {
-    if (["won", "lost"].includes(l.stage)) return false;
+    if (!isOpen(l.stage)) return false;   // skip_90 and bad_contact are finished too
     if (l.owner_id === userId) return true;
     return includeUnclaimed && !l.owner_id;
   });
@@ -1499,4 +1685,787 @@ export function buildCallQueue(leads, userId, { includeUnclaimed = true } = {}) 
   return rows
     .map((l) => ({ lead: l, over: rank(l), mine: l.owner_id === userId }))
     .sort((a, b) => (b.over - a.over) || (a.mine === b.mine ? 0 : a.mine ? -1 : 1));
+}
+
+/* ================================================================== */
+/* THE VAULT — passwords, cards and keys                    Aug 21 2026 */
+/* ================================================================== */
+/*
+ * WHAT THIS LAYER CAN AND CANNOT SEE
+ *
+ * It reads and writes the READABLE half of a vault item: the name, the client,
+ * the username, the card brand and last 4, the notes. That half goes straight
+ * through Supabase like every other table, guarded by row-level security.
+ *
+ * It never touches the secret half. `secret_cipher` is not even selected —
+ * there is no point carrying a column the browser cannot read, and not
+ * selecting it means an accidental console.log of a row cannot print it. The
+ * scrambled value is written and read only by /api/vault-secret, on the server,
+ * with a key the browser has never had.
+ *
+ * PREVIEW MODE IS DIFFERENT AND SAYS SO. With no Supabase keys there is no
+ * server, so the sample secrets live in memory in plain text. Every function
+ * below returns { sample: true } in that mode and the page prints a warning
+ * across the top of the list. A vault that looked encrypted and was not would
+ * be worse than no vault at all.
+ */
+
+/** The columns the browser is allowed to ask for. secret_cipher is missing on
+ * purpose — see the note above. */
+const VAULT_COLUMNS = "id, client_id, kind, label, description, username, url, card_brand, card_last4, card_exp_month, card_exp_year, card_holder, card_zip, secret_set_at, secret_fields, secret_by, vault_url, notes, tags, favorite, active, sort, added_by, created_at, updated_at";
+
+/** clientId: null = every item, "ours" = the agency's own, or a client id. */
+export async function listVaultItems(clientId = null) {
+  const pick = (rows) => {
+    if (clientId === "ours") return rows.filter((v) => !v.client_id);
+    if (clientId) return rows.filter((v) => v.client_id === clientId);
+    return [...rows];
+  };
+  if (!live()) {
+    return { rows: pick(previewStore.vaultItems), sample: true };
+  }
+  let q = getSupabase().from("admin_vault_items").select(VAULT_COLUMNS)
+    .order("sort", { ascending: true })
+    .order("created_at", { ascending: true })
+    .limit(500);
+  if (clientId === "ours") q = q.is("client_id", null);
+  else if (clientId) q = q.eq("client_id", clientId);
+  const { data, error } = await q;
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+export async function upsertVaultItem(patch) {
+  /* Belt and braces. The database trigger in migration 0008 already refuses a
+   * secret written from the browser, but the browser should never be the thing
+   * that tries: a rejected write shows up as a red toast about a trigger, and
+   * nobody reading that toast would know it was working as designed. */
+  const clean = { ...patch };
+  delete clean.secret_cipher;
+  delete clean.secret_fields;
+  delete clean.secret_set_at;
+  delete clean.secret_by;
+
+  if (!live()) {
+    const now = new Date().toISOString();
+    if (clean.id) {
+      const i = previewStore.vaultItems.findIndex((v) => v.id === clean.id);
+      if (i < 0) return { ok: false, error: "That item is not in the vault any more. Refresh the page." };
+      previewStore.vaultItems[i] = { ...previewStore.vaultItems[i], ...clean, updated_at: now };
+      return { ok: true, row: previewStore.vaultItems[i], sample: true };
+    }
+    const row = {
+      id: pid("v"), client_id: null, kind: "login", label: "", description: null, username: null, url: null,
+      card_brand: null, card_last4: null, card_exp_month: null, card_exp_year: null, card_holder: null, card_zip: null,
+      secret_set_at: null, secret_fields: [], secret_by: null, vault_url: null, notes: null, tags: [],
+      favorite: false, active: true, sort: 0, added_by: "preview-user", created_at: now, updated_at: now, ...clean,
+    };
+    previewStore.vaultItems.push(row);
+    return { ok: true, row, sample: true };
+  }
+
+  const supabase = getSupabase();
+  const q = clean.id
+    ? supabase.from("admin_vault_items").update(clean).eq("id", clean.id).select(VAULT_COLUMNS).maybeSingle()
+    : supabase.from("admin_vault_items").insert(clean).select(VAULT_COLUMNS).maybeSingle();
+  const { data, error } = await q;
+  if (error) return { ok: false, error: error.message };
+  /* A write that matched no rows comes back { data: null, error: null } from
+   * PostgREST. Saying "Saved" over that is how a change quietly disappears —
+   * the trap written up in CONTEXT-FOR-AI §17. */
+  if (!data) {
+    return {
+      ok: false,
+      error: clean.id
+        ? "Nothing was saved — that item is gone, or your account is not allowed to change it. Refresh the page."
+        : "Nothing was saved. Your account may not be allowed to add vault items.",
+    };
+  }
+  return { ok: true, row: data };
+}
+
+/** Deleting the item does NOT delete the record that somebody read it: the log
+ * rows keep the label and drop the link (migration 0008). Say that on the
+ * confirm box, not just here. */
+export async function deleteVaultItem(id) {
+  if (!live()) {
+    const before = previewStore.vaultItems.length;
+    const gone = previewStore.vaultItems.find((v) => v.id === id);
+    previewStore.vaultItems = previewStore.vaultItems.filter((v) => v.id !== id);
+    delete previewSecrets[id];
+    for (const key of [...previewTyped]) if (key.startsWith(`${id}:`)) previewTyped.delete(key);
+    if (previewStore.vaultItems.length === before) return { ok: false, error: "That item is not in the vault any more." };
+    // The log outlives the item here too, so preview behaves like the real thing.
+    previewStore.vaultReveals.unshift({
+      id: pid("vr"), item_id: null, item_label: gone?.label || "(unnamed item)",
+      client_id: gone?.client_id || null, actor: "preview-user",
+      actor_email: "you@aisyndicate.com", action: "delete",
+      fields: gone?.secret_fields || [], created_at: new Date().toISOString(),
+    });
+    return { ok: true, sample: true };
+  }
+  const { data, error } = await getSupabase().from("admin_vault_items").delete().eq("id", id).select("id");
+  if (error) return { ok: false, error: error.message };
+  if (!data?.length) {
+    return { ok: false, error: "Nothing was removed — that item is already gone, or your account is not allowed to remove it." };
+  }
+  return { ok: true };
+}
+
+/** The reveal log. itemId null = everything, newest first. */
+export async function listVaultReveals(itemId = null, limit = 100) {
+  if (!live()) {
+    const rows = previewStore.vaultReveals
+      .filter((r) => !itemId || r.item_id === itemId)
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    return { rows, sample: true };
+  }
+  let q = getSupabase().from("admin_vault_reveals").select("*")
+    .order("created_at", { ascending: false }).limit(limit);
+  if (itemId) q = q.eq("item_id", itemId);
+  const { data, error } = await q;
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+/* ---- preview-mode stand-ins for the three server actions ---- */
+/* These exist so the whole page can be clicked through before any key exists.
+ * Each one returns { sample: true } and the UI shows it. */
+
+export function previewRevealSecret(itemId, fields) {
+  const held = previewSecrets[itemId] || {};
+  const values = {};
+  for (const f of fields) if (f in held) values[f] = held[f];
+  const item = previewStore.vaultItems.find((v) => v.id === itemId);
+  previewStore.vaultReveals.unshift({
+    id: pid("vr"), item_id: itemId, item_label: item?.label || "(unnamed item)", client_id: item?.client_id || null,
+    actor: "preview-user", actor_email: "you@aisyndicate.com", action: "reveal", fields,
+    created_at: new Date().toISOString(),
+  });
+  return {
+    ok: true, values, missing: fields.filter((f) => !(f in values)),
+    sample: true,
+    // true when EVERY field asked for was typed here rather than seeded.
+    typed: fields.length > 0 && fields.every((f) => previewTyped.has(`${itemId}:${f}`)),
+  };
+}
+
+export function previewSaveSecret(itemId, secrets) {
+  const i = previewStore.vaultItems.findIndex((v) => v.id === itemId);
+  if (i < 0) return { ok: false, error: "That item is not in the vault any more." };
+  const next = { ...(previewSecrets[itemId] || {}) };
+  for (const [k, v] of Object.entries(secrets)) {
+    if (v === null || String(v).trim() === "") delete next[k];
+    else next[k] = String(v);
+  }
+  previewSecrets[itemId] = next;
+  for (const [field, value] of Object.entries(secrets || {})) {
+    const key = `${itemId}:${field}`;
+    if (value !== null && String(value).trim() !== "") previewTyped.add(key);
+    else previewTyped.delete(key);
+  }
+  const fields = Object.keys(next).sort();
+  previewStore.vaultItems[i] = {
+    ...previewStore.vaultItems[i],
+    secret_fields: fields,
+    secret_set_at: fields.length ? new Date().toISOString() : null,
+    secret_by: fields.length ? "preview-user" : null,
+  };
+  return { ok: true, fields, sample: true, row: previewStore.vaultItems[i] };
+}
+
+export function previewClearSecret(itemId) {
+  return previewSaveSecret(itemId, Object.fromEntries(Object.keys(previewSecrets[itemId] || {}).map((k) => [k, ""])));
+}
+
+/* ================================================================== */
+/* SAVED CLIENT REPORTS                                     Aug 21 2026 */
+/* ================================================================== */
+
+export async function listClientReports(clientId, limit = 25) {
+  if (!live()) {
+    const rows = previewStore.clientReports
+      .filter((r) => r.client_id === clientId)
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    return { rows, sample: true };
+  }
+  const { data, error } = await getSupabase()
+    .from("admin_client_reports").select("*")
+    .eq("client_id", clientId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+export async function deleteClientReport(id) {
+  if (!live()) {
+    const before = previewStore.clientReports.length;
+    previewStore.clientReports = previewStore.clientReports.filter((r) => r.id !== id);
+    if (previewStore.clientReports.length === before) return { ok: false, error: "That report is already gone." };
+    return { ok: true, sample: true };
+  }
+  const { data, error } = await getSupabase().from("admin_client_reports").delete().eq("id", id).select("id");
+  if (error) return { ok: false, error: error.message };
+  if (!data?.length) return { ok: false, error: "Nothing was removed — that report is already gone." };
+  return { ok: true };
+}
+
+/**
+ * Preview mode's Generate report. Counts the sample rows with the SAME pure
+ * functions the server uses, so what you see before the keys exist is the same
+ * shape as what you get after — only the AI wording is missing, and that is
+ * labelled COUNTED either way.
+ */
+export async function generateClientReportPreview(clientId, { instruction, preset } = {}) {
+  const client = previewStore.clients.find((c) => c.id === clientId);
+  if (!client) return { ok: false, error: "That client does not exist." };
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const facts = assembleReportFacts({
+    client,
+    tasks: previewStore.tasks.filter((t) => t.client_id === clientId),
+    weekly: previewStore.weekly.filter((w) => w.client_id === clientId),
+    emailThreads: previewStore.emailThreads.filter((e) => e.client_id === clientId),
+    sites: previewStore.clientSites.filter((s) => s.client_id === clientId),
+    reminders: previewStore.reminders.filter((r) => r.link_type === "client" && r.link_id === clientId && !r.done_at),
+    invoices: [],
+    /* Matched by contact email, the same way the server does it — preview used
+     * to hard-code an empty list, so the sample client's one open ticket
+     * vanished and preview did not behave like the real thing at all. */
+    tickets: previewStore.tickets.filter((t) => {
+      const contact = String(client.contact_email || "").trim().toLowerCase();
+      return contact && String(t.requester_email || "").trim().toLowerCase() === contact;
+    }),
+    notes: previewStore.notes.filter((n) => n.link_type === "client" && n.link_id === clientId),
+    platformAccounts: previewStore.platformAccounts.filter((a) => a.client_id === clientId),
+    vaultItems: previewStore.vaultItems.filter((v) => v.client_id === clientId),
+    previousReports: previewStore.clientReports.filter((r) => r.client_id === clientId),
+    nowMs: Date.now(),
+  });
+
+  const built = deterministicReport(facts, { presetId: preset, todayIso });
+
+  /* The same extra gap lines the server adds, so preview does not quietly
+   * under-state what a report cannot cover. Preview has no invoices and no
+   * Gmail, and saying so is the whole point of this section. */
+  const { cutChars } = buildFactsText(facts);
+  const previewGaps = [
+    built.cannotCheck,
+    cutChars ? `- About ${cutChars} characters of this client's detailed lists did not fit on the fact sheet.` : "",
+    "- Money. Preview mode has no invoices at all, so nothing here is about what has been billed or paid.",
+    "- Anything the real console would read from Gmail, Stripe or the platform. None of them are connected in preview.",
+  ].filter(Boolean).join("\n");
+
+  const row = {
+    id: pid("rep"), client_id: clientId,
+    instruction: instruction || null, preset: preset || "standard",
+    title: built.title, summary: built.summary, body: built.body,
+    cannot_check: previewGaps,
+    source: "counted", rejected_why: null,
+    facts, counts_at: facts.takenAt,
+    created_by: "preview-user", created_by_email: "you@aisyndicate.com",
+    created_at: new Date().toISOString(),
+  };
+  previewStore.clientReports.unshift(row);
+  return { ok: true, report: row, sample: true, source: "counted" };
+}
+
+/* ================================================================== */
+/* THE SALES SYSTEM                                         Aug 21 2026 */
+/* ================================================================== */
+/*
+ * Everything the Sales page reads and writes. The rules that DECIDE anything
+ * are not here — they are in lib/sales-rules.js, pure and shared with
+ * api/sales-sweep.js, because the page a rep reads at 9am and the job that
+ * runs at 3am must never disagree about whose claim has run out.
+ *
+ * This layer only fetches and saves. It follows the same two-mode contract as
+ * everything above: LIVE against Supabase, PREVIEW against the in-memory store,
+ * and every result carries { sample } so the screen can say which it is.
+ */
+
+/* ---- COMPANIES ---------------------------------------------------- */
+
+export async function listCompanies() {
+  if (!live()) return { rows: [...previewStore.companies], sample: true };
+  return selectAll("admin_companies", { order: "created_at", ascending: false, limit: 2000 });
+}
+
+export async function upsertCompany(patch) {
+  if (!live()) {
+    const now = new Date().toISOString();
+    if (patch.id) {
+      const i = previewStore.companies.findIndex((c) => c.id === patch.id);
+      if (i >= 0) previewStore.companies[i] = { ...previewStore.companies[i], ...patch, updated_at: now };
+      return { ok: true, row: previewStore.companies[i], sample: true };
+    }
+    const row = { id: pid("co"), site_score: null, site_score_at: null, client_id: null, created_at: now, updated_at: now, ...patch };
+    previewStore.companies.unshift(row);
+    return { ok: true, row, sample: true };
+  }
+  const supabase = getSupabase();
+  const q = patch.id
+    ? supabase.from("admin_companies").update(patch).eq("id", patch.id).select().maybeSingle()
+    : supabase.from("admin_companies").insert(patch).select().maybeSingle();
+  const { data, error } = await q;
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, row: data };
+}
+
+/**
+ * Save a batch of firms and hand back a map of import-key → real id, so the
+ * leads that follow can point at them.
+ *
+ * Chunked at 200. A single insert of two thousand rows is one request that can
+ * time out halfway, and a half-finished company table is worse than none —
+ * every lead in the second half would come in with no firm attached and
+ * nobody would know which half.
+ */
+export async function insertCompaniesBatch(rows) {
+  const idByKey = {};
+  if (!rows.length) return { ok: true, idByKey, count: 0 };
+  if (!live()) {
+    for (const r of rows) {
+      const { key, contacts, ...rest } = r;   // eslint-disable-line no-unused-vars
+      const row = { id: pid("co"), site_score: null, site_score_at: null, created_at: new Date().toISOString(), ...rest };
+      previewStore.companies.unshift(row);
+      idByKey[key] = row.id;
+    }
+    return { ok: true, idByKey, count: rows.length, sample: true };
+  }
+  const supabase = getSupabase();
+  let count = 0;
+  for (let i = 0; i < rows.length; i += 200) {
+    const chunk = rows.slice(i, i + 200);
+    const payload = chunk.map(({ key, contacts, ...rest }) => rest);   // eslint-disable-line no-unused-vars
+    /* Matched on NAME + WEBSITE together, not on either alone and not on array
+     * position.
+     *
+     * Position assumes PostgREST returns one row per input in the order given;
+     * a reordered return would attach every later firm's contacts to the wrong
+     * firm, invisibly. But matching on the name alone was just as wrong in the
+     * other direction: `groupIntoCompanies` deliberately emits TWO firms with
+     * the same name when one name has two websites ("Above & Beyond Real
+     * Estate" exists in more than one state), so both keys resolved to
+     * whichever one came back last and one office's contacts were filed under
+     * the other's. Name and website together are exactly what made them two
+     * groups in the first place, so the pair is unique within the batch. */
+    const { data, error } = await supabase.from("admin_companies").insert(payload).select("id, name, domain");
+    if (error) return { ok: false, error: error.message, idByKey, count };
+    const pair = (name, domain) => `${name ?? ""}\u0000${domain ?? ""}`;
+    const byPair = new Map((data || []).map((r) => [pair(r.name, r.domain), r.id]));
+    const unresolved = [];
+    for (const c of chunk) {
+      const id = byPair.get(pair(c.name, c.domain));
+      if (id) idByKey[c.key] = id;
+      else unresolved.push(c.name);
+    }
+    if ((data || []).length !== chunk.length || unresolved.length) {
+      return {
+        ok: false, idByKey, count,
+        error: unresolved.length
+          ? `The database did not return a matching row for ${unresolved.length} firm(s) (${unresolved.slice(0, 3).join(", ")}). Stopping rather than attaching contacts to the wrong firm.`
+          : `The database saved ${(data || []).length} of ${chunk.length} firms in one batch. Stopping rather than attaching contacts to the wrong firms.`,
+      };
+    }
+    count += (data || []).length;
+  }
+  return { ok: true, idByKey, count };
+}
+
+/** Firms already on file, keyed the same way the importer keys them, so an
+ * import can attach to a firm that is already here instead of making a second
+ * copy of it. */
+export async function findExistingCompanies() {
+  const res = await listCompanies();
+  const byKey = {};
+  for (const c of res.rows) {
+    /* Normalised the same way the importer keys them. Lower-casing alone meant
+     * a firm already on file as "backbeathomes.com" did not match an incoming
+     * "https://www.backbeathomes.com", so every re-import made a second copy. */
+    const d = normaliseDomain(c.domain);
+    if (d) byKey[`d:${d}`] = c.id;
+    if (c.name_key) byKey[`n:${c.name_key}`] = c.id;
+  }
+  return { byKey, sample: res.sample };
+}
+
+/* ---- LISTS (the sheet's tabs) ------------------------------------- */
+
+export async function listLeadLists() {
+  if (!live()) return { rows: [...previewStore.leadLists], sample: true };
+  const { data, error } = await getSupabase()
+    .from("admin_lead_lists").select("*").order("sort", { ascending: true }).limit(200);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+/** The list a tab already made, if there is one. Migration 0009 keeps
+ * `sheet_tab` precisely so a second import of the same workbook updates the
+ * same list instead of putting a second "Medspas" in the filter dropdown with
+ * the contacts split between them — but nothing was ever looking it up. */
+export async function findLeadListByTab(tab) {
+  if (!tab) return null;
+  const res = await listLeadLists();
+  return res.rows.find((l) => l.sheet_tab === tab) || null;
+}
+
+export async function upsertLeadList(patch) {
+  if (!live()) {
+    const now = new Date().toISOString();
+    if (patch.id) {
+      const i = previewStore.leadLists.findIndex((l) => l.id === patch.id);
+      if (i >= 0) previewStore.leadLists[i] = { ...previewStore.leadLists[i], ...patch, updated_at: now };
+      return { ok: true, row: previewStore.leadLists[i], sample: true };
+    }
+    const row = { id: pid("li"), active: true, sort: previewStore.leadLists.length, created_at: now, updated_at: now, ...patch };
+    previewStore.leadLists.push(row);
+    return { ok: true, row, sample: true };
+  }
+  const supabase = getSupabase();
+  const q = patch.id
+    ? supabase.from("admin_lead_lists").update(patch).eq("id", patch.id).select().maybeSingle()
+    : supabase.from("admin_lead_lists").insert(patch).select().maybeSingle();
+  const { data, error } = await q;
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, row: data };
+}
+
+/* ---- PROPOSALS ---------------------------------------------------- */
+
+export async function listProposals(leadId = null) {
+  if (!live()) {
+    const rows = leadId ? previewStore.proposals.filter((p) => p.lead_id === leadId) : [...previewStore.proposals];
+    return { rows, sample: true };
+  }
+  let q = getSupabase().from("admin_proposals").select("*").order("created_at", { ascending: false }).limit(500);
+  if (leadId) q = q.eq("lead_id", leadId);
+  const { data, error } = await q;
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+export async function upsertProposal(patch) {
+  if (!live()) {
+    const now = new Date().toISOString();
+    if (patch.id) {
+      const i = previewStore.proposals.findIndex((p) => p.id === patch.id);
+      if (i >= 0) previewStore.proposals[i] = { ...previewStore.proposals[i], ...patch, updated_at: now };
+      return { ok: true, row: previewStore.proposals[i], sample: true };
+    }
+    const row = { id: pid("pr"), status: "draft", currency: "usd", created_at: now, updated_at: now, ...patch };
+    previewStore.proposals.unshift(row);
+    return { ok: true, row, sample: true };
+  }
+  const supabase = getSupabase();
+  const q = patch.id
+    ? supabase.from("admin_proposals").update(patch).eq("id", patch.id).select().maybeSingle()
+    : supabase.from("admin_proposals").insert(patch).select().maybeSingle();
+  const { data, error } = await q;
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, row: data };
+}
+
+export async function deleteProposal(id) {
+  if (!live()) {
+    previewStore.proposals = previewStore.proposals.filter((p) => p.id !== id);
+    return { ok: true, sample: true };
+  }
+  const { error } = await getSupabase().from("admin_proposals").delete().eq("id", id);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/* ---- THE CLAIM ---------------------------------------------------- */
+
+/**
+ * Claim a lead — and, if asked, everybody else at the same firm.
+ *
+ * The Rules of Engagement say claiming one contact claims the whole firm. The
+ * sheet could not do that (it knew rows, not firms), which is why one claimed
+ * row at Agents of LA leaves two open for anybody. `alsoSiblings` is what makes
+ * that rule real, and it is a choice the person makes on screen rather than
+ * something that happens to them.
+ *
+ * `claimed_at` and `cadence_started_at` are stamped together: the 3-day first
+ * contact clock and the 5-touch cadence both start at the claim, so setting
+ * one without the other gives a lead a cadence that started at the epoch.
+ */
+export async function claimLead(leadId, userId, { alsoSiblings = [], name = "someone", fresh = true } = {}) {
+  const now = new Date().toISOString();
+  /* Only the CURRENT claim's clock is reset. `first_contact_at` and
+   * `last_touch_at` are history and are never touched here.
+   *
+   * An earlier version cleared all three, which did stop a re-claimed lead
+   * reading as instantly cold — by deleting the date it was first contacted.
+   * That took the lead out of the speed-to-first-contact sample and made a
+   * lead at proposal stage with nine logged touches report as "never
+   * contacted". claimState now runs its cold clock from the LATER of the last
+   * touch and the claim, so nothing has to be erased for a new claim to be a
+   * new start. */
+  const patch = {
+    owner_id: userId, claimed_at: now, cadence_started_at: now,
+    ...(fresh ? { claim_contacted_at: null } : {}),
+  };
+  const ids = [leadId, ...alsoSiblings.filter((id) => id !== leadId)];
+
+  if (!live()) {
+    for (const id of ids) {
+      const i = previewStore.leads.findIndex((l) => l.id === id);
+      if (i >= 0) previewStore.leads[i] = { ...previewStore.leads[i], ...patch };
+    }
+  } else {
+    const { error } = await getSupabase().from("admin_leads").update(patch).in("id", ids);
+    if (error) return { ok: false, error: error.message };
+  }
+
+  /* One timeline line per lead, so a rep opening any of them later can see it
+   * was claimed as part of a firm rather than by itself. */
+  for (const id of ids) {
+    await addLeadActivity({
+      leadId: id, actor: userId, type: "claim",
+      body: ids.length > 1
+        ? `Claimed by ${name} — with ${ids.length - 1} other contact${ids.length === 2 ? "" : "s"} at this firm.`
+        : `Claimed by ${name}.`,
+    });
+  }
+  return { ok: true, count: ids.length };
+}
+
+/** Hand a lead back to the floor, with a reason on its timeline. Never a
+ * silent unassign: a firm that vanishes from under a rep with no explanation
+ * is how a rep decides the system is against them. */
+export async function releaseLead(leadId, { actor, why }) {
+  /* The stage is deliberately NOT touched.
+   *
+   * An earlier version wrote stage:"reopened" here and in the overnight sweep,
+   * so a lead sitting at PROPOSAL — with a real proposal row and a number
+   * attached — lost that position the night it went quiet, and nothing recorded
+   * what it had been. "Reopened" is a fact about the CLAIM, and `owner_id`
+   * being null already says it. Where a lead had got to is a different fact and
+   * it is not the sweep's to overwrite. */
+  const patch = { owner_id: null, claimed_at: null, cadence_started_at: null, claim_contacted_at: null };
+  if (!live()) {
+    const i = previewStore.leads.findIndex((l) => l.id === leadId);
+    if (i >= 0) previewStore.leads[i] = { ...previewStore.leads[i], ...patch };
+  } else {
+    const { error } = await getSupabase().from("admin_leads").update(patch).eq("id", leadId);
+    if (error) return { ok: false, error: error.message };
+  }
+  await addLeadActivity({ leadId, actor, type: "reopen", body: why });
+  return { ok: true };
+}
+
+/* ---- THE ONE-TEXT RULE -------------------------------------------- */
+
+/**
+ * Claim the one text a lead is allowed, atomically.
+ *
+ * The browser cannot enforce "exactly one" by reading a counter and writing
+ * counter + 1. Two tabs — or two reps — both read 0, both write 1, and two
+ * texts go out under a counter that says one. That is not a rare race: a rep
+ * with the drawer open in two tabs is a Tuesday.
+ *
+ * So the database decides, in one statement that only increments if the lead
+ * is still under the limit AND an email open is on record (migration 0009,
+ * `admin_lead_claim_text`). It returns true to exactly one caller. Everybody
+ * else is told no, with a reason.
+ */
+export async function claimTextSend(leadId, max = 1) {
+  if (!live()) {
+    const i = previewStore.leads.findIndex((l) => l.id === leadId);
+    if (i < 0) return { ok: false, error: "No such lead." };
+    const l = previewStore.leads[i];
+    if (!l.email_opened_at) return { ok: false, won: false, error: "They have not opened an email yet." };
+    if (Number(l.texts_sent || 0) >= max) return { ok: false, won: false, error: "A text has already gone out." };
+    previewStore.leads[i] = { ...l, texts_sent: Number(l.texts_sent || 0) + 1, last_text_at: new Date().toISOString() };
+    return { ok: true, won: true, sample: true };
+  }
+  const { data, error } = await getSupabase().rpc("admin_lead_claim_text", { p_lead: leadId, p_max: max });
+  if (error) return { ok: false, error: error.message };
+  if (data !== true) {
+    return { ok: false, won: false, error: "Somebody has already used this lead's one text, or no email open is on record." };
+  }
+  return { ok: true, won: true };
+}
+
+/* ---- COUNTING TOUCHES --------------------------------------------- */
+
+/** lead id → how many call/email/text/LinkedIn rows it has. This is what the
+ * cadence counts against, and it is derived from real activity rows rather
+ * than a counter column — a counter is a number somebody can forget to bump,
+ * and then the cadence quietly asks for the same email twice.
+ *
+ * It cannot tell an inbound email from an outbound one; the table has no
+ * direction column. Written down rather than described away. */
+export function touchCountsByLead(activityRows) {
+  const out = {};
+  for (const a of activityRows || []) {
+    if (!["call", "email", "text", "linkedin"].includes(a.type)) continue;
+    out[a.lead_id] = (out[a.lead_id] || 0) + 1;
+  }
+  return out;
+}
+
+/** Everything the Sales page needs, in one read, so the tiles and the lists
+ * can never be counting different snapshots of the same pipeline. */
+export async function getSalesBoard() {
+  const [leads, companies, lists, team, activity, proposals, sources] = await Promise.all([
+    listLeads(), listCompanies(), listLeadLists(), listTeam(),
+    listAllLeadActivity(90), listProposals(), listLeadSources(),
+  ]);
+  return {
+    leads: leads.rows,
+    companies: companies.rows,
+    lists: lists.rows,
+    team: team.rows,
+    activity: activity.rows,
+    proposals: proposals.rows,
+    sources: sources.rows,
+    touchCounts: touchCountsByLead(activity.rows),
+    sample: Boolean(leads.sample || companies.sample),
+    /* Errors are carried, not swallowed. A page that renders an empty pipeline
+     * because one fetch failed looks exactly like a page with no leads. */
+    errors: [leads.error, companies.error, lists.error, activity.error].filter(Boolean),
+    /* Same rule for a cap as for an error: a page that quietly shows half the
+     * pipeline is worse than one that says it is showing half. */
+    truncated: [leads.truncated, activity.truncated].filter(Boolean),
+  };
+}
+
+/* ============================================================================
+ * THE OVERVIEW GENERATOR — saved output
+ *
+ * You type what you want on the Overview page, /api/console-report reads the
+ * whole console and writes it, and every press files a row. Append-only: there
+ * is no update path, here or in the database (0010).
+ *
+ * Owner/admin only, enforced by row-level security as well as by the endpoint.
+ * One of these rows can summarise every client, lead and invoice at once.
+ * ==========================================================================*/
+
+const PREVIEW_CONSOLE_REPORTS = [];
+
+export async function listConsoleReports(limit = 25) {
+  if (!live()) {
+    return { rows: [...PREVIEW_CONSOLE_REPORTS].slice(0, limit), sample: true };
+  }
+  const { data, error } = await getSupabase()
+    .from("admin_console_reports").select("*")
+    .order("created_at", { ascending: false }).limit(limit);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+export async function deleteConsoleReport(id) {
+  if (!live()) {
+    const i = PREVIEW_CONSOLE_REPORTS.findIndex((r) => r.id === id);
+    if (i >= 0) PREVIEW_CONSOLE_REPORTS.splice(i, 1);
+    return { ok: true, sample: true };
+  }
+  const { error } = await getSupabase().from("admin_console_reports").delete().eq("id", id);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/** Preview mode: the counted version, from the same rows the pages show.
+ *
+ * No AI, and it says so on the row rather than pretending. The point of running
+ * it here is that the shape, the saving, the history and the honesty line are
+ * all exercised before a single key is set. */
+export async function generateConsoleReportPreview({ instruction, preset } = {}) {
+  const [clients, tasks, leads, tickets, emails, reminders, notes, weekly, sites, companies] =
+    await Promise.all([
+      listClients(), listTasks(), listLeads(), listTickets(), listEmailThreads({}),
+      listReminders(null), listAiNotes({ statuses: ["open"] }), listWeekly(null).catch(() => ({ rows: [] })),
+      listClientSites(null).catch(() => ({ rows: [] })), listCompanies().catch(() => ({ rows: [] })),
+    ]);
+
+  /* A snapshot shaped exactly like loadSystemContext's, so the same pure
+   * functions run over it. `errors` carries anything that failed, because a
+   * preview that hides a broken read teaches the wrong thing. */
+  const errors = {};
+  const rowsOf = (r, key) => {
+    if (r?.error) errors[key] = r.error;
+    return r?.rows || [];
+  };
+  const snap = {
+    role: "owner", userId: null, generatedAt: new Date().toISOString(), errors,
+    clients: rowsOf(clients, "clients"),
+    tasks: rowsOf(tasks, "tasks"),
+    weekly: rowsOf(weekly, "weekly"),
+    leads: rowsOf(leads, "leads"),
+    leadActivity: [], leadSources: [],
+    tickets: rowsOf(tickets, "tickets"),
+    emails: rowsOf(emails, "emails"),
+    reminders: rowsOf(reminders, "reminders"),
+    sites: rowsOf(sites, "sites"),
+    brain: [], memory: [], notes: rowsOf(notes, "notes"), team: [],
+    companies: rowsOf(companies, "companies"),
+    leadLists: [], proposals: [], invoices: [], expenses: [],
+  };
+
+  const facts = assembleConsoleFacts(snap, { nowMs: Date.now() });
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const report = deterministicConsoleReport(facts, {
+    todayIso,
+    why: "this is preview mode — no database key, so no AI call was made",
+  });
+
+  const row = {
+    id: `preview-${PREVIEW_CONSOLE_REPORTS.length + 1}`,
+    instruction: String(instruction || "").slice(0, 1500),
+    preset: preset || null,
+    mode: "records",
+    title: report.title,
+    summary: report.summary,
+    body: report.body,
+    watch: null,
+    cannot_check: report.cannotCheck,
+    source: "counted",
+    rejected_why: "preview mode — nothing was sent to an AI",
+    facts: { counts: facts.counts, cannotAnswer: facts.cannotAnswer, unreadable: facts.unreadable, takenAt: facts.takenAt },
+    counts_at: facts.takenAt,
+    created_by_email: "preview@aisyndicate.com",
+    created_at: new Date().toISOString(),
+  };
+  PREVIEW_CONSOLE_REPORTS.unshift(row);
+  return { ok: true, report: row, sample: true, source: "counted" };
+}
+
+/* ---- Rating an answer, and what it teaches the next one ------------------
+ *
+ * Append-only. Rating the same answer twice writes a second row and the newest
+ * wins when it is read, so "I hated it, then I re-read it" is a history rather
+ * than a correction. The notes are read server-side by /api/console-report and
+ * put into the next instruction.
+ * ------------------------------------------------------------------------ */
+
+const PREVIEW_CONSOLE_FEEDBACK = [];
+
+export async function listConsoleFeedback(limit = 40) {
+  if (!live()) return { rows: [...PREVIEW_CONSOLE_FEEDBACK].slice(0, limit), sample: true };
+  const { data, error } = await getSupabase()
+    .from("admin_console_feedback").select("*")
+    .order("created_at", { ascending: false }).limit(limit);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+export async function saveConsoleFeedback({ reportId, rating, note }) {
+  const clean = {
+    report_id: reportId,
+    rating: Math.min(5, Math.max(1, Math.round(Number(rating) || 0))),
+    note: String(note || "").trim().slice(0, 500) || null,
+  };
+  if (!clean.report_id) return { ok: false, error: "No answer to rate." };
+  if (!(clean.rating >= 1 && clean.rating <= 5)) return { ok: false, error: "Pick one to five stars." };
+
+  if (!live()) {
+    const row = { id: `pf-${PREVIEW_CONSOLE_FEEDBACK.length + 1}`, ...clean, created_at: new Date().toISOString() };
+    PREVIEW_CONSOLE_FEEDBACK.unshift(row);
+    return { ok: true, row, sample: true };
+  }
+  const { data, error } = await getSupabase()
+    .from("admin_console_feedback").insert(clean).select().maybeSingle();
+  return error ? { ok: false, error: error.message } : { ok: true, row: data };
 }
