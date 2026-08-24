@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Modal, Field, TextArea, EmptyState, SourceBadge } from "./shared.jsx";
+import { Modal, Field, TextArea, TextInput, Select, EmptyState, SourceBadge } from "./shared.jsx";
 import { Chip } from "./opsCells.jsx";
 import { toast } from "../../lib/toast.js";
 import { apiFetch } from "../../lib/adminApi.js";
@@ -8,8 +8,10 @@ import { copyToClipboard } from "../../lib/clipboard.js";
 import { listClientReports, deleteClientReport, generateClientReportPreview } from "../../lib/data.js";
 import {
   REPORT_PRESETS, DEFAULT_PRESET, presetById, MAX_INSTRUCTION_CHARS,
+  SHAPE_PRESETS, DEFAULT_SHAPE, shapeById, MAX_SHAPE_CHARS,
   reportToMarkdown, provenanceLine,
 } from "../../../lib/client-report.js";
+import { reportToEmail, reportToText, reportToPlainText } from "../../../lib/report-share.js";
 
 /* GENERATE REPORT — built Aug 21 2026, at Ryder's ask.
  *
@@ -176,6 +178,7 @@ export function ClientReportsPanel({ client, reports, autoOpen = false, onAutoOp
                   {whenText(r.created_at)}
                   {r.created_by_email ? ` · ${r.created_by_email}` : ""}
                   {r.instruction ? ` · asked for: "${r.instruction}"` : ""}
+                  {r.shape ? ` · to read as: "${r.shape}"` : ""}
                 </div>
                 {r.rejected_why && (
                   <div className="adm-rep-rejected">
@@ -211,6 +214,12 @@ export function ClientReportsPanel({ client, reports, autoOpen = false, onAutoOp
 function GenerateModal({ client, live, onClose, onDone }) {
   const [preset, setPreset] = useState(DEFAULT_PRESET);
   const [instruction, setInstruction] = useState(presetById(DEFAULT_PRESET).instruction);
+  /* The SECOND question, added Aug 24 2026: who it is for and what shape it
+   * comes back in. Kept apart from the first box on purpose — "write it as an
+   * email" buried three lines into a paragraph about scope reads as a passing
+   * remark, and the answer comes back as a report anyway. */
+  const [shapePreset, setShapePreset] = useState(DEFAULT_SHAPE);
+  const [shape, setShape] = useState(shapeById(DEFAULT_SHAPE).shape);
   const [busy, setBusy] = useState(false);
 
   /* Pressing a button FILLS THE BOX rather than sending anything. The box is
@@ -222,16 +231,22 @@ function GenerateModal({ client, live, onClose, onDone }) {
     setInstruction(p.instruction);
   };
 
+  const pickShape = (p) => {
+    setShapePreset(p.id);
+    setShape(p.shape);
+  };
+
   const go = async () => {
     setBusy(true);
     const res = live
-      ? await apiFetch("/api/client-report", { method: "POST", body: { clientId: client.id, instruction, preset } })
-      : await generateClientReportPreview(client.id, { instruction, preset });
+      ? await apiFetch("/api/client-report", { method: "POST", body: { clientId: client.id, instruction, preset, shape, shapePreset } })
+      : await generateClientReportPreview(client.id, { instruction, preset, shape, shapePreset });
     setBusy(false);
 
     if (live) {
       if (!res.ok) { toast.error("Could not write the report", res.error); return; }
       const data = res.data;
+      if (data.shapeNotSaved) toast.warn("Saved, minus one thing", data.shapeNote || "");
       if (data.saved === false) toast.warn("Written, but not filed", data.saveError || "");
       else if (data.rejected) toast.warn("Counted version saved", `The AI draft was thrown away — ${data.rejected}.`);
       else toast.success("Report ready", data.source === "written" ? "Worded by the AI from our counts." : "Counted from our own records.");
@@ -245,6 +260,7 @@ function GenerateModal({ client, live, onClose, onDone }) {
   };
 
   const over = instruction.length > MAX_INSTRUCTION_CHARS;
+  const shapeOver = shape.length > MAX_SHAPE_CHARS;
 
   return (
     <Modal
@@ -254,7 +270,7 @@ function GenerateModal({ client, live, onClose, onDone }) {
       width={640}
       footer={<>
         <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn btn-accent" onClick={go} disabled={busy || over}>{busy ? "Reading the records…" : "Generate"}</button>
+        <button className="btn btn-accent" onClick={go} disabled={busy || over || shapeOver}>{busy ? "Reading the records…" : "Generate"}</button>
       </>}
     >
       <p className="adm-rep-explain">
@@ -297,7 +313,41 @@ function GenerateModal({ client, live, onClose, onDone }) {
         {over ? " — too long. Trim it, or the facts get squeezed out of the way." : ""}
       </div>
 
+      <div className="label" style={{ marginTop: 18, marginBottom: 6 }}>And how should it read?</div>
+      <div className="adm-rep-presets">
+        {SHAPE_PRESETS.map((p) => (
+          <button
+            key={p.id} type="button"
+            className={`adm-rep-preset${shapePreset === p.id ? " on" : ""}`}
+            onClick={() => pickShape(p)}
+          >
+            <span className="adm-rep-presetl">{p.label}</span>
+            <span className="adm-rep-preseth">{p.hint}</span>
+          </button>
+        ))}
+      </div>
+
+      <Field
+        label="Who is it for, and what shape do you want back"
+        hint="This decides the wording and the layout, so you can paste the answer straight where it is going. Example: “write it as an email to Dana, warm but short, no headings”."
+      >
+        <TextArea
+          value={shape}
+          onChange={(e) => setShape(e.target.value)}
+          style={{ minHeight: 72 }}
+          placeholder="For the client. Plain and friendly. No headings."
+        />
+      </Field>
+      <div className={`adm-rep-count${shapeOver ? " bad" : ""}`}>
+        {shape.length} / {MAX_SHAPE_CHARS} characters
+        {shapeOver ? " — too long. Trim it." : ""}
+      </div>
+
       <div className="adm-rep-rules">
+        <strong>What this second box cannot do:</strong> change what is true. It decides who the answer is
+        written for and what shape it comes back in. Everything below still applies to an email exactly as it
+        applies to a report.
+        <br /><br />
         <strong>What it will never do:</strong> make up a number that is not in our records, promise a result, or
         write down a job for a person. If a draft does any of those, it is thrown away and you get the plain counted
         version instead — and the page tells you that is what happened.
@@ -320,6 +370,12 @@ function GenerateModal({ client, live, onClose, onDone }) {
  * carry a separate summary, so it is printed above the body rather than lost. */
 function ReportModal({ report, client, onClose }) {
   const [facts, setFacts] = useState(false);
+  /* "Send it to them" — Ryder, Aug 24 2026. Three different things, because a
+   * client email, a text and an internal paste are three different documents.
+   * All three are built from the words already in this report: nothing here
+   * writes a new sentence, because a new sentence would not have been through
+   * the honesty check the report went through. */
+  const [sharing, setSharing] = useState(null);   // null | "email" | "text"
 
   const markdown = reportToMarkdown(
     {
@@ -342,6 +398,15 @@ function ReportModal({ report, client, onClose }) {
     const done = await copyToClipboard(markdown);
     if (done.ok) toast.success("Copied", "The whole report is on the clipboard, ready to paste.");
     else toast.error("The copy did not happen", done.why + " Select the text and copy it by hand.");
+  };
+
+  /* The same words with the markdown taken off. "Copy all" hands over the
+   * markdown, which is right for a file and wrong for an email — pasted into
+   * Gmail it shows up as "## Where they stand". */
+  const copyPlain = async () => {
+    const done = await copyToClipboard(reportToPlainText(report, { clientName: client.name }));
+    if (done.ok) toast.success("Copied", "Plain text, ready to paste anywhere.");
+    else toast.error("The copy did not happen", `${done.why} Select the text and copy it by hand.`);
   };
 
   const download = () => {
@@ -370,6 +435,9 @@ function ReportModal({ report, client, onClose }) {
       width={800}
       footer={<>
         <button className="btn" style={{ marginRight: "auto" }} onClick={() => setFacts(true)}>Check the numbers</button>
+        <button className="btn" onClick={copyPlain} title="The whole report as plain text — no # marks. For pasting into an email, a doc, or a message.">Copy to paste</button>
+        <button className="btn" onClick={() => setSharing("email")}>Email them →</button>
+        <button className="btn" onClick={() => setSharing("text")}>Text them →</button>
         <button className="btn" onClick={download}>Download</button>
         <button className="btn" onClick={copyAll}>Copy all</button>
         <button className="btn btn-accent" onClick={onClose}>Close</button>
@@ -378,6 +446,7 @@ function ReportModal({ report, client, onClose }) {
       <div className="adm-rep-prov">
         {provenanceLine(report.facts || { takenAt: report.counts_at }, report.source)}
         {report.instruction ? <> Asked for: “{report.instruction}”.</> : null}
+        {report.shape ? <> Asked to read as: “{report.shape}”.</> : null}
       </div>
 
       <div className="adm-rep-body">
@@ -395,6 +464,13 @@ function ReportModal({ report, client, onClose }) {
         ) : null}
       </div>
 
+      {sharing && (
+        <ShareModal
+          kind={sharing} report={report} client={client}
+          onClose={() => setSharing(null)}
+        />
+      )}
+
       {facts && (
         <Modal open onClose={() => setFacts(false)} kicker="THE FACTS IT WAS WRITTEN FROM" title={`${client.name} — counted records`} width={760}>
           <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, marginBottom: 12 }}>
@@ -411,6 +487,210 @@ function ReportModal({ report, client, onClose }) {
           </div>
           <pre className="adm-cp-raw">{JSON.stringify(report.facts || {}, null, 2)}</pre>
         </Modal>
+      )}
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* SEND IT TO THEM                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A draft email or a short text, built from a report that is already saved.
+ *
+ * THE ONE RULE: every word in here came out of the report. Nothing on this
+ * screen writes a new sentence, invents a number, or softens a fact — because
+ * the report went through the honesty check and a fresh sentence would not
+ * have. The box is editable, so a person can write whatever they like; what
+ * they cannot do is get the console to write it for them without that check.
+ *
+ * NOTHING IS EVER SENT FROM HERE. The Gmail button saves a DRAFT into the
+ * mailbox and stops. A person opens Gmail, reads it, and presses send. That is
+ * deliberate and it is not a step to remove later: an email to a client going
+ * out on one click of a button labelled "email them" is how the wrong thing
+ * gets sent to the wrong person.
+ */
+function ShareModal({ kind, report, client, onClose }) {
+  const isEmail = kind === "email";
+  const live = isConfigured();
+  const todayLabel = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric" });
+
+  const built = isEmail
+    ? reportToEmail(report, {
+      clientName: client.name,
+      contactName: client.contact_name,
+      contactEmail: client.contact_email,
+      senderName: "",              // filled in below from the box
+      todayLabel,
+    })
+    : null;
+
+  const [to, setTo] = useState(isEmail ? (client.contact_email || "") : (client.contact_phone || ""));
+  const [subject, setSubject] = useState(isEmail ? built.subject : "");
+  const [body, setBody] = useState(isEmail
+    ? built.body
+    : reportToText(report, { clientName: client.name, contactName: client.contact_name }));
+
+  const [mailboxes, setMailboxes] = useState(null);   // null = still asking
+  const [mailbox, setMailbox] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(null);
+
+  /* Which of our mailboxes the draft lands in. Asked for once, when the box
+   * opens, and only for an email. */
+  useEffect(() => {
+    if (!isEmail || !live) { setMailboxes([]); return; }
+    let stop = false;
+    (async () => {
+      const res = await apiFetch("/api/gmail-accounts");
+      if (stop) return;
+      const list = (res.ok ? res.data.accounts : []) || [];
+      setMailboxes(list);
+      /* A shared mailbox first — a client email should come from growth@, not
+       * from somebody's personal address, unless there is nothing else. */
+      const preferred = list.find((m) => m.shared && !m.needs_reconnect)
+        || list.find((m) => !m.needs_reconnect)
+        || list[0];
+      setMailbox(preferred?.email_address || "");
+    })();
+    return () => { stop = true; };
+  }, [isEmail, live]);
+
+  const copy = async () => {
+    const text = isEmail ? `${subject}\n\n${body}` : body;
+    const done = await copyToClipboard(text);
+    if (done.ok) toast.success("Copied", isEmail ? "Subject and message are on the clipboard." : "The message is on the clipboard.");
+    else toast.error("The copy did not happen", `${done.why} Select the text and copy it by hand.`);
+  };
+
+  const draftInGmail = async () => {
+    if (!live) { toast.warn("Preview mode", "Saving a real Gmail draft needs the console's own keys set."); return; }
+    if (!mailbox) { toast.error("No mailbox", "Connect a Gmail account on the Inbox page first."); return; }
+    if (!to.trim()) { toast.error("Nobody to send it to", "Put an email address in the To box."); return; }
+    setBusy(true);
+    const res = await apiFetch("/api/gmail-drafts", {
+      method: "POST",
+      body: { account: mailbox, action: "save", to, subject, body },
+    });
+    setBusy(false);
+    if (!res.ok) { toast.error("The draft was not saved", res.error); return; }
+    setSaved(res.data?.draftId || true);
+    toast.success("Draft saved in Gmail", `In ${mailbox}. Nothing has been sent — open Gmail, read it, then press send.`);
+  };
+
+  /* Handing the text to the Messages app. A plain sms: link, which macOS opens
+   * in Messages with the words already in the box. It cannot send on its own —
+   * the person still presses send — and it does nothing at all if the number
+   * is missing, which is why the button says so instead of failing quietly. */
+  const openMessages = () => {
+    const number = to.replace(/[^\d+]/g, "");
+    if (!number) { toast.warn("No number", "Put a phone number in the box, or just press Copy and paste it yourself."); return; }
+    window.location.href = `sms:${number}&body=${encodeURIComponent(body)}`;
+  };
+
+  const chosen = (mailboxes || []).find((m) => m.email_address === mailbox);
+
+  return (
+    <Modal
+      open onClose={onClose}
+      kicker={client.name.toUpperCase()}
+      title={isEmail ? "Email them this" : "Text them this"}
+      width={680}
+      footer={<>
+        <button className="btn" style={{ marginRight: "auto" }} onClick={onClose}>Cancel</button>
+        <button className="btn" onClick={copy}>Copy it</button>
+        {isEmail
+          ? <button className="btn btn-accent" onClick={draftInGmail} disabled={busy}>{busy ? "Saving…" : "Save as a Gmail draft"}</button>
+          : <button className="btn btn-accent" onClick={openMessages}>Open in Messages</button>}
+      </>}
+    >
+      <p className="adm-rep-explain">
+        Every word below is lifted straight out of the report — nothing new has been written, so nothing
+        here has skipped the check the report went through. Edit it however you like.
+        {isEmail
+          ? <> <strong>Nothing is sent.</strong> The button saves a draft in Gmail. You open it, read it, and press send yourself.</>
+          : <> <strong>Nothing is sent.</strong> Open in Messages fills the message in on your Mac; you press send.</>}
+      </p>
+
+      {isEmail && !client.contact_email && (
+        <div className="adm-db-warn" style={{ marginBottom: 12 }}>
+          This client has no contact email saved, so the To box started empty. Type one in, or add it with
+          <strong> Edit</strong> at the top of the client page.
+        </div>
+      )}
+      {!isEmail && !client.contact_phone && (
+        <div className="adm-db-warn" style={{ marginBottom: 12 }}>
+          This client has no phone number saved. Type one in, or just press <strong>Copy it</strong> and paste
+          the message wherever you are texting from.
+        </div>
+      )}
+
+      {isEmail && (
+        <>
+          <Field label="Send it from" hint="A shared mailbox is picked when there is one, so a client email comes from the agency rather than one person.">
+            {mailboxes === null ? (
+              <div style={{ fontSize: 13, color: "var(--ink-dim)" }}>Looking up your mailboxes…</div>
+            ) : mailboxes.length === 0 ? (
+              <div style={{ fontSize: 13, color: "#92400e" }}>
+                No Gmail account is connected, so a draft cannot be saved. Connect one on the Inbox page —
+                or press <strong>Copy it</strong> and paste the email wherever you write mail.
+              </div>
+            ) : (
+              <Select
+                value={mailbox} onChange={(e) => setMailbox(e.target.value)}
+                options={mailboxes.map((m) => [
+                  m.email_address,
+                  `${m.email_address}${m.shared ? " (shared)" : ""}${m.needs_reconnect ? " — needs reconnecting" : ""}`,
+                ])}
+              />
+            )}
+          </Field>
+          {chosen?.needs_reconnect && (
+            <div className="adm-db-warn" style={{ marginBottom: 12 }}>
+              That mailbox needs signing in again before it can save a draft. Inbox page → Reconnect.
+            </div>
+          )}
+        </>
+      )}
+
+      <Field label={isEmail ? "To" : "Their number"}>
+        <TextInput
+          value={to} onChange={(e) => setTo(e.target.value)}
+          placeholder={isEmail ? "dana@example.com" : "+1 850 555 0134"}
+        />
+      </Field>
+
+      {isEmail && (
+        <Field label="Subject">
+          <TextInput value={subject} onChange={(e) => setSubject(e.target.value)} />
+        </Field>
+      )}
+
+      <Field
+        label={isEmail ? "The email" : "The message"}
+        hint={isEmail
+          ? "Sign it with your own name before you send it — the report does not know who is sending."
+          : `${body.length} characters. Two or three lines is the point; the full report is what gets sent properly.`}
+      >
+        <TextArea value={body} onChange={(e) => setBody(e.target.value)} style={{ minHeight: isEmail ? 220 : 120 }} />
+      </Field>
+
+      {isEmail && built?.warnings?.length ? (
+        <div className="adm-rep-rules">
+          {built.warnings.map((w, i) => <div key={i} style={{ marginBottom: 6 }}>{w}</div>)}
+          <div>
+            <strong>Read it for anything internal.</strong> The gaps list and our own working notes were left
+            out on purpose, but a note somebody pasted into this client&apos;s record could still be quoted in the
+            body above.
+          </div>
+        </div>
+      ) : null}
+
+      {saved && (
+        <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 10, background: "var(--success-soft)", color: "#006b1a", fontSize: 12.5, lineHeight: 1.55 }}>
+          Saved as a draft in {mailbox}. It is sitting in Gmail&apos;s Drafts folder — nothing has gone out.
+        </div>
       )}
     </Modal>
   );

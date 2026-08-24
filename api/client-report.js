@@ -31,6 +31,7 @@ import { draft, isAiConfigured } from "../lib/ai.js";
 import {
   assembleReportFacts, buildFactsText, buildReportInstruction, parseAnswer,
   checkReport, deterministicReport, missingFrom, presetById, MAX_INSTRUCTION_CHARS,
+  MAX_SHAPE_CHARS,
 } from "../lib/client-report.js";
 
 const COST = { input: 3.0, output: 15.0 };
@@ -67,6 +68,12 @@ export default async function handler(req, res) {
 
   const presetId = String(body?.preset || "standard");
   const instruction = String(body?.instruction || "").trim().slice(0, MAX_INSTRUCTION_CHARS);
+  /* HOW IT SHOULD READ — who it is for and what shape to come back in. A
+   * separate question from "what should it cover", so a separate field all the
+   * way down: separate box on screen, separate fenced block in the prompt,
+   * separate column on the row. */
+  const shapePreset = String(body?.shapePreset || "").trim().slice(0, 40) || null;
+  const shape = String(body?.shape || "").trim().slice(0, MAX_SHAPE_CHARS);
 
   const admin = getAdminSupabase();
 
@@ -258,6 +265,7 @@ export default async function handler(req, res) {
         userInstruction: instruction,
         presetId,
         todayIso,
+        shape,
       });
 
       const result = await draft({
@@ -313,6 +321,8 @@ export default async function handler(req, res) {
     client_id: clientId,
     instruction: instruction || null,
     preset: presetId,
+    shape: shape || null,
+    shape_preset: shapePreset,
     title: report.title || `${client.name} — report`,
     summary: report.summary || "",
     body: [report.body || "", report.watch ? `\n## Worth a second look\n${report.watch}` : ""].join(""),
@@ -337,8 +347,21 @@ export default async function handler(req, res) {
     created_by_email: member.membership.email,
   };
 
-  const { data: saved, error: saveErr } = await admin
+  /* MIGRATION 0014 MAY NOT HAVE BEEN RUN. If the two shape columns are not
+   * there yet, save the report without them rather than losing it — a report
+   * you cannot generate is a far worse outcome than one whose shape was not
+   * recorded. The retry is narrow on purpose: only the "column does not exist"
+   * answer, and only once. Anything else is a real failure and is reported. */
+  const MISSING_SHAPE = /(column|schema cache)[^]*?(shape|shape_preset)|(shape|shape_preset)[^]*?(column|schema cache|does not exist)/i;
+  let { data: saved, error: saveErr } = await admin
     .from("admin_client_reports").insert(row).select().maybeSingle();
+  let shapeNotSaved = false;
+  if (saveErr && MISSING_SHAPE.test(saveErr.message || "")) {
+    const { shape: _s, shape_preset: _sp, ...withoutShape } = row;
+    ({ data: saved, error: saveErr } = await admin
+      .from("admin_client_reports").insert(withoutShape).select().maybeSingle());
+    shapeNotSaved = !saveErr;
+  }
 
   res.setHeader("Cache-Control", "private, no-store");
 
@@ -353,5 +376,13 @@ export default async function handler(req, res) {
     });
   }
 
-  return res.status(200).json({ report: saved, saved: true, source, usage, rejected });
+  return res.status(200).json({
+    report: saved, saved: true, source, usage, rejected,
+    /* Named, not swallowed. It is the one thing on this response that is
+     * different from what was asked for. */
+    shapeNotSaved: shapeNotSaved || undefined,
+    shapeNote: shapeNotSaved
+      ? "The report is saved, but how you asked it to read was not — migration 0014 has not been run on this database yet."
+      : undefined,
+  });
 }

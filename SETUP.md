@@ -970,3 +970,21 @@ has nowhere safe to be kept.
 | `redirect_uri_mismatch` | The address in step 3 is missing, or you are local without `CONNECT_REDIRECT_URI` | Step 3, including the local-dev box under it |
 | Google refuses the account at sign-in | You tried a client's own Google account. The app is Internal | Sign in with your aisyndicate.com account, after the client has given it access |
 | Google did not return a refresh token | Google remembers a previous approval | Go to myaccount.google.com/permissions, remove AI Syndicate, connect again |
+
+---
+
+## Migration 0014 — how a report was asked to read (added Aug 24 2026)
+
+**The smallest one in the set: two columns.** The Generate report box now asks two questions instead
+of one — *what to cover* and *who it is for / what shape to come back in* — and this remembers the
+second answer next to the report it produced.
+
+1. Open **supabase.com** → your project → **SQL Editor** → **New query**.
+2. Open `supabase/migrations/0014_report_shape.sql` in Cursor, select all, copy.
+3. Paste it into the SQL Editor and press **Run**.
+4. It should say **Success. No rows returned.**
+
+**The console works without this.** If the columns are not there, a report still generates and still
+saves — it just does not record how you asked it to read, and a line on screen says so. That is
+deliberate: a report you cannot generate is a much worse outcome than a report whose shape was not
+written down.

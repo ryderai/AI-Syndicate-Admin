@@ -1921,7 +1921,7 @@ export async function deleteClientReport(id) {
  * shape as what you get after — only the AI wording is missing, and that is
  * labelled COUNTED either way.
  */
-export async function generateClientReportPreview(clientId, { instruction, preset } = {}) {
+export async function generateClientReportPreview(clientId, { instruction, preset, shape, shapePreset } = {}) {
   const client = previewStore.clients.find((c) => c.id === clientId);
   if (!client) return { ok: false, error: "That client does not exist." };
 
@@ -1965,11 +1965,18 @@ export async function generateClientReportPreview(clientId, { instruction, prese
     cutChars ? `- About ${cutChars} characters of this client's detailed lists did not fit on the fact sheet.` : "",
     "- Money. Preview mode has no invoices at all, so nothing here is about what has been billed or paid.",
     "- Anything the real console would read from Gmail, Stripe or the platform. None of them are connected in preview.",
+    shape ? "- How you asked this to read. Preview always writes the plain counted version, which has one fixed shape. With an AI key set, the real console follows what you typed." : "",
   ].filter(Boolean).join("\n");
 
   const row = {
     id: pid("rep"), client_id: clientId,
     instruction: instruction || null, preset: preset || "standard",
+    /* Saved so preview behaves like the real thing on screen. Preview always
+     * writes the COUNTED version, which cannot change its own shape — that is
+     * the AI's job — so the row carries what was asked for and the answer does
+     * not follow it. Said out loud in the gaps below rather than left to
+     * surprise somebody. */
+    shape: shape || null, shape_preset: shapePreset || null,
     title: built.title, summary: built.summary, body: built.body,
     cannot_check: previewGaps,
     source: "counted", rejected_why: null,

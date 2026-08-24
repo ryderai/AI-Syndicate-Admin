@@ -4194,3 +4194,106 @@ short pre-filled form, not one press.
   — but nothing warns that an old report may be pointing at it.
 - Everything in §39's own list still stands: **migration 0013 is unrun (seven now), and nothing here
   has ever been run against a real Google account.**
+
+---
+
+## §41. Say what shape you want, then send it — Aug 24 2026 (append-only section)
+
+Nothing above this line was changed. §39 and §40 still stand.
+
+### What Ryder asked for
+
+> *"make the clients page icon a person"* · *"when you click a person, is that there actual client
+> page like it is every time a client is clicked?"* · *"i want the generate report to be a click and
+> open prompt that you type in the type of report you want to be gathered and how you want it
+> formated and responded as so you can copy and paste for people, then have a button for like text
+> ot email them with this as a draft."*
+
+**The answer to the middle question is yes.** `ClientDetail` is exported from `Operations.jsx` and
+rendered by both pages. There is one client page and two doors into it.
+
+### 1. The icon
+
+`clients` in `Sidebar.jsx` was still the dollar sign it inherited from Customers. It is two figures
+now. The page stopped being "everyone who pays" on Aug 24; the money symbol was describing the
+smaller half of the list.
+
+### 2. Two questions on the Generate box, not one
+
+`instruction` was already there — **what to cover and how deep**. New alongside it: **who it is for
+and what shape it comes back in**, with its own five buttons (For us · For CJ to forward · As an
+email I can paste · As a short message · Bullet points only), its own box, and its own 600-character
+cap (`MAX_SHAPE_CHARS`).
+
+**They travel as two separate fenced blocks in the prompt.** Folding them into one box was
+considered and dropped: "write it as an email" buried three lines into a paragraph about scope gets
+treated as a passing remark and the answer comes back as a report anyway.
+
+The shape block is told in the prompt that it decides **how the answer reads, never what is true**,
+and the honesty rules are restated after it — so the last word in the prompt is still ours. One
+extra rule was added for this: an email or message written to a client obeys every rule a report
+does. It may be warm; it may not promise, guess, apologise for something we did not do, or state
+anything the facts do not carry. A test asserts the rules come after the shape block in the string.
+
+Saved on the row by **migration 0014** (`shape`, `shape_preset`). `api/client-report.js` retries the
+insert without those two columns if they are not there, so an unrun 0014 costs you the record of the
+shape and nothing else — and the screen says that is what happened.
+
+### 3. Sending it
+
+`lib/report-share.js` — pure, shared, and the subject of `tests/share` (42 checks).
+
+| Button | What it does |
+|---|---|
+| **Copy to paste** | The whole report, markdown taken off, gaps list KEPT. For us. |
+| **Email them →** | A draft email: greeting, first finding, up to six bullets, sign-off |
+| **Text them →** | Two or three lines, capped at 320 characters |
+| Copy all | Unchanged — the markdown, for a file |
+
+**THE ONE RULE: nothing in a draft is a new sentence.** Every word is lifted from a report that has
+already been through `checkReport`. A freshly written sentence would not have been, and this is the
+whole reason the drafts are assembled from the report rather than generated. A test walks every
+number in a draft and fails if one is not in the report it came from. (Today's date is excluded from
+that check — it is passed in from the clock by the caller, not lifted and not invented.)
+
+**Our voice vs theirs.** A report is written ABOUT a client; an email is written TO them. A sentence
+carried straight across said *"Their own Google Search Console shows 412 clicks"* to the very person
+whose Search Console it is. `CLIENT_VOICE` in `report-share.js` is a **short, explicit list of
+phrases this codebase generates** — not a pronoun sweep, which would have broken "the crawlers and
+their user agents". Every substitution that fires is named in the warnings on screen. Caught in the
+browser, not by a test; there is a test now.
+
+**What a client-facing draft drops, and the internal copy keeps:** the "what these records cannot
+answer" list, the provenance line, and any line the report marked as one of our own working notes
+(`our note from …`). Sending our own gap list raw to a client reads as a list of things we have not
+done. `reportToPlainText` keeps all of it, because that one is for us.
+
+**NOTHING IS EVER SENT.** "Save as a Gmail draft" writes a real draft into a mailbox and stops. A
+person opens Gmail, reads it, presses send. **Do not "improve" this into a send button.** An email
+to a client going out on one click of a button labelled "email them" is how the wrong thing reaches
+the wrong person. The text button opens Messages with the words filled in; the person still presses
+send.
+
+The draft is saved from a **shared** mailbox when there is one (growth@ rather than somebody's
+personal address), falling back to any connected one. A mailbox needing to be reconnected is named
+on screen before anybody presses the button.
+
+### What is NOT done
+
+- **Migration 0014 is unrun. That is EIGHT** (0007–0014).
+- **No Gmail draft has ever actually been saved from here.** The endpoint it calls is the same one
+  the Inbox page has used since Aug 18, but this particular path has only been run against sample
+  data.
+- The text button uses an `sms:` link. That opens Messages on a Mac. It has not been tried on
+  anything else, and there is no check that the number is real.
+- The drafts are assembled by rules, not written — so a report with no bullets and no plain
+  sentences produces a nearly empty draft. It says so rather than filling the space.
+- `tests/share` (48 checks) covers the shaping. Nothing covers the modal itself.
+
+### One trap worth writing down, not about this feature
+
+Writing these files through a **Python heredoc silently turned every `\b` in a JavaScript regex
+into a real backspace character** (0x08). The file looked right in an editor, `node --check` passed,
+eslint passed, the build passed — and `/\bTheir own…/` matched nothing, so the whole voice rewrite
+was dead. It was only visible in the browser. If a regex with `\b`, `\f` or `\v` in it mysteriously
+never matches, run `grep -rlP '[\x08\x07\x0b\x0c]'` over the repo before doubting the pattern.
