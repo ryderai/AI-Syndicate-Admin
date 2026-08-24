@@ -21,9 +21,10 @@ import {
  *
  * THREE THINGS THAT ARE NOT NEGOTIABLE, AND WHERE THEY LIVE
  *
- * 1. Two layers, every time. A 30-second summary that gets forwarded, and the
- *    full version that gets filed. Built into the shape of the answer in
- *    lib/client-report.js, not left to whoever is typing.
+ * 1. ONE answer, shaped by what was asked for. Changed Aug 23 2026 — it used to
+ *    be two layers, a 30-second version and a full one, and you read the same
+ *    ground twice. The shape now comes from the request and from the notes left
+ *    on earlier answers; see the SHAPE block in lib/client-report.js.
  * 2. Every report says where it came from and, separately, what our records
  *    CANNOT answer. A gap that is named is a gap; a gap that is quietly skipped
  *    reads as "all clear".
@@ -152,7 +153,7 @@ export function ClientReportsPanel({ client, reports, autoOpen = false, onAutoOp
         <EmptyState
           icon="&#128203;"
           title={`No reports for ${client.name} yet`}
-          body="Press Generate report and say how deep to go. It reads this client's tasks, weekly log, websites, email, follow-ups, invoices and notes, counts them, and writes it up — a 30-second version and a full one. Every report is kept, so you can see what we said last month."
+          body="Press Generate report and say how deep to go. It reads this client's tasks, weekly log, websites, email, follow-ups, invoices and notes, counts them, and writes one answer in the shape you asked for. Every report is kept, so you can see what we said last month."
           action={<button className="btn btn-accent" onClick={() => setAsking(true)}>Generate the first one</button>}
         />
       ) : (
@@ -258,8 +259,8 @@ function GenerateModal({ client, live, onClose, onDone }) {
     >
       <p className="adm-rep-explain">
         It reads everything this console holds about {client.name} — tasks, the weekly log, websites, email threads,
-        follow-ups, invoices, support tickets and the notes the team wrote — counts it, and writes it up. You always
-        get two layers: a 30-second version to forward, and the full one to file.
+        follow-ups, invoices, support tickets and the notes the team wrote — counts it, and writes one answer in the
+        shape you ask for. Every number in it has to appear in those counts, or the draft is thrown away.
       </p>
 
       <div className="label" style={{ marginBottom: 6 }}>Start from one of these</div>
@@ -309,8 +310,11 @@ function GenerateModal({ client, live, onClose, onDone }) {
 /* Read one                                                            */
 /* ------------------------------------------------------------------ */
 
+/* ONE RESPONSE, ONE SCROLL — same change as the console generator, same day.
+ * The three tabs (30-second / full / what it could not check) are gone: the
+ * answer is one document and the gaps are the last part of it. Older rows still
+ * carry a separate summary, so it is printed above the body rather than lost. */
 function ReportModal({ report, client, onClose }) {
-  const [tab, setTab] = useState("short");
   const [facts, setFacts] = useState(false);
 
   const markdown = reportToMarkdown(
@@ -372,27 +376,19 @@ function ReportModal({ report, client, onClose }) {
         {report.instruction ? <> Asked for: “{report.instruction}”.</> : null}
       </div>
 
-      <div className="aia-tabs" role="tablist" aria-label="Report length" style={{ marginBottom: 14 }}>
-        {[["short", "The 30-second version"], ["full", "The full version"], ["gaps", "What it could not check"]].map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={`aia-tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
-            <span className="aia-tab-dot" aria-hidden="true" />
-            {label}
-          </button>
-        ))}
-      </div>
-
       <div className="adm-rep-body">
-        {tab === "short" && <RichText text={report.summary} />}
-        {tab === "full" && <RichText text={report.body} />}
-        {tab === "gaps" && (
-          <>
+        {String(report.summary || "").trim() ? <RichText text={report.summary} /> : null}
+        <RichText text={report.body} />
+        {String(report.cannot_check || "").trim() ? (
+          <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--rule)" }}>
+            <div className="label" style={{ marginBottom: 6 }}>What these records cannot answer</div>
             <p className="adm-rep-p">
-              These are the things this console does not hold, so nothing above is based on them. Named out loud on
-              purpose — a gap nobody mentions reads as “checked, all fine”.
+              Nothing above is based on these. Named out loud on purpose — a gap nobody mentions reads
+              as “checked, all fine”.
             </p>
             <RichText text={report.cannot_check} />
-          </>
-        )}
+          </div>
+        ) : null}
       </div>
 
       {facts && (

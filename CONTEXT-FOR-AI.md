@@ -3511,3 +3511,283 @@ says "nothing is late".
   secret while the old key is still set.
 - **Nothing has been watched against a real Supabase or a real API key.** Every "it works" in this
   document is the sample store, a pure test, or a fault-injected bundle.
+
+---
+
+## §35. Overview trimmed, Operations click-to-filter, and ONE-ANSWER reports — Aug 23 2026, later session (append-only section)
+
+Appended, nothing above rewritten. **This section overrides §31, §32 and §33 wherever they disagree,
+and parts of §30's Overview description.** What it makes untrue, named so nobody trusts the old text:
+
+| Now false | Where it says it | The truth |
+|---|---|---|
+| "Every report has two layers, always" + a third tab | §33 (~line 2105) | ONE answer. No layers, no tabs. |
+| The Overview greeting banner, the team date, the one-line "you have N late", START HERE | §30/§31/§33 and the numbered Overview table | All removed. There is no banner. |
+| "Clients that need attention" is row 8 of Overview | §33 | Removed. |
+| "the banner ends at 474px, the strip sits at 498px", and the Playwright assertion about it | §31 addendum 2 | There is no banner to measure. |
+| Overview order: banner → strip → counters | §31/§32 | Now: red "some of this page is missing" panel → the generator strip → **Yours / Your day right now** counters → **The agency / Where everything stands** counters → tasks + reminders → what the console noticed → money → what changed → jump in. |
+
+### 1. Overview — what Ryder cut, and what went with it
+
+Asked for in his words: the greeting card is *"basically useless"*, and "Clients that need attention"
+is *"useless because the other sections already state everybody who needs follow up"*. Both are gone.
+Dead code removed with them, not left running every 60 seconds: `greeting()`, `longDate()`,
+`firstName`, `mode`, `allClear`, `anythingMissing`, the whole `byClient`/`attention` tally, the
+`headline` (START HERE) chain, and the now-unused `TEAM_TZ` import. The two counter rows are stacked;
+the first gained a header ("Yours / Your day right now") so two five-tile rows read apart.
+
+The generator panel lost its two describe-itself paragraphs and both field hints. **One line was put
+back on purpose:** "Every number is checked against the records. It cannot see the vault, Stripe, the
+platform's scores, or the text of an email." What the tool cannot see is not decoration — somebody who
+does not know it is missing will ask it for a GEO score and believe the answer.
+
+### 2. Operations — click a value to filter, and to group
+
+The cells were already click-to-edit, so a plain click could not mean two things. The two actions sit
+at the TOP of the menu the click already opens (`FilterHead`, src/components/admin/opsCells.jsx):
+**Show only <value>** and **Group the table by <Column>**. Group headers gained **Only this**.
+
+- Client and Owner filters are routed into the two dropdowns that already exist for them, so a filter
+  set by clicking is visible in the control you would have used by hand. Status, Priority, Category
+  and Phase go into a new `facets` object in Operations.jsx.
+- Clicking the value that is already filtered clears it.
+- Active filters render as removable chips under the toolbar, plus **Clear all**. A filter you cannot
+  see is a table that looks broken.
+- Due date has **Group by** but no "Show only" — one exact date is not a useful filter.
+- `facets` is deliberately NOT persisted to localStorage. `writePrefs` still stores only
+  `{viewId, byView, columns}`.
+- Coercion gotcha, caught by a checker: `filterFor` sends `value || "__none"`, not `?? "__none"`,
+  because `visibleHere` compares `String(t[k] || "__none")`. With `??` a field holding `""` set a
+  filter that matched nothing.
+
+**Due date is now the LAST column.** The row sort is unchanged — soonest due still first.
+
+### 3. Long reports were unreadable at the bottom
+
+`.adm-modal-body` had `overflow-y: auto` but no `flex: 1 1 auto; min-height: 0`. A flex item defaults
+to `min-height: auto`, so it refused to shrink and the tail of a long report was pushed past the
+modal instead of scrolling inside it. Fixed in src/admin.css, with `overflow: hidden` on `.adm-modal`
+to keep the corners and 28px of bottom padding so the last line is not against the footer.
+
+### 4. ONE ANSWER — the report shape
+
+Ryder: *"i want when someone ever generates like a report or anything where ai is giving an overview
+custom to a prompt i want it to be just one response that speaks and formats the data to how the
+memory and prompt suggest."*
+
+- The prompt no longer imposes SUMMARY / REPORT / WATCH OUT. It asks for one `TITLE:` line and then
+  the answer once, in the shape the request itself asks for. The saved feedback notes (the "memory")
+  still steer tone, length and what to lead with, and still cannot loosen the rules.
+- `parseAnswer()` in lib/client-report.js replaces `parseReport()` on the live path. It takes the
+  title line and keeps everything else as `body`. `summary` is `""` on every new row; `watch` is null.
+- **The number gate is unchanged.** `checkReport` still runs every check over
+  `[title, summary, body, watch].join("\n")`, and the whole answer is now in `body`, so nothing
+  escaped by moving. The only loosening: the old rule demanded a summary AND a body; now an answer is
+  refused only if both are empty. An old-shape row (summary, no body) still reads — asserted in
+  tests/vault/test.mjs so it is a decision, not a drift.
+- Four content-loss bugs a checker caught in `parseAnswer` and fixed the same hour: a `##` heading on
+  the first line was eaten as the title; `## Report` / `## Summary` headings the model chose were
+  deleted; a title-only answer was thrown away; a missing title saved the row as "Overview", the one
+  word the prompt forbids. All five cases are in tests/vault/test.mjs.
+- Both readers (client report modal, console generator modal) are one scroll: provenance → the answer
+  → **What these records cannot answer** at the bottom, inside the same document. The gaps list stays.
+  A gap nobody mentions reads as "checked, all fine".
+- `lib/brain-context.js` was reading `r.summary` for the assistant's report headlines and would have
+  gone blank on every new row — now `summary || body`, skipping heading lines. Same for the
+  EARLIER-REPORTS history in lib/client-report.js, which otherwise quoted "## In short".
+
+### 5. Proof, and what is still unproven
+
+eslint clean over src, lib, api and tests. Suites: console-report 46, overview 44, vault 106,
+finance 53, sales 84, brain 78, inbox 47 — all green. Watched in Chrome on localhost:5173: filter and
+group from a cell menu and from a group header, the chip bar and its ×, Due date last, a generated
+report read to its final line, both modals with no tabs.
+
+**Unproven:** the AI path of the one-answer shape. Preview mode has no `ANTHROPIC_API_KEY`, so every
+report watched today was the counted fallback. Nobody has yet seen a model answer under the new SHAPE
+pass or fail the gate. That is the first thing to press once the key is in Vercel.
+
+---
+
+## §36. Clickable column headers + a real Description on every task — Aug 23 2026, same session (append-only section)
+
+Appended. **Two corrections to §35 first**, because §35 was written an hour before this and is now
+wrong in two places:
+
+1. §35 §2 says *"`writePrefs` still stores only `{viewId, byView, columns}`"*. It stores
+   `{viewId, byView, columns, colsSeen}`. `facets` is still deliberately NOT persisted — that part
+   holds.
+2. §35 §2 describes the cell menus (`FilterHead`) as the only way to filter from the table. The
+   column headers now do it too, and they are the better path. Both exist.
+
+### 1. The header is a control
+
+Ryder: *"i want the title at the top of the row to be clickable to filter it."* `ColumnHead` in
+src/components/admin/opsTable.jsx. Clicking a header opens: **Group the table by <Column>**,
+**Clear this filter** when one is on, then every value the column holds with a count — commonest
+first, "none" last.
+
+**The value list is built from ALL tasks, not the rows on screen.** First version counted the
+filtered rows, and a checker caught what that does: filter Category = Access and the Phase menu
+offered only the phases inside Access, so Month 1 could not be reached from a header at all. Watched
+fixed: with Category = Access showing 1 row, the Phase menu still lists Ongoing 5, Onboarding 3,
+Month 1 2, Month 2 2.
+
+Text columns (Task, Latest report, Description) stay plain `<th>` text — there is no value list to
+offer and a header that opens an empty menu is worse than one that does nothing. Due date gets
+group-by only. The client page's task table passes no `onFacet`/`onGroupBy`, so its headers are plain
+text and nothing throws.
+
+Two more things the checker caught here: the group header's **Only this** button read the same when
+clicking it would REMOVE the filter (now "✓ Only this"), and `facetValue("assignee")` reported
+`"__me"` as an active value, lighting the header dot next to a menu where nothing was ticked (now
+undefined — the chip bar is where "Owner: just mine" shows).
+
+### 2. Description — the standing brief
+
+Ryder: *"in operations i want to have a description for the project that can go more in depth."*
+New column `admin_tasks.description`, **migration `0012_task_description.sql`, and SETUP.md now has
+the run-it step** — §35 shipped a migration nobody was told to run.
+
+- `description` = what the work is, why, what done means, links and logins.
+  `latest_report` = where it stands right now. Two fields on purpose: the second is rewritten every
+  week, and a brief does not belong in a field that gets overwritten.
+- Editable in the table cell (multiline) and in the task modal, where it is a tall field under
+  Latest report. Included in the page's search box.
+- **`white-space: pre-line` on the cell, clamped to 3 lines.** The first version rendered it in a
+  flex row with no white-space rule, so a brief typed as three labelled lines read back as one
+  run-on paragraph — the exact structure the field exists for.
+- `.adm-db-table` min-width raised 1120 → 1500 and `thead th` now clips: two 340px columns were added
+  to a table whose min-width was never raised, and `th` (unlike `td`) had no overflow rule, so
+  "PRIORITY ▾" painted over the next header in a narrow window.
+
+**LIVE MODE BEFORE THE MIGRATION IS RUN — the worst bug in this change, and it is fixed.** The task
+modal sent `description` unconditionally, so Postgres rejected the whole row: a console without 0012
+could not save ANY task edit, not even a due date, and the error read `PGRST204`. Now the save
+retries without the brief, saves everything else, and says in plain words to run the migration. The
+in-cell path rolls back and says the same.
+
+### 3. Prefs: no version ladder
+
+`colsSeen` in Operations.jsx is the list of column keys this browser has already been offered.
+Anything in COLUMNS that is not in it is switched on once; a column switched off later stays off.
+It replaced a `colsV` number, because a numbered ladder only upgrades people who open the page at
+every single version — someone who skipped v2 would get v3's column and never v2's.
+
+### 4. KNOWN GAPS from this change
+
+- **The assistant cannot search a brief.** `lib/assistant-tools.js` still filters tasks on
+  `name` and `latest_report` only. Adding `description.ilike` there would make every task search
+  fail with a Postgres error until 0012 is run, so it waits for the migration.
+- **`description` reaches no AI surface at all** — not the report fact sheets, not
+  `loadSystemContext`, not client standing. That is deliberate (it is free text a person types), and
+  it also means the brief is invisible on the Work page, where the person doing the work reads.
+- **No test suite covers the Operations page.** `ColumnHead`, `applyFacet`, `colsSeen` and the
+  description search path have zero automated coverage; everything above was watched in Chrome
+  instead. `colsSeen` is pure and should have a test.
+- `_to_delete/LeadsPage.jsx.replaced-by-SalesPage` is untracked in the working tree and must not be
+  committed.
+
+### 5. Proof
+
+eslint clean over src, lib, api, tests. console-report 46, overview 44, vault 106, finance 53,
+sales 84, brain 78, inbox 47 — green. Watched in Chrome on localhost:5173: a header menu filtered and
+grouped, the ● dot and the chip appeared together, the Phase menu stayed complete under a Category
+filter, a brief typed straight into a cell saved and read back with its line breaks, and the task
+modal showed the brief in full. Grouping was set back to **Client** at Ryder's request — a test
+earlier in the session had left his saved view on Category.
+
+---
+
+## §37. Titles SORT. The Description pops out. — Aug 23 2026, same session (append-only section)
+
+**Corrections to §35 and §36 first. Both were written earlier today and both are now wrong.**
+
+| Now false | Where | The truth |
+|---|---|---|
+| "Clicking a header opens: Group the table by \<Column\>…" | §36 §1 | Clicking a header **sorts**. The filter/group menu moved onto a small **▾** button beside the title. |
+| "Text columns (Task, Latest report, Description) stay plain `<th>` text" | §36 §1 | Every title is a sort button. Only the ▾ is limited — text columns have no value list, so they get no caret. |
+| "The client page's task table … headers are plain text" | §36 §1 | Its headers sort too. It still passes no `onFacet`/`onGroupBy`, so it has no ▾. |
+| "Editable in the table cell (multiline)" | §36 §2 | The Description cell **pops out** into a floating editor. Latest report still edits in the cell. |
+| "The row sort is unchanged — soonest due still first" | §35 | True only when nothing is sorted. That is now the third state of a three-click cycle. |
+| ".adm-db-table min-width 1500" | §36 §2 | 1990px — the sum of the declared column widths. See below. |
+
+### 1. Clicking a title sorts
+
+Ryder: *"i wanted to be able to just click the row and it would sort the tasks in that row, for every
+click it gives it a new sorting list."* Three states per column: the useful direction (High first,
+soonest first, A→Z), the other way, then off. The arrow ↑/↓ and a filled pill show which column is
+sorting; `aria-sort` on the `<th>` says the same thing out loud, because both the arrow and the
+filter dot are `aria-hidden`.
+
+Sorting happens INSIDE each group, so grouping by client and sorting by priority does both.
+Not persisted — a sort is a thing you do for a minute, unlike grouping and columns.
+
+**The sort logic moved to `src/lib/opsSort.js`, a plain .js module, and `tests/ops/test.mjs` is the
+18-test suite it should have had from the start.** It shipped with zero coverage and a checker found
+three real bugs in the hour:
+
+1. **"Stop sorting by X" re-sorted the table.** It called the toggle twice, which from the reversed
+   state lands back on the first state. It now clears the state directly. The test that documents why
+   is called *"two blind toggles can NOT clear a reversed sort"*.
+2. **In-band sentinels.** Missing values were encoded as the numbers 9 / 99 / -1 and then tested for.
+   `admin_tasks.phase` has NO check constraint (0001_admin_init.sql), so any phase outside the five
+   in the UI list — an import, different casing, "Month 4" — came back as `indexOf` -1, counted as
+   blank, and sank to the bottom in both directions, **while `groupTasks` used that same -1 as a rank
+   and floated it to the top**. Sort and group disagreed about one row. Values are now `{ blank, v }`,
+   and present-but-unknown sorts after the known values without being blank. It also means the 10th
+   status or phase anyone adds is no longer silently treated as empty.
+3. **An unknown column key silently reordered everything.** `sortValue` returned `""` by default, all
+   rows compared equal, and the comparator fell through to the due-date tie-breaker — the arrow said
+   "sorted by X" while the table was sorted by something else. `sortRowsBy` now refuses any key not
+   in `SORTABLE`.
+
+### 2. The Description pops out
+
+Ryder: *"when i click the description box and the text is larger than the box then it pops it out so
+you can read the full description."* `PopoutCell` + `Popout` in opsCells.jsx. Esc undoes, Save saves,
+Cmd/Ctrl+Enter saves, clicking away saves. The caret starts at the END of the existing text — without
+that, autoFocus put it at position 0 and the first thing typed landed in front of the brief.
+
+Five things a checker caught, all fixed:
+
+- **The draft was thrown away if the row disappeared.** A refresh from another session, or a filter
+  the row stopped matching, unmounted the editor and 400 words went with it, no toast. Unsaved text
+  is now saved on unmount, guarded by a `settled` ref so Save and Escape cannot double-fire.
+- **Clicking the cell again saved AND reopened.** The obvious close gesture reopened the editor in the
+  same click. The owning cell is now recognised and the click is swallowed.
+- **The mirrored draft could be one keystroke stale.** It was written in an effect, but the
+  outside-click listener is a native capture listener that runs BEFORE React flushes effects. It is
+  written in `onChange` now, so all three save paths read the same value.
+- **z-index 1300 put it under the assistant panel** (which sets 9000 inline), so with the assistant
+  open the Save button was unclickable and the only way out was Escape, which discards. Now 9600.
+- Dragging the window scrollbar counted as "clicking away". It does not any more. Focus returns to
+  the cell on close, and the dialog carries `aria-modal`.
+
+### 3. The table stopped shrinking its columns
+
+`.adm-db-table` is `table-layout: fixed` and the declared widths now total ~1990px. At min-width 1500
+every column was scaled down, and the header's new arrow and ▾ were the first things `overflow:
+hidden` ate — the filter menu became unreachable for Priority, Status and Phase at ordinary laptop
+widths. min-width is now the real sum; the table scrolls sideways instead.
+
+### 4. Still open after this
+
+- `MISSING_DESCRIPTION` in Operations.jsx was `/description/i` and matched any error containing the
+  word. Tightened, but it is still a string match on a Postgres message — the real fix is running
+  migration 0012.
+- The pre-migration wording in SETUP.md said a rejected brief "puts the cell back". With the popout
+  the editor has already closed by the time the patch fails, so the typed text is gone, not restored.
+  Corrected in SETUP.md.
+- No test covers `Popout`, `ColumnHead`, `applyFacet` or `colsSeen` — only the sort is tested, because
+  only the sort was moved somewhere node can import. The rest was watched in Chrome.
+- The assistant still cannot search a Description (§36 §4) and `description` still reaches no AI
+  surface.
+
+### 5. Proof
+
+eslint clean over src, lib, api, tests. **ops 18 (new)**, console-report 46, overview 44, vault 106,
+finance 53, sales 84, brain 78, inbox 47 — all green. Watched in Chrome: one click on Priority put
+High first with the ↑ pill, the second reversed it, the third cleared it; the Description popped out
+with the full brief, took typing at the end, saved on click-away, and its title row stayed on one
+line.

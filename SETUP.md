@@ -809,3 +809,31 @@ rating first, so it actually changes. They can only change tone, length and what
 can never let it invent a number, and the rules that stop it come after the notes on purpose.
 
 Rating the same answer twice is fine: it saves a second row and the newest one wins.
+
+---
+
+## Migration 0012 — the Description field on tasks
+
+Run this one whenever you like; it does not depend on any other migration. Safe to run twice.
+
+1. Go to **supabase.com** → the **ai-syndicate** project → **SQL Editor** → **New query**.
+2. Open `supabase/migrations/0012_task_description.sql` from this repo, select all, copy.
+3. Paste it in and click **Run**. You should see **Success. No rows returned.**
+
+### What it adds
+
+One column, `admin_tasks.description` — the standing brief on a task. What the work is, why, what
+finished looks like, any link or login it needs. It is **not** `latest_report`: that one is the
+one-line status you read in the table and it gets overwritten every week.
+
+### Until you run it
+
+The console still works. Typing a brief in the table says **"The Description column does not exist
+yet"** and puts the cell back. Saving the task modal saves everything else and warns that the brief
+was not saved. Nothing else on the page breaks — that retry is there on purpose, because before it
+existed a console without this migration could not save a due-date change either.
+
+**Correction to the paragraph above (same day, after the Description cell became a pop-out editor):**
+a brief rejected because migration 0012 has not been run is **not** "put back" in the cell — the
+pop-out has already closed by then, so the text is gone and the toast is the only trace. Run the
+migration before writing briefs you cannot retype.

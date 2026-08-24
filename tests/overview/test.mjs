@@ -311,7 +311,7 @@ t("sorting notes urgency-descending puts 3 first", () => {
 
 /* ---------------- the non-date fixes, as plain assertions ---------------- */
 
-t("an unreadable reminder date sorts LAST, so it cannot become START HERE", () => {
+t("an unreadable reminder date sorts LAST, so it never leads the list", () => {
   const rows = [
     { id: "broken", atMs: null },
     { id: "sixLate", atMs: Date.parse("2026-08-16T14:00:00Z") },
@@ -321,7 +321,7 @@ t("an unreadable reminder date sorts LAST, so it cannot become START HERE", () =
     (a.atMs ?? Number.MAX_SAFE_INTEGER) - (b.atMs ?? Number.MAX_SAFE_INTEGER);
   const sorted = rows.slice().sort(byDue);
   assert.deepEqual(sorted.map((r) => r.id), ["sixLate", "today", "broken"]);
-  assert.equal(sorted.find((r) => r.atMs !== null).id, "sixLate", "the headline picks a dated one");
+  assert.equal(sorted.find((r) => r.atMs !== null).id, "sixLate", "a dated one comes first");
 });
 
 t("all three written_by values get their own label", () => {

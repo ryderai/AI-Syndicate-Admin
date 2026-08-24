@@ -148,6 +148,8 @@ select.adm-input { cursor: pointer; }
   max-height: 88vh;
   display: flex;
   flex-direction: column;
+  /* Keeps the rounded corners over a scrolling body. */
+  overflow: hidden;
 }
 .adm-modal-head {
   display: flex;
@@ -170,7 +172,21 @@ select.adm-input { cursor: pointer; }
   border-radius: 6px;
 }
 .adm-modal-x:hover { color: var(--ink); background: var(--bg-2); }
-.adm-modal-body { padding: 20px 22px; overflow-y: auto; }
+/* THE BOTTOM OF A LONG REPORT USED TO BE UNREACHABLE. `overflow-y: auto`
+ * alone is not enough inside a flex column: a flex item defaults to
+ * min-height:auto, so it refuses to shrink below its content and the tail of
+ * the text is pushed past the modal instead of scrolling inside it. Ryder hit
+ * this on Aug 23 2026 on a generated report. flex + min-height:0 is the fix. */
+.adm-modal-body {
+  /* Extra room at the bottom so the last line of a long report is not sitting
+     against the footer when you reach the end of the scroll. */
+  padding: 20px 22px 28px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+.adm-modal-head, .adm-modal-foot { flex: 0 0 auto; }
 .adm-modal-foot {
   padding: 14px 22px;
   border-top: 1px solid var(--rule);
@@ -2356,3 +2372,199 @@ select.adm-input { cursor: pointer; }
   display: flex; align-items: center; gap: 9px; margin: -4px 0 14px;
   font-size: 12.5px; color: var(--ink-2); cursor: pointer;
 }
+
+/* ---------- Click-to-filter in the Operations table (Aug 23 2026) ---------- */
+/* Appended, not edited into the blocks above, so two sessions cannot clobber
+   each other's rules. The two actions sit at the TOP of a cell's menu, so the
+   footer styling on .plain (a top border, bottom-only corners) is undone here. */
+.adm-db-pop-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--rule);
+}
+.adm-db-pop-filter .adm-db-pop-item.plain {
+  border-top: 0;
+  border-radius: 7px;
+  margin-top: 0;
+  color: var(--accent-deep);
+  font-weight: 600;
+  font-size: 12.5px;
+}
+.adm-db-pop-filter .adm-db-pop-item.plain.on { background: var(--accent-soft); }
+
+/* What is being hidden right now. Sits under the toolbar. */
+/* Its own bar, not a flap hanging off the toolbar. The first version squared
+   its top corners and pulled itself up 6px, which painted a white rectangle
+   over the toolbar's rounded bottom corners — the toolbar's radius is on all
+   four corners and its background is --bg-1, so the two never lined up. */
+.adm-db-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--bg-1);
+  margin-top: -12px;
+}
+.adm-db-filters-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.adm-db-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-deep);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-family: var(--body);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.adm-db-filter-chip:hover { background: white; }
+/* The active row needs hover feedback too — the .on rule outweighs the shared
+   :hover on .adm-db-pop-item, so it gets its own. */
+.adm-db-pop-filter .adm-db-pop-item.plain.on:hover { background: white; }
+
+/* ---------- Clickable column headers (Aug 23 2026) ---------- */
+/* The header IS the filter control: one click gives group-by-this and every
+   value in the rows on screen, with counts. Text columns stay plain text. */
+.adm-db-th {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: none;
+  padding: 2px 5px;
+  margin: -2px -5px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+.adm-db-th:hover { background: var(--bg-2); color: var(--ink); }
+.adm-db-th.on { color: var(--accent-deep); }
+.adm-db-th-dot { font-size: 7px; color: var(--accent-deep); }
+.adm-db-pop-none { padding: 8px; font-size: 12.5px; color: var(--ink-dim); }
+
+/* ---------- the Description column (Aug 23 2026) ---------- */
+/* The brief is written in lines — "What it is: / Why: / Done means:". The cell
+   renderer had no white-space rule, so every line break collapsed and the
+   structure the field is designed around vanished on read-back. `pre-line`
+   keeps the breaks and still wraps long lines. Clamped so one long brief cannot
+   make a row four times taller than its neighbours; the whole thing is in the
+   task modal. */
+.adm-db-multiline {
+  white-space: pre-line;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.45;
+  padding: 6px 0;
+}
+.adm-db-btn:has(.adm-db-multiline) { align-items: flex-start; }
+
+/* Two long columns were added to a table whose min-width was never raised, so
+   at a narrow window the header text ran into the next header — `td` clips,
+   `th` did not. */
+/* The declared column widths add up to ~1990px. At min-width 1500 every column
+   was scaled down, and the header's new sort arrow + ▾ button were the first
+   things `overflow: hidden` ate — the filter menu became unreachable on a
+   laptop. The table scrolls sideways; the columns no longer shrink. */
+.adm-db-table { min-width: 1990px; }
+.adm-db-table thead th { overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Titles sort; the caret filters (Aug 23 2026) ---------- */
+/* One click on the word does ONE predictable thing — it sorts. Filtering and
+   grouping moved onto the small caret beside it. */
+.adm-db-thwrap { display: inline-flex; align-items: center; gap: 1px; }
+/* Sorted and filtered are different facts, so they cannot be the same colour:
+   sorted gets the filled pill and the arrow, filtered gets the dot. */
+.adm-db-th.sorted { color: var(--accent-deep); background: var(--accent-soft); }
+.adm-db-th.sorted:hover { background: #e6e2fb; }
+.adm-db-th-arrow { font-size: 10px; font-weight: 800; }
+.adm-db-thmenu {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--ink-faint);
+}
+.adm-db-thmenu:hover { background: var(--bg-2); color: var(--ink); }
+.adm-db-thmenu.on { color: var(--accent-deep); }
+
+/* ---------- The pop-out editor for a long description ---------- */
+/* Not the cell menu: that one closes on any scroll, which would throw away a
+   paragraph mid-sentence. This closes on Escape (undo), Save, or a click away
+   (which keeps it). */
+.adm-db-popout {
+  position: fixed;
+  /* Above the assistant panel, which sets z-index 9000 inline. At 1300 the
+     panel painted over the Save button and the only way out was Escape, which
+     discards. */
+  z-index: 9600;
+  background: white;
+  border: 1px solid var(--accent-deep);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  padding: 12px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.adm-db-popout-head,
+.adm-db-popout-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+/* The title carries the task name, so it has to be the part that gives way —
+   without this the "Esc to undo" hint wrapped onto three lines. */
+.adm-db-popout-head > .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.adm-db-popout-hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.adm-db-popout-text {
+  width: 100%;
+  min-height: 260px;
+  max-height: 52vh;
+  resize: vertical;
+  border: 1px solid var(--rule-2);
+  border-radius: 9px;
+  padding: 10px 12px;
+  font-family: var(--body);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: white;
+  white-space: pre-wrap;
+}
+.adm-db-popout-text:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent-deep); }

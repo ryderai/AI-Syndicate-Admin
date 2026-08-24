@@ -171,7 +171,11 @@ t("the instruction forbids inventing, and there is no looser variant", () => {
   assert.ok(/square-bracket blank/i.test(rec), "it must be told to leave a blank rather than guess");
   assert.ok(rec.includes(TODAY), "today's date is stated");
   assert.ok(/Never write work as a person's job/i.test(rec), "no homework");
-  assert.ok(/TITLE:/.test(rec) && /SUMMARY/.test(rec) && /REPORT/.test(rec) && /WATCH OUT/.test(rec));
+  /* ONE ANSWER since Aug 23 2026. The instruction must ask for a title line and
+   * must NOT impose the old three-section template. */
+  assert.ok(/TITLE:/.test(rec), "it still asks for one title line");
+  assert.ok(/ONE ANSWER/.test(rec), "it asks for a single response");
+  assert.ok(!/^SUMMARY$/m.test(rec) && !/^WATCH OUT$/m.test(rec), "no house template is imposed");
 
   // nothing that used to belong to the free draft survives
   assert.ok(!/DRAFT, not a record/i.test(rec));
@@ -250,9 +254,11 @@ t("a loose date is refused", () => {
   assert.equal(v.ok, false);
 });
 
-t("an empty summary or body is refused", () => {
-  assert.equal(checkConsoleReport({ ...GOOD, summary: "  " }, FACTS_TEXT, {}).ok, false, "summary");
-  assert.equal(checkConsoleReport({ ...GOOD, body: "" }, FACTS_TEXT, {}).ok, false, "body");
+t("an empty answer is refused, but a missing summary is not", () => {
+  /* The answer is one piece now, so there is nothing to check a summary
+   * against. An answer with a body and no summary is the normal shape. */
+  assert.equal(checkConsoleReport({ ...GOOD, summary: "  " }, FACTS_TEXT, {}).ok, true, "no summary is fine");
+  assert.equal(checkConsoleReport({ ...GOOD, summary: "", body: "" }, FACTS_TEXT, {}).ok, false, "nothing at all");
   assert.equal(checkConsoleReport(null, FACTS_TEXT, {}).ok, false, "null");
 });
 
@@ -464,11 +470,14 @@ t("the counted version NAMES the rows instead of only counting them", () => {
   // With no model it cannot analyse, but it can at least say which client and
   // which task.
   const r = deterministicConsoleReport(FACTS, { todayIso: TODAY });
-  assert.ok(r.summary.includes("Re-scan after schema"), "the late task is named");
-  assert.ok(r.summary.includes("Lakeside Realty"), "its client is named");
-  assert.ok(r.summary.includes("Weekly report"), "the blocked task is named");
-  assert.ok(/AIS-0002/.test(r.summary), "the overdue invoice is named");
-  assert.ok(/Audit\?/.test(r.summary), "the unanswered email is named");
+  /* One document: the named rows live in the body, and there is no separate
+   * summary field any more. */
+  assert.equal(r.summary, "", "nothing is split off into a second layer");
+  assert.ok(r.body.includes("Re-scan after schema"), "the late task is named");
+  assert.ok(r.body.includes("Lakeside Realty"), "its client is named");
+  assert.ok(r.body.includes("Weekly report"), "the blocked task is named");
+  assert.ok(/AIS-0002/.test(r.body), "the overdue invoice is named");
+  assert.ok(/Audit\?/.test(r.body), "the unanswered email is named");
   // the totals are still there, just not the whole thing
   assert.ok(/Clients on the books: 3/.test(r.body));
   assert.ok(/Finished and recorded/.test(r.body));
@@ -487,18 +496,18 @@ t("with nothing wrong, the counted version says so rather than printing zeros", 
   });
   const f = assembleConsoleFacts(clean, { nowMs: NOW });
   const r = deterministicConsoleReport(f, { todayIso: TODAY });
-  assert.ok(/Nothing in the records is late, blocked, unpaid or unanswered/.test(r.summary));
+  assert.ok(/Nothing in the records is late, blocked, unpaid or unanswered/.test(r.body));
 });
 
 t("the shape demands analysis and bans opening with a count", () => {
   // The change Ryder asked for: "better than just a list of commands".
   const text = buildConsoleInstruction({ userInstruction: "where do we stand", presetId: "monday", todayIso: TODAY });
   assert.ok(/ANALYSE, do not tally/.test(text));
-  assert.ok(/NEVER open a section by restating a total/.test(text));
+  assert.ok(/NEVER open by restating a total/.test(text));
   assert.ok(/Do not begin with "There are"/.test(text));
   assert.ok(/Connect things/.test(text));
   assert.ok(/Rank by consequence/.test(text));
-  assert.ok(/JUDGEMENT, not a count/.test(text));
+  assert.ok(/Every line is a judgement/.test(text));
   // and it is told it is reading the whole console, not a slice
   assert.ok(/reading the WHOLE console/.test(text));
   assert.ok(/open and finished work/.test(text));
@@ -538,38 +547,46 @@ t("provenance never claims a person wrote it or an AI counted it", () => {
 
 /* ---------------- the parser ---------------- */
 
-t("the four sections come back out of a normal answer", () => {
+t("the title comes off and everything else is ONE answer", () => {
   const r = parseConsoleReport(`TITLE: Where things stand
 
-SUMMARY
-- one
-- two
+Lakeside has had nothing planned for eleven days.
 
-REPORT
 ## Clients
-Body text.
-
-WATCH OUT
-- nothing`);
+Body text.`);
   assert.equal(r.title, "Where things stand");
-  assert.ok(r.summary.includes("one"));
-  assert.ok(r.body.includes("Body text."));
-  assert.ok(r.watch.includes("nothing"));
+  assert.equal(r.summary, "", "nothing is split off");
+  assert.ok(r.body.includes("eleven days"), "the opening paragraph is kept");
+  assert.ok(r.body.includes("Body text."), "and so is everything after a heading");
 });
 
-t("a heading inside the body does not truncate the report", () => {
+t("a model that writes the old headings anyway loses no content", () => {
+  /* The headings are dropped as lines; what was under them is kept, in order.
+   * Silently losing a third of an answer would be worse than an odd heading. */
   const r = parseConsoleReport(`TITLE: T
 
 SUMMARY
 - one
 
 REPORT
+first
+
+WATCH OUT
+- nothing`);
+  assert.ok(r.body.includes("- one") && r.body.includes("first") && r.body.includes("- nothing"));
+  assert.ok(!/^SUMMARY$/m.test(r.body), "the heading itself is gone");
+});
+
+t("a heading inside the body does not truncate the report", () => {
+  const r = parseConsoleReport(`TITLE: T
+
 ## Clients
 first
 
 ## Summary of the above
 second`);
-  assert.ok(r.body.includes("second"), "a '## Summary' inside the body is body text");
+  assert.ok(r.body.includes("second"), "a '## Summary' inside the answer is answer text");
+  assert.ok(r.body.includes("first"), "and nothing before it is lost");
 });
 
 console.log(`\n  ${passed} passed, ${failed} failed`);

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 /* Inline-edit cells for the Operations database.
@@ -120,8 +120,227 @@ export function Popover({ anchor, onClose, width = 232, children }) {
 
 /* ------------------------------------------------------------------ */
 
+/** The two filter actions that sit at the top of every value cell's menu.
+ *
+ * Ryder, Aug 23 2026: *"i want to in operations be able to click the rows and
+ * it start filtering and grouping them together."* The cells were already
+ * click-to-edit, so a plain click cannot mean two things. Putting the actions
+ * INSIDE the menu the click already opens means one click still gets you
+ * there, and nothing that used to edit a value now filters instead.
+ *
+ * `filter` is { label, column, active, onOnly, onGroup }. Either callback may
+ * be missing — the due-date cell has no useful "only this date".
+ */
+export function FilterHead({ filter, close }) {
+  if (!filter || (!filter.onOnly && !filter.onGroup)) return null;
+  return (
+    <div className="adm-db-pop-filter">
+      {filter.onOnly ? (
+        <button
+          type="button"
+          className={`adm-db-pop-item plain${filter.active ? " on" : ""}`}
+          onClick={() => { close(); filter.onOnly(); }}
+        >
+          {filter.active ? "✓ Showing only" : "Show only"} {filter.label}
+        </button>
+      ) : null}
+      {filter.onGroup ? (
+        <button
+          type="button" className="adm-db-pop-item plain"
+          onClick={() => { close(); filter.onGroup(); }}
+        >
+          Group the table by {filter.column}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+/** A floating editor for text too long to read in a cell.
+ *
+ * Ryder, Aug 23 2026: *"when i click the description box and the text is larger
+ * than the box then it pops it out so you can read the full description."*
+ *
+ * Deliberately NOT the Popover above: that one closes on any scroll, which
+ * while you are typing a brief would throw the paragraph away. This closes on
+ * Escape (cancel), on Save, or on a click outside (which SAVES — a click
+ * elsewhere on the page is not "undo").
+ */
+function Popout({ anchor, trigger, title, hint, value, onSave, onCancel }) {
+  const ref = useRef(null);
+  const box = useRef(null);
+  const [draft, setDraft] = useState(value || "");
+  const [pos, setPos] = useState({ left: -9999, top: -9999 });
+  const W = 520;
+
+  const place = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const h = el.offsetHeight;
+    let left = Math.min(anchor.left, window.innerWidth - W - 14);
+    if (left < 12) left = 12;
+    let top = anchor.top - 6;
+    if (top + h > window.innerHeight - 12) top = Math.max(12, window.innerHeight - h - 12);
+    setPos({ left, top });
+  }, [anchor]);
+
+  useLayoutEffect(() => { place(); }, [place]);
+  /* Reposition rather than close on a window change: closing would either lose
+   * the text or save it behind your back, and neither is what resizing means. */
+  useEffect(() => {
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [place]);
+
+  /* THREE SAVE PATHS, ONE SOURCE OF TRUTH. `latest` is written in onChange, not
+   * in an effect: the outside-click listener is a native capture listener, so it
+   * runs before React flushes passive effects, and an effect-written mirror was
+   * one keystroke behind for anyone who typed and clicked away in the same
+   * frame. `settled` stops the unmount guard double-saving. */
+  const latest = useRef(value || "");
+  const settled = useRef(false);
+  const saveRef = useRef(onSave);
+  useEffect(() => { saveRef.current = onSave; }, [onSave]);
+
+  const commit = useCallback((v) => {
+    if (settled.current) return;
+    settled.current = true;
+    saveRef.current(v);
+  }, []);
+  const cancel = useCallback(() => {
+    if (settled.current) return;
+    settled.current = true;
+    onCancel();
+  }, [onCancel]);
+
+  /* THE BRIEF IS NOT THROWN AWAY IF THE ROW DISAPPEARS. A refresh from another
+   * session, or a filter the row no longer matches, unmounts this editor. Before
+   * this, 400 words vanished with no toast. On unmount anything unsaved is
+   * saved. */
+  useEffect(() => () => {
+    if (!settled.current && latest.current !== (value || "")) saveRef.current(latest.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* The caret starts at the END of what is already written. autoFocus alone
+   * leaves it at position 0, so the first thing typed landed in front of the
+   * existing brief — watched happen on the first try. */
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const n = el.value.length;
+    el.setSelectionRange(n, n);
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  useEffect(() => {
+    const down = (e) => {
+      if (ref.current && ref.current.contains(e.target)) return;
+      /* Dragging the window's own scrollbar is not "clicking away". */
+      if (e.clientX > document.documentElement.clientWidth
+        || e.clientY > document.documentElement.clientHeight) return;
+      /* Clicking the cell this editor belongs to: save and close, and swallow
+       * the click so the cell's own handler cannot reopen it in the same
+       * gesture. Before this the obvious close gesture saved and reopened. */
+      if (trigger && trigger.current && trigger.current.contains(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      commit(latest.current);
+    };
+    const key = (e) => { if (e.key === "Escape") { e.stopPropagation(); cancel(); } };
+    document.addEventListener("mousedown", down, true);
+    document.addEventListener("keydown", key, true);
+    return () => {
+      document.removeEventListener("mousedown", down, true);
+      document.removeEventListener("keydown", key, true);
+    };
+  }, [commit, cancel, trigger]);
+
+  return createPortal(
+    <div
+      ref={ref} className="adm-db-popout" style={{ left: pos.left, top: pos.top, width: W }}
+      role="dialog" aria-modal="true" aria-label={title}
+    >
+      <div className="adm-db-popout-head">
+        <span className="label" style={{ marginBottom: 0 }}>{title}</span>
+        <span className="adm-db-popout-hint">Esc to undo · click away to keep it</span>
+      </div>
+      <textarea
+        ref={box}
+        className="adm-db-popout-text"
+        autoFocus
+        value={draft}
+        onChange={(e) => { latest.current = e.target.value; setDraft(e.target.value); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(latest.current); }
+        }}
+        placeholder={hint}
+      />
+      <div className="adm-db-popout-foot">
+        <span className="adm-db-popout-hint">{draft.length} characters</span>
+        <span style={{ display: "flex", gap: 6 }}>
+          <button type="button" className="btn btn-sm" onClick={cancel}>Undo</button>
+          <button type="button" className="btn btn-sm btn-primary" onClick={() => commit(latest.current)}>Save</button>
+        </span>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Long text that opens in the floating editor instead of editing in place.
+ *  The cell shows the first lines; the whole thing is one click away. */
+export function PopoutCell({ value, onChange, placeholder = "Empty", title = "Text", hint }) {
+  const [anchor, setAnchor] = useState(null);
+  const trigger = useRef(null);
+
+  /* Focus goes back to the cell when the editor closes. Without it a keyboard
+   * user landed on <body> and lost their place in the table. */
+  const close = () => {
+    setAnchor(null);
+    requestAnimationFrame(() => trigger.current?.focus());
+  };
+
+  return (
+    <>
+      <button
+        ref={trigger}
+        type="button" className="adm-db-btn"
+        title={value ? "Click to read and edit the whole thing" : undefined}
+        onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
+      >
+        {value
+          ? <span className="adm-db-multiline">{value}</span>
+          : <span className="adm-db-empty">{placeholder}</span>}
+      </button>
+      {anchor && (
+        <Popout
+          anchor={anchor}
+          trigger={trigger}
+          title={title}
+          hint={hint}
+          value={value || ""}
+          onCancel={close}
+          onSave={(v) => {
+            close();
+            /* Trailing whitespace only. A brief written as labelled sections can
+             * end on a deliberate blank line, and a full trim ate it. */
+            const next = String(v ?? "").replace(/\s+$/, "");
+            if ((value || "") !== next) onChange(next || null);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
 /** One-of-a-list cell. options: [{ value, label, color }] */
-export function SelectCell({ value, options, onChange, placeholder = "Empty", clearable = true, label, width }) {
+export function SelectCell({ value, options, onChange, placeholder = "Empty", clearable = true, label, width, filter = null }) {
   const [anchor, setAnchor] = useState(null);
   const opt = options.find((o) => o.value === value) || null;
   return (
@@ -135,6 +354,7 @@ export function SelectCell({ value, options, onChange, placeholder = "Empty", cl
       </button>
       {anchor && (
         <Popover anchor={anchor} width={width} onClose={() => setAnchor(null)}>
+          <FilterHead filter={filter} close={() => setAnchor(null)} />
           <div className="adm-db-pop-list" role="listbox">
             {options.map((o) => (
               <button
@@ -159,7 +379,7 @@ export function SelectCell({ value, options, onChange, placeholder = "Empty", cl
 }
 
 /** Who owns the task. options: [{ value, label }]. */
-export function PersonCell({ value, options, onChange }) {
+export function PersonCell({ value, options, onChange, filter = null }) {
   const [anchor, setAnchor] = useState(null);
   const opt = options.find((o) => o.value === value) || null;
   return (
@@ -177,6 +397,7 @@ export function PersonCell({ value, options, onChange }) {
       </button>
       {anchor && (
         <Popover anchor={anchor} onClose={() => setAnchor(null)}>
+          <FilterHead filter={filter} close={() => setAnchor(null)} />
           <div className="adm-db-pop-list" role="listbox">
             {options.map((o) => (
               <button
@@ -230,14 +451,23 @@ export function TextCell({ value, onChange, placeholder = "Empty", multiline, st
   return (
     <button type="button" className="adm-db-btn" onClick={() => setEditing(true)}>
       {value
-        ? <span className={`${strong ? "adm-db-strong" : ""}${strike ? " adm-db-strike" : ""}`}>{value}</span>
+        ? (
+          /* A multiline cell keeps its line breaks. Without this the brief you
+           * typed as three labelled lines read back as one run-on paragraph. */
+          <span className={[
+            multiline ? "adm-db-multiline" : "",
+            strong ? "adm-db-strong" : "",
+            strike ? "adm-db-strike" : "",
+          ].filter(Boolean).join(" ")}
+          >{value}</span>
+        )
         : <span className="adm-db-empty">{placeholder}</span>}
     </button>
   );
 }
 
 /** Due date. Red with a warning mark when it is late. */
-export function DateCell({ value, onChange, overdue }) {
+export function DateCell({ value, onChange, overdue, filter = null }) {
   const [anchor, setAnchor] = useState(null);
   return (
     <>
@@ -250,6 +480,7 @@ export function DateCell({ value, onChange, overdue }) {
       </button>
       {anchor && (
         <Popover anchor={anchor} width={214} onClose={() => setAnchor(null)}>
+          <FilterHead filter={filter} close={() => setAnchor(null)} />
           <div className="adm-db-pop-pad">
             <input
               type="date" className="adm-input" defaultValue={value || ""} autoFocus

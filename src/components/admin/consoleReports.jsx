@@ -290,13 +290,6 @@ export default function ConsoleReportsPanel({ reports, aiReady }) {
                     : "Wired and waiting on ANTHROPIC_API_KEY — SETUP.md § AI"}
               />
             </div>
-            <div style={{ fontSize: 12.5, color: "var(--ink-dim)", marginTop: 4, lineHeight: 1.55, maxWidth: 680 }}>
-              Every client and their open <em>and finished</em> work, the weekly logs, the websites,
-              every lead and the firms behind them, the lists and proposals, every email thread we
-              hold, tickets, follow-ups, the team&apos;s own notes, the invoices we issued and the
-              money that came in. It reads across all of it and tells you what it adds up to — not a
-              list of totals.
-            </div>
           </div>
           <button
             className="btn"
@@ -334,8 +327,7 @@ export default function ConsoleReportsPanel({ reports, aiReady }) {
 
           {!loading && !error && rows.length === 0 && (
             <div style={{ padding: "2px 18px 16px", fontSize: 12.5, color: "var(--ink-dim)", lineHeight: 1.6 }}>
-              Nothing yet. Everything you generate is filed here with the words you typed, so a
-              prompt that worked can be run again.
+              Nothing yet.
             </div>
           )}
 
@@ -445,7 +437,7 @@ function GenerateForm({ live, aiReady, onDone }) {
         </div>
       )}
 
-      <Field label="Start from one of these" hint="Pressing one only fills the box. You can change every word.">
+      <Field label="Start from one of these">
         <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
           {CONSOLE_PRESETS.map((p) => (
             <button
@@ -466,7 +458,7 @@ function GenerateForm({ live, aiReady, onDone }) {
         </div>
       </Field>
 
-      <Field label="Say what you want, in your own words" hint="This is what actually gets sent.">
+      <Field label="Say what you want, in your own words">
         <TextArea
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}
@@ -483,16 +475,13 @@ function GenerateForm({ live, aiReady, onDone }) {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         gap: 12, flexWrap: "wrap", marginTop: 4,
       }}>
-        <div style={{ fontSize: 11.5, color: "var(--ink-dim)", lineHeight: 1.6, flex: "1 1 340px", maxWidth: 640 }}>
-          <strong style={{ color: "var(--ink-2)" }}>Every number is checked.</strong> A draft
-          containing a figure, date or name that is not in the records is thrown away and you get the
-          counted version instead, with the reason. Where it wants a number we do not hold it leaves a
-          blank in square brackets for you to fill in.
-          <br />
-          <strong style={{ color: "var(--ink-2)" }}>It can never see:</strong> the vault — no login,
-          no card, no key. Anything on the AI Syndicate platform: there are no scan results or GEO
-          scores in this console. Money taken through Stripe. The <em>text</em> of an email — we keep
-          the subject, sender, snippet and status, never the body. And anything nobody wrote down.
+        {/* ONE LINE, not the two paragraphs that used to be here. Ryder cut the
+          * paragraphs on Aug 23 2026, but what the tool cannot see is not
+          * decoration — a person who does not know it is missing will ask it for
+          * a GEO score and believe the answer. So: one line, still true. */}
+        <div style={{ fontSize: 11.5, color: "var(--ink-dim)", lineHeight: 1.6, flex: "1 1 320px", maxWidth: 560 }}>
+          Every number is checked against the records. It cannot see the vault, Stripe, the platform&apos;s
+          scores, or the text of an email.
         </div>
         <button className="btn btn-primary" disabled={busy || over || empty} onClick={run}>
           {busy ? "Reading the records…" : "Write it"}
@@ -549,17 +538,21 @@ function RichText({ text }) {
   );
 }
 
+/* ONE RESPONSE, ONE SCROLL.
+ *
+ * This used to be four tabs — the 30-second version, the full version, worth a
+ * look, what it could not check — so the same ground was covered twice and you
+ * had to click to find out whether anything had been left unchecked. Ryder,
+ * Aug 23 2026: *"i want it to be just one response that speaks and formats the
+ * data to how the memory and prompt suggest."*
+ *
+ * So: one document, top to bottom. Rows written before that date still have the
+ * old fields, and they are printed in order rather than hidden. What the
+ * records cannot answer stays — it is the honesty line — but as the last part
+ * of the same document instead of a tab nobody opens. */
 function ReadModal({ row, existing, onSaved, onClose }) {
-  const [tab, setTab] = useState("summary");
   const [factsOpen, setFactsOpen] = useState(false);
   const counts = row.facts?.counts || {};
-
-  const TABS = [
-    ["summary", "The 30-second version"],
-    ["body", "The full version"],
-    ...(row.watch ? [["watch", "Worth a look"]] : []),
-    ...(row.cannot_check ? [["cannot", "What it could not check"]] : []),
-  ];
 
   function download() {
     const md = consoleReportToMarkdown(row, {
@@ -609,24 +602,27 @@ function ReadModal({ row, existing, onSaved, onClose }) {
         </div>
       )}
 
-      <div className="aia-tabs" role="tablist" aria-label="Sections" style={{ marginBottom: 12 }}>
-        {TABS.map(([id, label]) => (
-          <button
-            key={id}
-            role="tab"
-            aria-selected={tab === id}
-            className={`aia-tab ${tab === id ? "active" : ""}`}
-            onClick={() => setTab(id)}
-          >{label}</button>
-        ))}
-      </div>
+      {String(row.summary || "").trim() ? <RichText text={row.summary} /> : null}
+      <RichText text={row.body} />
+      {String(row.watch || "").trim() ? (
+        <>
+          <h4 style={{ fontSize: 13, fontWeight: 800, color: "var(--ink)", margin: "18px 0 6px" }}>Worth a look</h4>
+          <RichText text={row.watch} />
+        </>
+      ) : null}
 
-      <RichText text={
-        tab === "summary" ? row.summary
-          : tab === "body" ? row.body
-            : tab === "watch" ? row.watch
-              : row.cannot_check
-      } />
+      {String(row.cannot_check || "").trim() ? (
+        <div style={{
+          marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--rule)",
+        }}>
+          <div className="label" style={{ marginBottom: 6 }}>What these records cannot answer</div>
+          <div style={{ fontSize: 12, color: "var(--ink-dim)", lineHeight: 1.6, marginBottom: 6 }}>
+            Nothing above is based on these. Named out loud on purpose — a gap nobody mentions reads
+            as “checked, all fine”.
+          </div>
+          <RichText text={row.cannot_check} />
+        </div>
+      ) : null}
 
       <RateThis report={row} existing={existing} onSaved={onSaved} />
 

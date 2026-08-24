@@ -35,7 +35,17 @@ const VIEWS = [
   { id: "clients", icon: "🏢", label: "Clients & weekly log" },
 ];
 
+/* The columns a click can filter on that have no dropdown in the toolbar.
+ * Field name and column key are the same word for all four, which is why one
+ * list serves both. */
+const FACET_FIELDS = ["status", "priority", "category", "phase"];
+const FACET_LABELS = { status: "Status", priority: "Priority", category: "Category", phase: "Phase" };
+
 const PREFS_KEY = "adm-ops-prefs";
+
+/* What Postgres says when a column in the patch is not in the table. Matched so
+ * a missing migration reads as one plain sentence instead of PGRST204. */
+const MISSING_DESCRIPTION = /(column|schema cache)[^]*?description|description[^]*?(column|schema cache|does not exist)/i;
 
 function readPrefs() {
   try {
@@ -60,11 +70,31 @@ export default function Operations({ member }) {
   const [byView, setByView] = useState(prefs.byView && typeof prefs.byView === "object" ? prefs.byView : {});
   const [groupBy, setGroupBy] = useState(isGroupBy(startSaved.groupBy) ? startSaved.groupBy : "client");
   const [showDone, setShowDone] = useState(typeof startSaved.showDone === "boolean" ? startSaved.showDone : true);
-  const [columns, setColumns] = useState(Array.isArray(prefs.columns) && prefs.columns.length ? prefs.columns : DEFAULT_COLUMNS);
+  /* A column list saved before a new column existed does not contain it, so the
+   * column would never appear for anyone who had used the page before.
+   *
+   * `colsSeen` is the list of column keys this browser has already been OFFERED.
+   * Anything in COLUMNS that is not in it is new, so it is switched on once;
+   * anything already offered and since switched off stays off. No version
+   * number to bump, so adding a column later cannot skip one — a numbered
+   * ladder only worked for people who opened the page at every version. */
+  const seen = Array.isArray(prefs.colsSeen) ? prefs.colsSeen : null;
+  const [columns, setColumns] = useState(() => {
+    const saved = Array.isArray(prefs.columns) && prefs.columns.length ? prefs.columns : null;
+    if (!saved) return DEFAULT_COLUMNS;
+    const offered = seen || saved;
+    const brandNew = DEFAULT_COLUMNS.filter((k) => !offered.includes(k));
+    return brandNew.length ? [...saved, ...brandNew] : saved;
+  });
   const [tasksError, setTasksError] = useState(null);
   const [query, setQuery] = useState("");
   const [clientFilter, setClientFilter] = useState("all");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
+  /* Filters set by clicking a value in the table. Client and owner are NOT
+   * kept here on purpose — they go into the two dropdowns above, so a filter
+   * you set by clicking is visible in the same control you would have used by
+   * hand. These four have no dropdown of their own. */
+  const [facets, setFacets] = useState({});
   const [colAnchor, setColAnchor] = useState(null);
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [taskModal, setTaskModal] = useState(null);   // null | {} | task
@@ -98,7 +128,7 @@ export default function Operations({ member }) {
   useEffect(() => {
     const next = { ...byView, [viewId]: { groupBy, showDone } };
     setByView((cur) => (cur[viewId]?.groupBy === groupBy && cur[viewId]?.showDone === showDone ? cur : next));
-    writePrefs({ viewId, byView: next, columns });
+    writePrefs({ viewId, byView: next, columns, colsSeen: DEFAULT_COLUMNS });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewId, groupBy, showDone, columns]);
 
@@ -124,7 +154,12 @@ export default function Operations({ member }) {
        * also undo anything else that changed while we were waiting. */
       const undo = Object.fromEntries(Object.keys(patch).map((k) => [k, task[k] ?? null]));
       setTasks((cur) => cur.map((t) => (t.id === task.id ? { ...t, ...undo } : t)));
-      toast.error("Couldn't save that", res.error);
+      if (MISSING_DESCRIPTION.test(String(res.error || ""))) {
+        toast.error("The Description column does not exist yet",
+          "Run supabase/migrations/0012_task_description.sql in Supabase, then try again.");
+      } else {
+        toast.error("Couldn't save that", res.error);
+      }
       return;
     }
     if (res.row) setTasks((cur) => cur.map((t) => (t.id === task.id ? { ...t, ...res.row } : t)));
@@ -167,9 +202,17 @@ export default function Operations({ member }) {
     if (assigneeFilter !== "all" && assigneeFilter !== "__me" && assigneeFilter !== "__none"
       && t.assigned_to !== assigneeFilter) return false;
 
-    if (q && !`${t.name} ${t.latest_report || ""}`.toLowerCase().includes(q)) return false;
+    for (const k of FACET_FIELDS) {
+      const want = facets[k];
+      if (want === undefined) continue;
+      if (String(t[k] || "__none") !== String(want)) return false;
+    }
+
+    /* The brief is searchable too. A task you remember by a detail in its
+     * description was unfindable before. */
+    if (q && !`${t.name} ${t.latest_report || ""} ${t.description || ""}`.toLowerCase().includes(q)) return false;
     return true;
-  }, [viewId, showDone, clientFilter, assigneeFilter, query, me]);
+  }, [viewId, showDone, clientFilter, assigneeFilter, query, me, facets]);
 
   const filtered = useMemo(() => tasks.filter(visibleHere), [tasks, visibleHere]);
 
@@ -189,9 +232,80 @@ export default function Operations({ member }) {
     visible: filtered.slice(0, 20).map((t) => `${t.title} (${t.status})`),
   }), [filtered, viewId, selectedClientId, clients.rows]);
 
+  /* One entry point for every click-to-filter in the table. Client and owner
+   * are routed into the dropdowns that already exist for them; the rest go
+   * into `facets`. Clicking the value that is already filtered clears it, so
+   * the same click gets you back out. */
+  const applyFacet = (key, rawValue) => {
+    const v = rawValue === null || rawValue === undefined ? "__none" : String(rawValue);
+    if (key === "client") {
+      setClientFilter((cur) => (cur === v ? "all" : v));
+      return;
+    }
+    if (key === "assignee") {
+      setAssigneeFilter((cur) => (cur === v ? "all" : v));
+      return;
+    }
+    if (!FACET_FIELDS.includes(key)) return;
+    setFacets((cur) => {
+      const next = { ...cur };
+      if (String(next[key]) === v) delete next[key];
+      else next[key] = v;
+      return next;
+    });
+  };
+
+  const facetValue = (key) => {
+    if (key === "client") return clientFilter === "all" ? undefined : clientFilter;
+    /* "__me" is not one of the values in the menu, so reporting it as the active
+     * value lit the header dot next to a menu where nothing was ticked. The chip
+     * bar says "Owner: just mine" — that is where that filter is visible. */
+    if (key === "assignee") return (assigneeFilter === "all" || assigneeFilter === "__me") ? undefined : assigneeFilter;
+    return facets[key];
+  };
+
+  /* What is being hidden right now, in words, with an × on each one. A filter
+   * you cannot see is a table that looks broken. */
+  const activeFilters = [];
+  if (clientFilter !== "all") {
+    activeFilters.push({
+      key: "client",
+      label: `Client: ${clientFilter === "__none" ? "no client" : (clients.rows.find((c) => c.id === clientFilter)?.name || "unknown")}`,
+      clear: () => setClientFilter("all"),
+    });
+  }
+  if (assigneeFilter !== "all") {
+    const who = assigneeFilter === "__me" ? "just mine"
+      : assigneeFilter === "__none" ? "unassigned"
+        : (team.find((m) => m.user_id === assigneeFilter)?.full_name || team.find((m) => m.user_id === assigneeFilter)?.email || "unknown");
+    activeFilters.push({ key: "assignee", label: `Owner: ${who}`, clear: () => setAssigneeFilter("all") });
+  }
+  for (const k of FACET_FIELDS) {
+    if (facets[k] === undefined) continue;
+    const v = facets[k];
+    const shown = v === "__none" ? `no ${k}`
+      : k === "status" ? (TASK_STATUS_LABELS[v] || v)
+        : k === "priority" ? (TASK_PRIORITY_LABELS[v] || v) : v;
+    activeFilters.push({
+      key: k,
+      label: `${FACET_LABELS[k]}: ${shown}`,
+      clear: () => setFacets((cur) => { const next = { ...cur }; delete next[k]; return next; }),
+    });
+  }
+  if (query.trim()) {
+    activeFilters.push({ key: "__q", label: `Search: “${query.trim()}”`, clear: () => setQuery("") });
+  }
+
+  const clearAllFilters = () => {
+    setClientFilter("all"); setAssigneeFilter("all"); setFacets({}); setQuery("");
+  };
+
   const dbProps = {
     tasks: filtered, groupBy, columns, clients: clients.rows, team,
     onPatch: patchTask, onCreate: createTask, onOpen: (t) => setTaskModal(t), onOpenClient: openClient,
+    onFacet: applyFacet, onGroupBy: setGroupBy, facetValue,
+    /* Unfiltered, for the column-header menus — see TaskDatabase. */
+    allTasks: tasks,
   };
 
   return (
@@ -285,6 +399,21 @@ export default function Operations({ member }) {
             </div>
           </div>
 
+          {activeFilters.length > 0 && (
+            <div className="adm-db-filters">
+              <span className="adm-db-filters-label">Filtered by</span>
+              {activeFilters.map((f) => (
+                <button
+                  key={f.key} type="button" className="adm-db-filter-chip"
+                  onClick={f.clear} title="Remove this filter"
+                >{f.label} <span aria-hidden="true">×</span></button>
+              ))}
+              {activeFilters.length > 1 ? (
+                <button type="button" className="adm-db-link" onClick={clearAllFilters}>Clear all</button>
+              ) : null}
+            </div>
+          )}
+
           {colAnchor && (
             <Popover anchor={colAnchor} width={210} onClose={() => setColAnchor(null)}>
               <div className="adm-db-pop-pad">
@@ -312,7 +441,11 @@ export default function Operations({ member }) {
               action={<button className="btn btn-accent" onClick={() => setTaskModal({})}>+ New task</button>}
             />
           ) : filtered.length === 0 ? (
-            <EmptyState icon="🔍" title="Nothing matches" body="The filters above are hiding every task. Clear the search, or set Client and Owner back to Everyone / Anyone." />
+            <EmptyState
+              icon="🔍" title="Nothing matches"
+              body="The filters above are hiding every task."
+              action={activeFilters.length ? <button className="btn" onClick={clearAllFilters}>Clear the filters</button> : null}
+            />
           ) : viewId === "board" ? (
             <TaskBoard tasks={filtered} clients={clients.rows} team={team} onPatch={patchTask} onOpen={(t) => setTaskModal(t)} />
           ) : (
@@ -519,7 +652,7 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
         tasks.length ? (
           <TaskDatabase
             tasks={tasks} groupBy="status" clients={clients} team={team}
-            columns={["status", "assignee", "priority", "due", "category", "phase", "report"]}
+            columns={["status", "assignee", "priority", "category", "phase", "report", "description", "due"]}
             onPatch={onPatch} onCreate={onCreate} onOpen={onOpen} lockedClientId={client.id}
           />
         ) : (
@@ -638,6 +771,7 @@ function TaskModal({ task, clients, team, defaultClientId, onClose, reload }) {
     category: task?.category || "", phase: task?.phase || "",
     priority: task?.priority || "medium", status: task?.status || "todo",
     due_date: task?.due_date || "", latest_report: task?.latest_report || "",
+    description: task?.description || "",
   });
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -655,9 +789,26 @@ function TaskModal({ task, clients, team, defaultClientId, onClose, reload }) {
       status: f.status,
       due_date: f.due_date || null,
       latest_report: f.latest_report.trim() || null,
+      description: f.description.trim() || null,
     };
     if (task?.id) patch.id = task.id;
-    const res = await upsertTask(patch);
+    let res = await upsertTask(patch);
+    /* MIGRATION 0012 MAY NOT BE RUN YET. Sending a column the database does not
+     * have makes Postgres reject the WHOLE row, so before this retry existed a
+     * console without 0012 could not save ANY task edit at all — a due date
+     * change died on a field the person never touched. Now the brief is dropped,
+     * the rest saves, and the reason is said out loud. */
+    if (!res.ok && MISSING_DESCRIPTION.test(String(res.error || ""))) {
+      const { description, ...withoutBrief } = patch;   // eslint-disable-line no-unused-vars
+      res = await upsertTask(withoutBrief);
+      if (res.ok) {
+        toast.warn("Saved — but not the Description",
+          "This database has no description column yet. Run supabase/migrations/0012_task_description.sql, then save the brief again.");
+        onClose(); reload();
+        setBusy(false);
+        return;
+      }
+    }
     setBusy(false);
     if (!res.ok) { toast.error("Couldn't save", res.error); return; }
     toast.success(task ? "Task updated" : "Task added", patch.name);
@@ -693,8 +844,17 @@ function TaskModal({ task, clients, team, defaultClientId, onClose, reload }) {
         <Field label="Phase"><Select value={f.phase} onChange={set("phase")} options={[["", "None"], ...TASK_PHASES.map((p) => [p, p])]} /></Field>
         <Field label="Due date"><TextInput type="date" value={f.due_date || ""} onChange={set("due_date")} /></Field>
       </div>
-      <Field label="Latest report" hint="1–3 sentences — this is what shows in the table without opening the task.">
+      <Field label="Latest report" hint="1–3 sentences — where it stands right now. This is what shows in the table.">
         <TextArea value={f.latest_report} onChange={set("latest_report")} />
+      </Field>
+      {/* The brief. Deliberately below the status line and deliberately taller:
+        * this is the field you write once and read before starting, where
+        * Latest report is rewritten every week. */}
+      <Field label="Description" hint="The full brief. What this work is, why we are doing it, what finished looks like, and any link or login it needs.">
+        <TextArea
+          value={f.description} onChange={set("description")} style={{ minHeight: 190 }}
+          placeholder={"What it is: rebuild llms.txt and agents.md to the current rubric.\nWhy: the AI answer engines read these first and both are 8 months old.\nDone means: both files live, 200 on a plain fetch, and the re-scan shows AI intent above 90."}
+        />
       </Field>
     </Modal>
   );

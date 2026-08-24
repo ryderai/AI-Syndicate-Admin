@@ -29,7 +29,7 @@
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
 import { draft, isAiConfigured } from "../lib/ai.js";
 import {
-  assembleReportFacts, buildFactsText, buildReportInstruction, parseReport,
+  assembleReportFacts, buildFactsText, buildReportInstruction, parseAnswer,
   checkReport, deterministicReport, missingFrom, presetById, MAX_INSTRUCTION_CHARS,
 } from "../lib/client-report.js";
 
@@ -95,7 +95,7 @@ export default async function handler(req, res) {
     /* Note the columns: id and secret_set_at. Not the label, not the username.
      * The report is allowed to know HOW MANY, and nothing else. */
     admin.from("admin_vault_items").select("id, secret_set_at").eq("client_id", clientId).limit(CAPS.vault),
-    admin.from("admin_client_reports").select("id, created_at, instruction, summary").eq("client_id", clientId).order("created_at", { ascending: false }).limit(CAPS.history),
+    admin.from("admin_client_reports").select("id, created_at, instruction, summary, body").eq("client_id", clientId).order("created_at", { ascending: false }).limit(CAPS.history),
     /* The roster, for the "a report never hands work to a person" check. Read
      * from the real team rather than hard-coding three names: a contractor, or
      * anybody who joined after the code was written, walked straight through.
@@ -234,7 +234,7 @@ export default async function handler(req, res) {
       });
       truncated = result.inputTruncated || 0;
 
-      const parsed = parseReport(result.text);
+      const parsed = parseAnswer(result.text);
       const verdict = parsed
         ? checkReport(parsed, factsText, { clientName: client.name, teamNames })
         : { ok: false, why: "it did not come back in the required shape" };

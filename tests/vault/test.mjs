@@ -45,7 +45,7 @@ const {
 
 const {
   REPORT_PRESETS, presetById, assembleReportFacts, missingFrom, reportFactsToText,
-  buildReportInstruction, parseReport, assignsWork, checkReport, deterministicReport,
+  buildReportInstruction, parseReport, parseAnswer, assignsWork, checkReport, deterministicReport,
   reportToMarkdown, provenanceLine, MAX_INSTRUCTION_CHARS, buildFactsText, unbackedNumbersStrict,
   unbackedProseDates, unbackedWordNumbers, withoutQuotes,
 } = await import("../../lib/client-report.js");
@@ -669,10 +669,16 @@ test("checkReport throws away a report that gives somebody a job", () => {
   assert.match(v.why, /hands work to a person/);
 });
 
-test("checkReport refuses a half-empty answer", () => {
+test("checkReport refuses an empty answer, but not a missing summary", () => {
+  /* ONE ANSWER since Aug 23 2026: the whole thing is the body, so an empty
+   * summary is the normal shape and only a completely empty answer is refused. */
   const factsText = reportFactsToText(FACTS);
-  assert.equal(checkReport({ title: "t", summary: "", body: "x" }, factsText).ok, false);
-  assert.equal(checkReport({ title: "t", summary: "- a", body: "" }, factsText).ok, false);
+  assert.equal(checkReport({ title: "t", summary: "", body: "x" }, factsText).ok, true, "no summary is the normal shape now");
+  assert.equal(checkReport({ title: "t", summary: "", body: "  " }, factsText).ok, false, "an empty answer is still refused");
+  /* An OLD row's shape — a summary and no body — is still allowed on purpose,
+   * so history stays readable. Written down because it is a deliberate
+   * loosening of the old rule, not an oversight. */
+  assert.equal(checkReport({ title: "t", summary: "- a", body: "" }, factsText).ok, true, "an old-shape row still reads");
 });
 
 test("a clean report passes", () => {
@@ -690,9 +696,34 @@ test("a clean report passes", () => {
 /* 8. THE REPORT — the counted version                                 */
 /* ================================================================== */
 
-test("the counted report always has both layers", () => {
+test("parseAnswer keeps every heading and never eats a section", () => {
+  /* All four of these were content loss a checker caught on Aug 23 2026. */
+  const a = parseAnswer("## Money is the problem\nLakeside owes us.\n\n## Next\nDo x.");
+  assert.match(a.body, /## Money is the problem/, "a '##' first line is a heading, not the title");
+  assert.match(a.body, /Do x\./);
+
+  const b = parseAnswer("TITLE: T\n\n## Report\nkept text");
+  assert.match(b.body, /## Report/, "a heading the model chose is not deleted");
+  assert.match(b.body, /kept text/);
+
+  const c = parseAnswer("TITLE: T\n\nSUMMARY\n- one\n\nREPORT\nbody");
+  assert.ok(!/^SUMMARY$/m.test(c.body), "a bare old heading IS dropped");
+  assert.match(c.body, /- one/, "but what was under it is kept");
+
+  const d = parseAnswer("TITLE: Where things stand");
+  assert.equal(d.body, "Where things stand", "a title-only answer is not thrown away");
+
+  const e = parseAnswer("Lakeside has had nothing planned for eleven days.\n\nmore");
+  assert.match(e.title, /^Lakeside has had nothing planned/, "a title is taken from the first real line");
+  assert.match(e.body, /^Lakeside has had nothing planned/, "and the line stays in the answer");
+
+  assert.equal(parseAnswer("   "), null);
+});
+
+test("the counted report is one document, with the short lines inside it", () => {
   const r = deterministicReport(FACTS, { presetId: "standard", todayIso: "2026-08-21" });
-  assert.equal(r.summary.trim().length > 0, true);
+  assert.equal(r.summary, "", "nothing is split off into a second layer");
+  assert.match(r.body, /## In short/, "the short lines lead the same document");
   assert.equal(r.body.trim().length > 0, true);
   assert.equal(r.cannotCheck.trim().length > 0, true);
 });
@@ -731,11 +762,11 @@ test("a client with nothing recorded still gets a true report, not an empty one"
   assert.equal(checkReport(r, reportFactsToText(bare)).ok, true);
 });
 
-test("the markdown file carries both layers, the source line and the gaps", () => {
+test("the markdown file is one document, with the source line and the gaps", () => {
   const r = deterministicReport(FACTS, { presetId: "standard", todayIso: "2026-08-21" });
   const md = reportToMarkdown(r, { clientName: "Harbor Injury Law", facts: FACTS, source: "counted", instruction: "keep it short" });
-  assert.match(md, /## The 30-second version/);
-  assert.match(md, /## The full version/);
+  assert.ok(!/## The 30-second version/.test(md), "no second layer in the file either");
+  assert.match(md, /## In short/);
   assert.match(md, /## What these records cannot answer/);
   assert.match(md, /Counted from the AI Syndicate console's own records/);
   assert.match(md, /keep it short/);

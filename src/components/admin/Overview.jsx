@@ -16,7 +16,7 @@ import {
 import { salesQueue, isOpenStage } from "../../../lib/sales-rules.js";
 import { listInvoices } from "../../lib/finance.js";
 import { invoiceOutstandingCents } from "../../../lib/finance-math.js";
-import { TEAM_TZ, teamDate } from "../../../lib/brain-context.js";
+import { teamDate } from "../../../lib/brain-context.js";
 import {
   teamDayStartOf, teamDayEndOf, dueLabel, taskBucket, parsedOr0,
 } from "../../lib/teamDay.js";
@@ -43,21 +43,6 @@ import ConsoleReportsPanel, { useConsoleReports } from "./consoleReports.jsx";
  *   3. A read that failed says so. It never renders as a zero. Every label on
  *      this page describes exactly what the code counted — no more.
  */
-
-function greeting(nowMs) {
-  const hour = Number(new Intl.DateTimeFormat("en-US", {
-    timeZone: TEAM_TZ, hourCycle: "h23", hour: "2-digit",
-  }).format(new Date(nowMs)));
-  if (hour < 12) return "Good morning";
-  if (hour < 17) return "Good afternoon";
-  return "Good evening";
-}
-
-function longDate(nowMs) {
-  return new Date(nowMs).toLocaleDateString("en-US", {
-    timeZone: TEAM_TZ, weekday: "long", month: "long", day: "numeric",
-  });
-}
 
 /** Never lets a sentence read "1 things". */
 function plural(n, one, many) {
@@ -153,7 +138,6 @@ const NOTE_TONE = {
 
 export default function Overview({ member, setSection }) {
   const userId = member?.user_id || null;
-  const firstName = (member?.full_name || "").trim().split(/\s+/)[0] || null;
   const go = typeof setSection === "function" ? setSection : () => {};
 
   const [data, setData] = useState(null);
@@ -370,28 +354,10 @@ export default function Overview({ member, setSection }) {
       l.created_at ? teamDate(parsedOr0(l.created_at)).slice(0, 7) === thisMonth : false);
     const wonAllTime = leadRows.filter((l) => l.stage === "won");
 
-    // --- clients that need attention, from the tasks the read returned ---
-    const taskRows = allTasks.rows || [];
-    const byClient = new Map();
-    // Active clients only. A client on Holding or closed is not being neglected.
-    for (const c of activeClients) byClient.set(c.id, { client: c, late: 0, blocked: 0, open: 0 });
-    for (const t of taskRows) {
-      const slot = byClient.get(t.client_id);
-      if (!slot || t.status === "done") continue;
-      slot.open += 1;
-      if (t.status === "blocked") slot.blocked += 1;
-      else if (t.due_date && String(t.due_date).slice(0, 10) < today) slot.late += 1;
-    }
-    const attention = [...byClient.values()]
-      .map((s) => {
-        const reasons = [];
-        if (s.late) reasons.push(`${plural(s.late, "task", "tasks")} late`);
-        if (s.blocked) reasons.push(`${plural(s.blocked, "task", "tasks")} blocked`);
-        if (!s.open) reasons.push("no open tasks — nothing planned");
-        return { ...s, reasons, weight: s.late * 10 + s.blocked * 4 + (s.open ? 0 : 1) };
-      })
-      .filter((s) => s.reasons.length)
-      .sort((a, b) => b.weight - a.weight);
+    /* The "clients that need attention" card was removed on Aug 23 2026 — the
+     * other sections already name everyone who needs chasing — so the whole
+     * per-client tally that fed it is gone with it rather than left to run
+     * every 60 seconds for nobody. */
 
     // --- money, one line ---
     const outstandingCents = (invoices.rows || []).reduce((sum, inv) => sum + invoiceOutstandingCents(inv), 0);
@@ -410,32 +376,8 @@ export default function Overview({ member, setSection }) {
     if (owed.length) bits.push(`${plural(owed.length, "lead", "leads")} owed a contact`);
     if (counts.tickets) bits.push(`${plural(counts.tickets, "ticket", "tickets")} on you`);
 
-    // --- the single most urgent thing ---
-    let headline = null;
-    const firstDated = remindersDue.find((r) => r.atMs !== null);
-    if (firstDated) {
-      headline = { text: firstDated.body, why: dueLabel(firstDated.dueEndMs, nowMs), go: "work" };
-    } else if (doNow.length) {
-      const t = doNow[0];
-      headline = {
-        text: t.name,
-        why: `${t.client_name ? `${t.client_name} · ` : ""}${dueLabel(t.dueEndMs, nowMs)}`,
-        go: "work",
-      };
-    } else if (owed.length) {
-      // Already ranked by salesQueue: expired claims first, then cold, then cadence.
-      const c = owed[0];
-      headline = {
-        text: c.lead.name || c.lead.company || "Unnamed lead",
-        why: `${c.headline} — ${c.detail}`,
-        go: "sales",
-      };
-    } else if (needsReply.length) {
-      headline = {
-        text: needsReply[0].subject || "(no subject)",
-        why: "waiting on a reply from us", go: "inbox",
-      };
-    }
+    /* The START HERE headline went with the greeting banner on Aug 23 2026.
+     * Nothing renders it, so nothing computes it. */
 
     const notes = (aiNotes.rows || []).slice()
       // 3 is the most urgent, so descending. Then newest first.
@@ -458,7 +400,6 @@ export default function Overview({ member, setSection }) {
       needsReply, openTickets, pendingTickets,
       pipelineNew, pipelineWorking, newThisMonth, wonAllTime,
       leadsTruncated: leads.truncated || leadActivity.truncated || null,
-      attention,
       money: {
         stripeState: stripe.state,
         stripeAt: stripe.at || null,
@@ -474,7 +415,7 @@ export default function Overview({ member, setSection }) {
         usageSample: Boolean(usage.sample),
         noUsageYet: usageRows.length === 0,
       },
-      bits, headline,
+      bits,
     };
   }, [data, nowMs, userId]);
 
@@ -555,13 +496,6 @@ export default function Overview({ member, setSection }) {
     );
   }
 
-  const mode = view.sample ? "sample" : "live";
-  /* Silence is only good news when everything was actually read. A failed
-   * reminders query used to produce five zeros under the words "Nothing is
-   * late and nothing is due today" — the exact sentence this page exists to
-   * never say wrongly. */
-  const anythingMissing = view.problems.length > 0;
-  const allClear = view.bits.length === 0 && !anythingMissing;
   const dayBroken = view.broken.work;
   const m = view.money;
   const moneyMode = m.stripeState === "live" ? "live"
@@ -570,80 +504,6 @@ export default function Overview({ member, setSection }) {
 
   return (
     <>
-      {/* ---------------- TODAY ---------------- */}
-      <div
-        className="card hero-dark"
-        style={{
-          padding: "26px 28px", border: 0, color: "white", position: "relative",
-          overflow: "hidden",
-          background: "linear-gradient(135deg, #0a2245 0%, #1e1b4b 60%, #312e81 100%)",
-        }}
-      >
-        <div
-          aria-hidden="true"
-          style={{
-            position: "absolute", top: -130, right: -70, width: 360, height: 360,
-            borderRadius: "50%", filter: "blur(30px)",
-            background: "radial-gradient(circle, rgba(139,92,246,0.35), transparent 65%)",
-          }}
-        />
-        <div style={{ position: "relative" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span style={{
-              fontFamily: "var(--mono)", fontSize: 10, fontWeight: 800,
-              letterSpacing: "0.14em", color: "rgba(255,255,255,0.6)",
-            }}>{longDate(nowMs).toUpperCase()}</span>
-            <SourceBadge
-              mode={mode}
-              hint={mode === "live"
-                ? "Counted from our own rows. Anything that failed to read is named below the banner."
-                : "Sample data — this page goes live with the database key"}
-            />
-          </div>
-
-          <div style={{
-            fontFamily: "var(--display)", fontSize: 34, fontWeight: 800,
-            letterSpacing: "-0.02em", lineHeight: 1.15, marginTop: 10,
-          }}>
-            {greeting(nowMs)}{firstName ? `, ${firstName}` : ""}.
-          </div>
-
-          <div style={{
-            marginTop: 8, fontSize: 15, color: "rgba(255,255,255,0.86)",
-            lineHeight: 1.6, maxWidth: 680,
-          }}>
-            {allClear
-              ? "Nothing is late and nothing is due today. Below is where the agency stands."
-              : view.bits.length
-                ? `You have ${view.bits.join(", ")}.${anythingMissing ? " Some of the page is missing — see below." : ""}`
-                : "Part of this page could not be read, so it cannot tell you whether anything is due. What failed is listed below."}
-          </div>
-
-          {view.headline && (
-            <button
-              onClick={() => go(view.headline.go)}
-              style={{
-                marginTop: 16, textAlign: "left", cursor: "pointer",
-                border: "1px solid rgba(255,255,255,0.22)", borderRadius: 10,
-                background: "rgba(255,255,255,0.09)", padding: "12px 14px",
-                color: "white", fontFamily: "var(--body)", maxWidth: 620, width: "100%",
-              }}
-            >
-              <div style={{
-                fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 800,
-                letterSpacing: "0.12em", color: "rgba(255,255,255,0.6)",
-              }}>START HERE</div>
-              <div style={{ fontSize: 14.5, fontWeight: 700, marginTop: 5 }}>
-                {view.headline.text} <span style={{ opacity: 0.7 }}>→</span>
-              </div>
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,0.7)", marginTop: 3 }}>
-                {view.headline.why}
-              </div>
-            </button>
-          )}
-        </div>
-      </div>
-
       {/* ---------------- WHAT DIDN'T LOAD ---------------- */}
       {view.problems.length > 0 && (
         <div className="card" style={{ padding: "14px 18px", border: "1px solid var(--danger)", background: "#fef3f2" }}>
@@ -662,21 +522,16 @@ export default function Overview({ member, setSection }) {
       )}
 
       {/* ---------------- ASK FOR ANYTHING ---------------- */}
-      {/* Second on the page, straight under the banner. Ryder, Aug 23 2026:
-        * "put this card at the top of the page." It sits below the greeting and
-        * above the counters — the banner is what orients you, and this is the
-        * first thing you can act on, both without scrolling.
+      {/* First on the page. Ryder, Aug 23 2026: "put this card at the top of
+        * the page." It stays BELOW the red "some of this page is missing" panel,
+        * so nothing comes between a failed read and its reason.
         *
-        * It stays BELOW the red "some of this page is missing" panel on purpose:
-        * the banner's own sentence says "see below" about that panel, so nothing
-        * may come between the two.
-        *
-        * No section header: collapsed this is one strip, and a heading plus a
-        * subtitle above a one-line box is more chrome than content. */}
+        * No section header: collapsed this is one strip. */}
       <ConsoleReportsPanel reports={consoleReports} aiReady={Boolean(health?.ai)} />
 
       {/* ---------------- YOUR NUMBERS ---------------- */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+      <SectionHeader kicker="Yours" title="Your day right now" />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginTop: -6 }}>
         <CounterTile
           broken={dayBroken}
           label="Late" value={view.counts.overdue} hint="past their due date"
@@ -708,6 +563,51 @@ export default function Overview({ member, setSection }) {
           label="Tickets on you" value={view.counts.tickets} hint="open or pending, assigned to you"
           tone="#0e7490" onClick={() => go("tickets")} title="Open the Tickets page"
         />
+      </div>
+
+      {/* ---------------- THE AGENCY ---------------- */}
+      <SectionHeader
+        kicker="The agency"
+        title="Where everything stands"
+      />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginTop: -6 }}>
+        <CounterTile
+          label="Active clients" value={view.activeClients.length}
+          hint={`of ${plural(view.clientTotal, "client", "clients")} on the books`}
+          tone="var(--ink)" broken={dayBroken} onClick={() => go("operations")} title="Open Operations"
+        />
+        <CounterTile
+          label="Emails needing a reply" value={view.needsReply.length}
+          hint="new or needs-reply · every mailbox" tone="#b54708" broken={view.broken.emails}
+          onClick={() => go("inbox")} title="Open the Inbox"
+        />
+        <CounterTile
+          label="Open tickets" value={view.openTickets.length}
+          hint={view.pendingTickets.length
+            ? `${view.pendingTickets.length} pending too · whole team`
+            : "whole team · none pending"} tone="#0e7490"
+          broken={view.broken.tickets} onClick={() => go("tickets")} title="Open Tickets"
+        />
+        <CounterTile
+          label="Pipeline" value={view.pipelineNew.length + view.pipelineWorking.length}
+          hint={`${view.pipelineNew.length} new · ${view.pipelineWorking.length} working`}
+          tone="var(--accent-deep)" broken={view.broken.leads}
+          onClick={() => go("sales")} title="Open Sales"
+        />
+        <CounterTile
+          label="New leads this month" value={view.newThisMonth.length}
+          hint={`arrived since the 1st · ${plural(view.wonAllTime.length, "win", "wins")} on the books`} tone="#0ca30c"
+          broken={view.broken.leads} onClick={() => go("sales")} title="Open Sales"
+        />
+      </div>
+
+      <div style={{ fontSize: 11.5, color: "var(--ink-dim)", lineHeight: 1.6, marginTop: -4 }}>
+        Counted from the newest 400 emails, 500 tasks and 5,000 AI calls. Past those limits the real
+        number is higher.{view.leadsTruncated ? ` ${view.leadsTruncated}` : ""}
+        <br />
+        <strong style={{ color: "var(--ink-2)" }}>Leads owed a contact</strong> uses the Sales
+        page&apos;s own rules and the same 90 days of call history. One gap: it cannot read site
+        scores here, so unlike Sales it does not skip firms already scoring 90 or more.
       </div>
 
       {/* ---------------- YOUR DAY ---------------- */}
@@ -901,103 +801,6 @@ export default function Overview({ member, setSection }) {
         >{plural(view.notes.length - 6, "more note", "more notes")} on the AI Notes page →</button>
       )}
 
-
-      {/* ---------------- THE AGENCY ---------------- */}
-      <SectionHeader
-        kicker="The agency"
-        title="Where everything stands"
-        subtitle="Not just your work — the whole shop, counted right now."
-      />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginTop: -6 }}>
-        <CounterTile
-          label="Active clients" value={view.activeClients.length}
-          hint={`of ${plural(view.clientTotal, "client", "clients")} on the books`}
-          tone="var(--ink)" broken={dayBroken} onClick={() => go("operations")} title="Open Operations"
-        />
-        <CounterTile
-          label="Emails needing a reply" value={view.needsReply.length}
-          hint="new or needs-reply · every mailbox" tone="#b54708" broken={view.broken.emails}
-          onClick={() => go("inbox")} title="Open the Inbox"
-        />
-        <CounterTile
-          label="Open tickets" value={view.openTickets.length}
-          hint={view.pendingTickets.length
-            ? `${view.pendingTickets.length} pending too · whole team`
-            : "whole team · none pending"} tone="#0e7490"
-          broken={view.broken.tickets} onClick={() => go("tickets")} title="Open Tickets"
-        />
-        <CounterTile
-          label="Pipeline" value={view.pipelineNew.length + view.pipelineWorking.length}
-          hint={`${view.pipelineNew.length} new · ${view.pipelineWorking.length} working`}
-          tone="var(--accent-deep)" broken={view.broken.leads}
-          onClick={() => go("sales")} title="Open Sales"
-        />
-        <CounterTile
-          label="New leads this month" value={view.newThisMonth.length}
-          hint={`arrived since the 1st · ${plural(view.wonAllTime.length, "win", "wins")} on the books`} tone="#0ca30c"
-          broken={view.broken.leads} onClick={() => go("sales")} title="Open Sales"
-        />
-      </div>
-
-      <div style={{ fontSize: 11.5, color: "var(--ink-dim)", lineHeight: 1.6, marginTop: -4 }}>
-        Counted from the newest 400 emails, 500 tasks and 5,000 AI calls. Past those limits the real
-        number is higher.{view.leadsTruncated ? ` ${view.leadsTruncated}` : ""}
-        <br />
-        <strong style={{ color: "var(--ink-2)" }}>Leads owed a contact</strong> uses the Sales
-        page&apos;s own rules and the same 90 days of call history. One gap: it cannot read site
-        scores here, so unlike Sales it does not skip firms already scoring 90 or more.
-      </div>
-
-      {/* Clients that need attention */}
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <BlockHead
-          title="Clients that need attention"
-          count={view.attention.length}
-          capped={view.attention.length > 5 ? 5 : null}
-          onSeeAll={() => go("operations")}
-          seeAllLabel="Operations"
-        />
-        {view.broken.tasks ? (
-          <div style={{ padding: "4px 18px 20px", fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6 }}>
-            Client tasks could not be read, so this list is empty for a reason, not because everything
-            is fine. See the red panel above.
-          </div>
-        ) : view.broken.work ? (
-          <div style={{ padding: "4px 18px 20px", fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6 }}>
-            The client list could not be read, so this cannot say whether anyone needs chasing.
-          </div>
-        ) : view.attention.length === 0 ? (
-          <div style={{ padding: "4px 18px 20px", fontSize: 13, color: "var(--ink-dim)", lineHeight: 1.6 }}>
-            No active client has a late task, a blocked task, or an empty task list. Clients on Holding
-            and closed accounts are not counted here.
-          </div>
-        ) : (
-          view.attention.slice(0, 5).map((s) => (
-            <button
-              key={s.client.id}
-              onClick={() => go("operations")}
-              style={{
-                display: "flex", alignItems: "center", gap: 10, padding: "11px 18px",
-                borderTop: "1px solid var(--line)", flexWrap: "wrap", width: "100%",
-                textAlign: "left", cursor: "pointer", background: "white", border: 0,
-                borderTopStyle: "solid", fontFamily: "var(--body)",
-              }}
-            >
-              <div style={{ flex: "1 1 200px", minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>
-                  {s.client.name || "Unnamed client"} <span style={{ color: "var(--accent-deep)" }}>→</span>
-                </div>
-                <div style={{ fontSize: 11.5, color: "var(--ink-dim)", marginTop: 3 }}>
-                  {s.reasons.join(" · ")}
-                  {s.client.stage ? ` · ${s.client.stage}` : ""}
-                </div>
-              </div>
-              {s.late > 0 && <Pill tone="#b42318" bg="#fef3f2">{`${s.late} LATE`}</Pill>}
-              {s.blocked > 0 && <Pill tone="#6941c6" bg="#f4f3ff">{`${s.blocked} BLOCKED`}</Pill>}
-            </button>
-          ))
-        )}
-      </div>
 
       {/* ---------------- MONEY, ONE LINE ---------------- */}
       <div className="card" style={{ padding: "16px 20px" }}>
