@@ -3791,3 +3791,406 @@ finance 53, sales 84, brain 78, inbox 47 — all green. Watched in Chrome: one c
 High first with the ↑ pill, the second reversed it, the third cleared it; the Description popped out
 with the full brief, took typing at the end, saved on click-away, and its title row stayed on one
 line.
+
+---
+
+## §38. EVERYTHING BUILT ON AUG 23 2026, AND THE STATE BOARD THAT REPLACES §34
+
+**Read this section and §33. Skip §30–§32 and §34 unless you want the reasoning.** Aug 23 produced
+four working sessions and six sections; this one is the single account of what exists at the end of
+the day, and the board below **replaces §34**. Where §34 and this disagree, this wins.
+
+Everything in this section is committed: `57e2530 Add task descriptions and a sortable Operations table`.
+
+### PART 1 — WHAT WAS BUILT TODAY, IN ORDER
+
+| # | Built | Detail lives in |
+|---|---|---|
+| 1 | **Overview realigned onto the Sales rules** — it calls `salesQueue()`, `isOpenStage` and `touchCountsByLead()` from `lib/sales-rules.js`, so it cannot disagree with the Sales page about who is owed a contact | §30 |
+| 2 | **The Overview generator** — type what you want, it reads 23 tables and Claude writes it, every number gated against the counts. Collapsed to a strip, first on the page. Five stars and a note that steers the next run | §31, §32, §33 |
+| 3 | **`loadSystemContext()` widened from 14 tables to 23** — the assistant and the notes engine got all of it for free | §31 |
+| 4 | **Overview trimmed** — the greeting hero and "Clients that need attention" removed, the two counter rows stacked, the generator panel's describe-itself paragraphs cut | §35 |
+| 5 | **Reports are ONE answer** — no more 30-second/full/gaps tabs, in the client report AND the console generator. The number gate is unchanged | §35 |
+| 6 | **Operations: click a value to filter** — two actions at the top of every cell menu, "Only this" on group headers, removable filter chips | §35 |
+| 7 | **Operations: Due date moved to the last column** | §35 |
+| 8 | **Long report modals scroll to the end** — `.adm-modal-body` needed `flex: 1 1 auto; min-height: 0` | §35 |
+| 9 | **Operations: a ▾ menu on every column header** — group by it, clear its filter, or pick any value it holds with a count, counted from ALL tasks | §36 |
+| 10 | **`admin_tasks.description`** — the standing brief on a task, separate from `latest_report`. Migration **0012** | §36 |
+| 11 | **Clicking a column TITLE sorts** — three states, inside each group, with `aria-sort` | §37 |
+| 12 | **The Description cell pops out** into a floating editor that saves on click-away and on unmount | §37 |
+| 13 | **New files**: `lib/console-report.js`, `api/console-report.js`, `src/components/admin/consoleReports.jsx`, `src/lib/teamDay.js`, **`src/lib/opsSort.js`**, migrations `0010` `0011` `0012`, tests `overview/` `console-report/` **`ops/`** | §33, §37 |
+
+### PART 2 — THE FIVE RULES TODAY ADDED, none of them about this feature
+
+1. **One answer, not layers.** Any AI output built from a person's own prompt is ONE response shaped
+   by that prompt and by the saved feedback notes. No house template, no summary followed by the same
+   thing again. The gaps list stays, at the bottom of the same document. §35
+2. **A gate is not a badge.** Every number in a written answer must appear in the counts, or the draft
+   is thrown away and the counted version is saved with the reason. There is no looser mode. §32
+3. **Never send a column the database may not have.** Postgres rejects the whole row, so one new field
+   killed every save on the page. Either run the migration first or retry without the field. §36
+4. **Never encode "missing" as an in-band number.** 9 / 99 / -1 as "blank" sentinels made an unknown
+   phase sink in the sort while the grouping floated it to the top — the same row, two answers. §37
+5. **Move pure logic out of .jsx so it can be tested.** The sort shipped with zero coverage and a
+   checker found three real bugs in an hour; `src/lib/opsSort.js` + `tests/ops` exist because of it. §37
+
+### PART 3 — STATE BOARD (replaces §34)
+
+Nothing in this repo has ever run on admin.aisyndicate.com. Every claim is from the sample store, the
+pure suites, a real Postgres for the SQL suites, Playwright over the built bundle, or watched in Chrome
+against the dev server on localhost:5173.
+
+**THE PAGES** — unchanged from §34 except Operations, which now has: click-to-filter from a cell,
+a ▾ filter/group menu and a click-to-sort title on every column header, a Description column and
+pop-out editor, and Due date last.
+
+**THE ENDPOINTS — 24.** Unchanged from §34.
+
+**MIGRATIONS — 12, and SIX have never been run**
+
+| | State |
+|---|---|
+| 0001–0006 | run |
+| **0007** finance | **not run** |
+| **0008** vault + client reports | **not run** |
+| **0009** sales | **not run** |
+| **0010** console reports | **not run** |
+| **0011** console feedback | **not run** — must go **after 0010** |
+| **0012** task description | **not run** — standalone, run it whenever |
+
+*(Confirm 0007 and 0008 in Supabase rather than trusting a board — the earlier ones disagree.)*
+
+**KEYS AND VARS** — unchanged from §34. `ANTHROPIC_API_KEY` and `VAULT_KEY` are still the two that
+block the most.
+
+**TESTS — EIGHT suites**
+
+| Suite | Count |
+|---|---|
+| `overview` | 44 × **5 timezones** |
+| `console-report` | **46** × 2 timezones |
+| `ops` | **18 — new today** |
+| `sales` | 84 + 20 SQL against a real Postgres |
+| `vault` | **106** + 36 SQL |
+| `brain` | 78 |
+| `inbox` | 47 — **run it with `bash tests/inbox/run.sh`** |
+| `finance` | 53 |
+
+Plus the four Playwright passes over the built bundle described in §34.
+
+**DO THIS NEXT, IN ORDER**
+
+1. `npm run build` in Cursor, then push and deploy. Nothing here has ever been live.
+2. Migrations: **0007, 0008, 0009, 0010, 0011** (0011 after 0010), and **0012** whenever.
+3. `ANTHROPIC_API_KEY` and `VAULT_KEY` in Vercel, then **redeploy** — env vars only reach a build.
+   VAULT_KEY into Bitwarden the same minute; lose it and stored secrets are unreadable for ever.
+4. **Press the generator with a real key.** Every report watched today was the counted fallback, so
+   nobody has yet seen a model answer under the one-answer shape pass or fail the gate.
+5. Rate an answer badly on purpose and check the next one changes.
+6. The rest of the keys as each feature is wanted.
+
+**KNOWN GAPS** — everything in §34's list still stands, plus these from today:
+
+- **The Work page is still the top of the list** — browser clock, retired stale-lead rules.
+- The assistant cannot search a task Description: `lib/assistant-tools.js` filters on `name` and
+  `latest_report` only, and adding `description.ilike` breaks every task search until 0012 runs.
+- `description` reaches **no AI surface** — deliberate (free text a person types), but it also means
+  the brief is invisible on the Work page, where the person doing the work reads.
+- No test covers the pop-out editor, `ColumnHead`, `applyFacet` or the `colsSeen` column prefs. Only
+  the sort is tested. The rest was watched in Chrome.
+- `MISSING_DESCRIPTION` in Operations.jsx is still a string match on a Postgres message.
+- **The AI path of the one-answer report shape has never been watched**, per item 4 above.
+
+---
+
+## §39. CLIENTS replaces Customers, and every client's own accounts get connected — Aug 24 2026 (append-only section)
+
+Nothing above this line was changed. §38 is still the state board; this section adds to it.
+
+### The two things Ryder asked for, in his words
+
+1. *"the customers page i want to make the clients page and have it show all clients, both clients we
+   work with and just people who use the system and then it needs to be clickable and it go to the
+   client page like everyone has with all thier info and reports and passwords and everything."*
+2. *"i want to add into each client thier GBP and GSC and all thier accounts and everything so that ai
+   can easily pull reports on all of that... the reports should be able to go and grab the info from
+   these connectors."*
+
+### 1. The Clients page
+
+`src/components/admin/Clients.jsx`, page id **`clients`**. `Customers.jsx` is **deleted**.
+
+Customers showed Stripe and only Stripe, so half the people we deal with were invisible on it: the
+clients we actually do the work for live in `admin_clients`, and Stripe knows nothing about them
+until they pay through it. The new page merges both lists and labels every row:
+
+| Label | What it means |
+|---|---|
+| `CLIENT` | A row in `admin_clients`. We do delivery work for them. |
+| `CLIENT + PAYING` | The same, and they also pay through Stripe. |
+| `SUBSCRIBER` | Pays through Stripe, no client record, no delivery work. |
+
+**Matching is on the email address and nothing else.** `matchKey()` lowercases and trims, and
+returns "" for anything without an `@`. Matching on the NAME was written and thrown out: "Harbor
+Injury Law" and "Harbor Injury Law, PLLC" are the same firm, "Smith Law" and "Smith Law Group" are
+not, and no rule tells those two cases apart. A wrong match here does not look like a bug — it looks
+like a client whose money belongs to somebody else. When emails do not match, both rows show
+separately and a person decides.
+
+Clicking a row with a client record opens **the same `ClientDetail` component the Operations page
+uses**, not a copy. It was exported from `Operations.jsx` for exactly that reason: two copies would
+have drifted inside a week, and then two screens would disagree about one client.
+
+Clicking a SUBSCRIBER row offers **Make a client** instead: a short form with their name, website,
+email and contact already filled in from Stripe, and one button that writes the `admin_clients` row
+and opens its page. That closes half of a gap listed in §38 ("marking a lead Won does not create the
+client record") — a paying customer no longer has to be typed in from scratch. The lead half is
+still open.
+
+**The address decides which client is open**: `#/dashboard/clients?id=<uuid>`. Reload, Back, a
+bookmark and the link the Google sign-in bounces back to all land in the same place.
+`RENAMED = { leads: "sales", customers: "clients" }` in `AdminDashboard.jsx` rewrites every old
+`customers` link, the same way `leads` was handled on Aug 21 — an unknown page id does not break
+loudly, it quietly shows the landing page instead.
+
+### 2. Connections — the client's own accounts
+
+New **Connections** tab on every client page. `src/components/admin/connectionsPanel.jsx`.
+
+| Short | Full name | What it answers |
+|---|---|---|
+| GSC | Google Search Console | Times shown in Google, clicks, average position, top searches, top pages |
+| GBP | Google Business Profile | Calls from the listing, direction taps, website taps, times shown |
+| GA4 | Google Analytics 4 | Visitors, sessions, where they came from, actions taken |
+| Bing | Bing Webmaster Tools | Typed in by hand for now — no sign-in exists |
+
+**Everything is read-only in practice.** GSC and GA4 ask for `.readonly` scopes. GBP has no
+read-only scope — Google only offers `business.manage` — so `SCOPE_IS_READ_ONLY.gbp === false` and
+the screen SAYS manage rather than claiming read-only. `lib/connector-fetch.js` has no code that
+writes to anything, and a test asserts the honesty flag.
+
+### The files
+
+| File | What it is |
+|---|---|
+| `supabase/migrations/0013_client_connections.sql` | Two tables + a `payload` column on `admin_oauth_states` |
+| `lib/connectors.js` | PURE. The provider list, scopes, windows, metric labels, and the wording every number is printed in. Read by the browser, the server AND the tests. |
+| `lib/connector-fetch.js` | SERVER ONLY. The Google calls, normalised into one shape. |
+| `api/connect-start.js` | Begins a sign-in for one client + one provider |
+| `api/connect-callback.js` | Where Google sends the person back |
+| `api/connector.js` | `properties` · `choose` · `sync` · `syncClient` · `disconnect` |
+| `src/components/admin/connectionsPanel.jsx` | The tab |
+| `src/components/admin/Clients.jsx` | The page |
+| `tests/connectors/` | 165 checks × 5 timezones |
+
+### The two rules this whole feature exists to keep
+
+**1. A number is never shown or quoted without the window it covers, the day it was read, and who
+read it.** Two pieces of code print a reading and both obey it: `snapshotToLines()` in
+`lib/connectors.js` does it for reports and for the assistant, and `SnapshotLine` in
+`connectionsPanel.jsx` does it on screen, where the line reads
+`2026-07-25 → 2026-08-21 · READ BY THIS CONSOLE on 2026-08-24`. They agree by hand, not by
+construction — if you change one, change the other.
+
+**2. Read-by-us and typed-in-by-us are never blended.** `source` is `'api'` or `'manual'`. Only the
+server may write `'api'` — the row-level-security policy on `admin_connection_snapshots` forces every
+browser insert to `source = 'manual'`, because only the server actually asked the account. The gaps
+list on a report names typed-in numbers as typed in.
+
+### Why a report quotes a SNAPSHOT and never a live call
+
+`api/client-report.js` reads `admin_connection_snapshots`. It does **not** call Google. Three reasons,
+all learned the hard way elsewhere in this repo:
+
+- Press the button twice and you would get two different reports.
+- The report would fail whenever Google did, and Google fails often enough.
+- A report written in March would silently re-date itself in September, and nobody could ever check
+  what it originally said.
+
+Refreshing the numbers is its own button on the Connections tab. That is a separate action on
+purpose.
+
+### What changed in the report engine
+
+`lib/client-report.js`:
+
+- `assembleReportFacts()` takes `snapshots` and `connections`, and produces `facts.measured`
+  (newest reading per property) and `facts.connected` (counts).
+- `buildFactsText()` puts the measured block **first in the never-trimmed tail**. A client with 400
+  tasks must not lose the only real numbers in the report — there is a test for exactly that at
+  `maxChars: 500`.
+- `missingFrom()` now says **five** different things, because they are five different problems:
+  nothing connected · connected but needing to be signed in again · connected but never read ·
+  connected and read but one service still missing · numbers that were typed in rather than read.
+  A gaps list that says the same sentence after the gap is closed teaches people to stop reading it.
+- `deterministicReport()` prints a **What their own accounts show** section, and the 30-second
+  summary **opens** with the client's Google clicks — labelled *"That is their number, not ours."*
+  A typed-in figure gets different wording there (*"as typed in by one of us from their screen"*);
+  the first version used the read-by-us wording for both, and the summary is the half that gets
+  pasted into an email.
+- Every number the counted report prints is on the fact sheet, so it passes `checkReport()`. Tested.
+
+`lib/brain-context.js` gained a `measured` scope, **owner and admin only** — a sales rep's AI cannot
+see a client's connected accounts at all, not even a count. Rendered under its own heading with the
+dates attached, never folded into the client line.
+
+### Seven traps that are already handled — do not "fix" them
+
+1. **`taken_at::date` cannot be indexed.** Turning a timestamp into a date depends on the time zone,
+   and Postgres refuses to index anything whose answer can change. Hence the separate `taken_on`
+   column, written by whoever inserts the row.
+2. **`onConflict` can only name plain columns.** An index over `coalesce(property,'')` would be
+   something PostgREST cannot point at, so every read would insert instead of replace. Hence
+   `property text not null default ''` on the snapshots table. A test cross-checks the API's
+   `onConflict` string against the index in the SQL file.
+3. **`include_granted_scopes` is never set.** Google would hand back one token carrying every
+   permission the account ever granted — a token stored for a client's Search Console would also
+   open somebody's mailbox. A test greps for it.
+4. **GSC totals come from a query with NO dimensions.** Adding up a dimensioned query undercounts
+   every time, because Google drops rows for rare searches, and the totals would silently read low.
+5. **Click rate is recomputed from clicks ÷ impressions.** Google's own returned average disagrees
+   with the totals printed beside it, and a report quoting both looks wrong.
+6. **Every window ends at a lag** (`REPORT_LAG_DAYS`: gsc 3, ga4 1, gbp 5). Asking "up to today"
+   returns a number that is too small and then grows — which reads as a drop in the next report.
+7. **GBP returning nothing gives nulls, not zeroes.** A row of zeroes saved as if measured reads in
+   a report as "nobody called them", which is a claim nobody made. Usually an unverified listing,
+   and the card says so.
+
+### What is NOT done
+
+- **Nothing has been run against a real Google account.** No client property has ever been read.
+  Every "it works" here is a pure test, a build, or Chrome against the dev server with sample data.
+- Migration 0013 is **unrun**, on top of the six already unrun in §38. That is now **seven**.
+- The six Google APIs in SETUP.md § 0013 step 2 have not been switched on. Three of them
+  (Business Profile) usually need access requested from Google first.
+- Bing has no sign-in — it is a typed-in card only.
+- Nothing refreshes on a schedule. Numbers are read when somebody presses the button.
+- No chart. The panel shows the newest reading and a History list, not a line over time.
+- The Clients page reads every connection row once to count them per client. On a console with
+  hundreds of clients that read should become a counted view.
+
+---
+
+## §40. What the review of §39 changed, the same day — Aug 24 2026 (append-only section)
+
+Nothing above this line was changed except the specific corrections listed at the end of this
+section. §39 still describes the feature; this section is what two checkers found wrong in it and
+what was done about each one. Both checkers were told to assume the work was broken and to report
+only what was actually wrong.
+
+### The one that mattered most: the stored sign-in was NOT protected
+
+The first version kept each client's scrambled Google sign-in in a `refresh_token_enc` column on
+`admin_client_connections`, and tried to hide it with:
+
+```sql
+grant select, insert, update on public.admin_client_connections to authenticated;
+revoke select (refresh_token_enc) on public.admin_client_connections from authenticated;
+```
+
+**That does nothing.** A column-level `REVOKE` does not carve a column back out of a table-level
+`GRANT` in PostgreSQL, and Supabase grants `authenticated` everything on a new public table by
+default anyway. The checker proved it on a real Postgres: `has_column_privilege` returned true,
+`select refresh_token_enc` returned the blob, and an `update` to it succeeded. Three comments in
+the codebase said the opposite.
+
+It was only ever gibberish — scrambled with `VAULT_KEY`, which lives on the server — so reading it
+would not by itself open a client's account. That is not a reason to hand it out.
+
+**Fixed:** the sign-in moved to its own table, `admin_connection_secrets`, keyed on the connection
+id. Nothing is granted on it to `authenticated`, whatever Supabase granted by default is explicitly
+revoked, and row level security is on with **no policies at all** — so even if a grant were added
+by mistake later, every row would still be invisible. Only the service role reaches it, and the
+service role runs on the server only.
+
+**Never do this again:** if a secret needs to be invisible to the browser, it goes in its own table
+with no grants. Not a column with a REVOKE on it. `tests/connectors` now fails if any
+`revoke select (...)` or `revoke update (...)` appears anywhere in that migration.
+
+### "Connect again" could never repair a connection
+
+The callback looked for the card to attach a sign-in to with
+`.eq(client_id).eq(provider).is("property", null)`. Every card that has ever been *used* has a
+property, so a broken one never matched, and the code made a **second, empty card** instead. The
+original kept its dead token and its `needs_reconnect` status for ever. The new card was a dead end
+too: pointing it at the same property hit the "this client already has a connection reading that
+one" check and returned 409. Every attempt to fix a connection added another orphan.
+
+**Fixed:** the card's id now rides through the sign-in — `connect-start` checks it belongs to that
+client, writes it into the state row in the database, and the callback lands back on that exact
+card. The address bar never carries it.
+
+### Numbers that were never measured
+
+| What happened | Why it is bad | Fixed by |
+|---|---|---|
+| Search Console returning no rows was saved as `0 clicks, 0 shown` with `source: "api"` | A report then prints "0 clicks from Google search" as a measurement — on exactly the newly-verified client where it does most harm | Nulls plus a warning, the way Business Profile already did it |
+| A Business Profile series Google omitted became a hard `0` | "0 times the listing was shown" is a number Google never sent. The all-or-nothing check missed it because *something* came back | Every metric starts as `null` and only becomes a number if Google answered for it; the card names which ones were missing |
+| One client's readings replaced another's | `newestPerProperty` keyed on provider + property with no client in it. Two clients each with a typed-in card and no property chosen collided, and the loser vanished with no trace | The client id is part of the key |
+| The assistant said "There is NO number for it" about accounts read daily | Its snapshot read was capped at 80 rows across every client, so most clients' readings were simply never fetched | Cap raised, and when the read comes back full the wording changes to "you cannot see any from here" — absence is not evidence |
+| A client report could say an account "is not connected, or has never been read" about one read every day | Same cap, 60 rows, with no caveat | Cap raised to 400 and a caveat added when it is hit |
+| A typed-in figure was asserted in the 30-second summary as a reading | The summary is the half that gets pasted into an email; the body two screens down said otherwise | Different wording for typed-in, tested |
+| A person typing `3.2` for a 3.2% click rate got `320.0%` | Nothing said the box wanted a fraction | The box says "in percent (3.2 for 3.2%)" and divides by 100 on the way in |
+| Read dates were UTC days | An 8pm Chicago refresh was filed and printed as **tomorrow**, and the database's "one reading per window per day" rule counted two evenings as two days | `teamDate()` — the same America/Chicago day the rest of the console uses |
+
+### Two Google calls were simply wrong
+
+- **GA4 `conversions` is retired.** Google replaced it with `keyEvents`. It rode along with the
+  three metrics that matter, so a 400 on it failed the **whole** read: every Analytics connection
+  would have returned nothing at all, visitors included. It is now asked for on its own, new name
+  first, old name as a fallback, and a warning if neither works.
+- **The Business Profile date range was half camelCase, half snake_case**
+  (`dailyRange.start_date.year`). A path that is camel at one level and underscored at the next
+  matches no field at all — Google either refuses it or ignores the range and answers for a window
+  of its own choosing, which is worse: the numbers would be stamped with OUR dates and cover
+  somebody else's. Now `dailyRange.startDate.year` throughout, and a test reads the URL back.
+
+### Lists that looked complete and were not
+
+`listGa4Properties` never followed `nextPageToken`; `listGbpLocations` read one page of accounts and
+capped locations silently. All three now page properly and return `{ properties, more }`, and the
+picker prints a warning when `more` is true — because the picker's empty state says *"That account
+can see nothing"* as a conclusion, and a cut list would make that a lie. The Clients page does the
+same: where its own read was cut, the column says **"not known"**, never "none connected".
+
+### React
+
+- Pressing **Back** from a client page left the client page rendered over a list address. The
+  effect only ever SET the open client and never cleared it.
+- The property picker reopened itself after Cancel, every time anything reloaded the rows.
+- Every modal held a **copy** of the row it was opened on, so it saved stale values over newer ones
+  and stayed open on rows that had been removed. They hold ids now and look the row up on render.
+- `stampRoute` uses `replaceState`, which fires no event — so clearing `?connect=ok` from the
+  address bar did not clear it from the component, and the picker kept being offered on later
+  visits. There is a local flag now.
+
+### Two smaller ones
+
+- Two cards with **no property chosen yet** collided on the unique index — so a client with two shop
+  locations could not have two Business Profile cards, and the error told them to change a property
+  neither card had. The index is now partial: `where property is not null and property <> ''`.
+- The **Refresh** range picker silently changes what every future report quotes. Press it once on
+  "Last 7 days" and a client's clicks appear to collapse. The dates were always printed; now the
+  panel says it in words when the newest readings cover different lengths of time, and so does the
+  fact sheet handed to the AI.
+
+### Corrections made to §39 itself
+
+`133 checks` → **165**. "Six traps" → **seven** (it always listed seven). "the summary leads with"
+→ it now actually does — the code disagreed with its own comment. "`missingFrom()` says three
+things" → **five**. "`snapshotToLines()` is the only thing that turns a reading into words" → there
+are two, and they agree by hand. "a paying customer can become a client in one press" → it is a
+short pre-filled form, not one press.
+
+### Also missing from §39's "what is NOT done"
+
+- **No test covers the Clients page or the Connections panel.** All 165 checks are `lib/` and SQL.
+  `matchKey` in `Clients.jsx` carries a comment saying it is exported for the tests; it is not
+  tested yet.
+- **"Refresh everything" reads at most 8 connections per press** (`SYNC_FANOUT_CAP`). It reports
+  what it skipped, but somebody with more has to press it twice.
+- **Owners can delete a snapshot.** That sits awkwardly beside "a report quotes a snapshot, so it
+  has to stay checkable". It is deliberate — a typed-in number entered wrongly has to be removable
+  — but nothing warns that an old report may be pointing at it.
+- Everything in §39's own list still stands: **migration 0013 is unrun (seven now), and nothing here
+  has ever been run against a real Google account.**

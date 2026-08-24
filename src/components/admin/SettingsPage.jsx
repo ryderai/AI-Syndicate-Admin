@@ -18,7 +18,7 @@ const INTEGRATIONS = [
   {
     key: "stripe",
     name: "Stripe (revenue + customers)",
-    what: "MRR, the revenue chart, recent payments, and the whole Customers page.",
+    what: "MRR, the revenue chart, recent payments, and the paying half of the Clients page.",
     envs: ["STRIPE_SECRET_KEY"],
     setup: "SETUP.md § 3 — create a read-only restricted key in the Stripe dashboard. 5 minutes.",
   },
@@ -35,6 +35,17 @@ const INTEGRATIONS = [
     what: "The Inbox page — each teammate connects their own Gmail.",
     envs: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"],
     setup: "SETUP.md § 5 — one Google Cloud OAuth app, click-by-click. ~15 minutes, once.",
+  },
+  {
+    /* Added Aug 24 2026. It is ONE card, not two, because half of it is not a
+     * working feature: with no VAULT_KEY the console refuses to start a
+     * sign-in at all, rather than asking a client for access and then having
+     * nowhere safe to keep it. */
+    key: "clientConnections",
+    name: "The client's own accounts (Search Console, Business Profile, Analytics)",
+    what: "Reads a client's real numbers — searches, clicks, calls, direction taps — so a report can say what actually happened, not only what we did. We only ever read.",
+    envs: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "VAULT_KEY"],
+    setup: "SETUP.md § Client connections — the same Google app as the Inbox, plus three APIs to switch on and one redirect address to add. ~10 minutes, once.",
   },
   {
     key: "usageIngest",

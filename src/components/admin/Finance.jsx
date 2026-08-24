@@ -563,7 +563,7 @@ export default function Finance({ member, setSection }) {
               amount: `${money(x.mrrCents)}/mo`,
             }))}
             emptyText="No active subscriptions yet."
-            footer={<button className="adm-fin-linkbtn" onClick={() => setSection("customers")}>{calc.payingClients} paying · see every customer →</button>}
+            footer={<button className="adm-fin-linkbtn" onClick={() => setSection("clients")}>{calc.payingClients} paying · see every client →</button>}
           />
 
           <ListCard

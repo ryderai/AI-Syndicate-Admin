@@ -8,7 +8,7 @@ import { Toaster } from "./admin/shared.jsx";
 import Overview from "./admin/Overview.jsx";
 import Finance from "./admin/Finance.jsx";
 import Invoices from "./admin/Invoices.jsx";
-import Customers from "./admin/Customers.jsx";
+import ClientsPage from "./admin/Clients.jsx";
 import SalesPage from "./admin/SalesPage.jsx";
 import Operations from "./admin/Operations.jsx";
 import Inbox from "./admin/Inbox.jsx";
@@ -67,7 +67,12 @@ export default function AdminDashboard({ go }) {
    * `leads`, and an unknown page id silently falls back to the landing page —
    * so the link would not break loudly, it would just quietly take you
    * somewhere else. Rewrite it instead. */
-  const RENAMED = { leads: "sales" };
+  /* customers → clients, Aug 24 2026. The page stopped being "everyone who
+   * pays Stripe" and became "everyone we deal with", clients included. Old
+   * links and everyone's browser history still say `customers`, and an
+   * unknown page id falls back to the landing page — so the link would not
+   * break loudly, it would quietly take you somewhere else. */
+  const RENAMED = { leads: "sales", customers: "clients" };
   const rawPage = urlPath.split("/")[0];
   const fromUrl = RENAMED[rawPage] || rawPage;
   const query = urlQuery ? `?${urlQuery}` : "";
@@ -104,7 +109,10 @@ export default function AdminDashboard({ go }) {
       case "overview": return <Overview member={member} setSection={setSection} />;
       case "finance": return <Finance member={member} setSection={setSection} />;
       case "invoices": return <Invoices member={member} />;
-      case "customers": return <Customers member={member} />;
+      /* The query comes through: `?id=` is which client is open, and the
+       * Google sign-in bounces back through `?connect=`. Dropping it would
+       * swallow both. */
+      case "clients": return <ClientsPage member={member} query={query} />;
       case "sales": return <SalesPage member={member} />;
       case "operations": return <Operations member={member} />;
       case "inbox": return <Inbox member={member} />;

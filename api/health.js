@@ -17,6 +17,7 @@ export default async function handler(req, res) {
     // Even the gate can't run — report everything down so the UI can say so.
     return res.status(200).json({
       supabase: false, stripe: false, gmail: false, ai: false, usageIngest: false,
+      clientConnections: false, platformScore: false,
       platformSso: false, platformAccountSet: false, vault: false,
       leadGenPlatform: false, leadGenApollo: false, leadScrapeCron: false,
       note: "Supabase env vars are missing on the server.",
@@ -60,6 +61,15 @@ export default async function handler(req, res) {
        the vault, not even a count. Reported as undefined rather than false, so
        the page can tell "no key" apart from "not your business". */
     vault: ["owner", "admin"].includes(member.membership.role) ? isVaultConfigured() : undefined,
+    /* Connecting a client's Search Console, Business Profile or Analytics needs
+     * BOTH the Google app AND the vault key — the app to ask for permission,
+     * the key to store the answer safely. Reported as one fact because half of
+     * it is not a working feature: with no key, /api/connect-start refuses
+     * BEFORE the person signs in, so nobody grants access we then throw away. */
+    clientConnections: hasGoogleClientCredentials() && isVaultConfigured(),
+    /* Named because it was missing from both this list and .env.example, so
+     * "why is there no score on the client page" had no answer anywhere. */
+    platformScore: Boolean(process.env.PLATFORM_SCORE_URL),
     role: member.membership.role,
   });
 }

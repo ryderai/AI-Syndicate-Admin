@@ -10,6 +10,7 @@ import { StandingCard, SitesPanel } from "./clientPage.jsx";
 import { PlatformAccountsPanel, usePlatformAccounts } from "./platformAccounts.jsx";
 import { VaultPanel, useVaultItems } from "./vaultParts.jsx";
 import { ClientReportsPanel, useClientReports } from "./clientReports.jsx";
+import { ConnectionsPanel, useClientConnections } from "./connectionsPanel.jsx";
 import {
   SourceBadge, Modal, Field, TextInput, TextArea, Select, EmptyState, } from "./shared.jsx";
 import TaskDatabase, {
@@ -527,11 +528,17 @@ function ClientsView({
   );
 }
 
-function ClientDetail({ client, member, clients, team, tasks, reloadClients, onPatch, onCreate, onOpen }) {
+/* Exported Aug 24 2026 so the Clients page can show the SAME client page this
+ * one does. One component, two ways in — a second copy would have drifted
+ * within a week, and then two screens would disagree about the same client. */
+export function ClientDetail({
+  client, member, clients, team, tasks, reloadClients, onPatch, onCreate, onOpen,
+  startTab = "tasks", focusConnectionId = null,
+}) {
   const [weekly, setWeekly] = useState([]);
   const [sites, setSites] = useState([]);
   const [emailCount, setEmailCount] = useState(null);
-  const [tab, setTab] = useState("tasks");
+  const [tab, setTab] = useState(startTab);
   const [reportAuto, setReportAuto] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [weekModal, setWeekModal] = useState(null);
@@ -560,6 +567,11 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
    * showed no badge at all. */
   const reports = useClientReports(client.id);
 
+  /* The client's OWN accounts — Search Console, Business Profile, Analytics.
+   * Owned here for the same reason as everything above it: the tab count and
+   * the panel read one list. */
+  const connections = useClientConnections(client.id);
+
   /* Only the email COUNT is read here, to tell whether the standing summary has
    * gone out of date. The emails themselves live on the Inbox page. */
   const loadEmailCount = useCallback(async () => {
@@ -574,6 +586,11 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
   }, [client.id]);
 
   useEffect(() => { loadWeekly(); loadSites(); loadEmailCount(); }, [loadWeekly, loadSites, loadEmailCount]);
+
+  /* Coming back from a Google sign-in, land on Connections rather than
+   * wherever the tab happened to be. The person pressed one button and left
+   * the console; putting them back on Tasks reads as "nothing happened". */
+  useEffect(() => { if (focusConnectionId) setTab("connections"); }, [focusConnectionId]);
 
   const openCount = tasks.filter((t) => t.status !== "done").length;
 
@@ -628,7 +645,9 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
       </div>
 
       <div className="aia-tabs" role="tablist" aria-label="Client sections" style={{ marginBottom: 16 }}>
-        {[["tasks", "Tasks", openCount], ["websites", "Websites", sites.length], ["platform", "Platform login", accounts.rows.length], ["vault", "Vault", vault.rows.length], ["reports", "Reports", reports.rows.length], ["weekly", "Weekly log", weekly.length]].map(([id, label, count]) => (
+        {[["tasks", "Tasks", openCount], ["websites", "Websites", sites.length], /* ACTIVE ones only. A client with three connections all switched off
+                 * showed a "3" next to a panel that greys every one of them out. */
+                ["connections", "Connections", connections.rows.filter((c) => c.active !== false).length], ["platform", "Platform login", accounts.rows.length], ["vault", "Vault", vault.rows.length], ["reports", "Reports", reports.rows.length], ["weekly", "Weekly log", weekly.length]].map(([id, label, count]) => (
           <button key={id} onClick={() => setTab(id)} role="tab" aria-selected={tab === id} className={`aia-tab ${tab === id ? "active" : ""}`}>
             <span className="aia-tab-dot" aria-hidden="true" />
             {label}
@@ -642,6 +661,8 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
 
       {tab === "websites" ? (
         <SitesPanel client={client} sites={sites} reload={loadSites} />
+      ) : tab === "connections" ? (
+        <ConnectionsPanel client={client} connections={connections} member={member} focusConnectionId={focusConnectionId} />
       ) : tab === "platform" ? (
         <PlatformAccountsPanel client={client} accounts={accounts} />
       ) : tab === "vault" ? (
@@ -714,7 +735,7 @@ function ClientDetail({ client, member, clients, team, tasks, reloadClients, onP
 /* MODALS                                                              */
 /* ------------------------------------------------------------------ */
 
-function ClientModal({ member, client, onClose, reload }) {
+export function ClientModal({ member, client, onClose, reload }) {
   const [f, setF] = useState({
     name: client?.name || "", domain: client?.domain || "", vertical: client?.vertical || "",
     status: client?.status || "active", stage: client?.stage || "Onboarding",
@@ -763,7 +784,7 @@ function ClientModal({ member, client, onClose, reload }) {
 }
 
 /** The whole task on one screen — the equivalent of opening the Notion page. */
-function TaskModal({ task, clients, team, defaultClientId, onClose, reload }) {
+export function TaskModal({ task, clients, team, defaultClientId, onClose, reload }) {
   const [f, setF] = useState({
     name: task?.name || "",
     client_id: task?.client_id || defaultClientId || "",

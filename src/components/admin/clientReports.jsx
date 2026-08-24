@@ -261,6 +261,10 @@ function GenerateModal({ client, live, onClose, onDone }) {
         It reads everything this console holds about {client.name} — tasks, the weekly log, websites, email threads,
         follow-ups, invoices, support tickets and the notes the team wrote — counts it, and writes one answer in the
         shape you ask for. Every number in it has to appear in those counts, or the draft is thrown away.
+        {" "}It also uses the numbers already read from {client.name}&apos;s own accounts on the Connections tab. It does
+        not go and fetch them now: a report quotes a reading taken on a known day, so pressing this button twice
+        cannot produce two different reports. Press <strong>Refresh</strong> on the Connections tab first if you
+        want today&apos;s numbers.
       </p>
 
       <div className="label" style={{ marginBottom: 6 }}>Start from one of these</div>

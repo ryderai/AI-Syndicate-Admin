@@ -6,7 +6,7 @@ const SECTION_TITLES = {
   overview: { kicker: "Command", title: "Overview · your day and the whole agency" },
   finance: { kicker: "Command", title: "Finance · in, out, projected" },
   invoices: { kicker: "Command", title: "Invoices · billed, paid, owed" },
-  customers: { kicker: "Command", title: "Customers · every paying account" },
+  clients: { kicker: "Command", title: "Clients · everyone we work with and everyone who pays" },
   sales: { kicker: "Sales", title: "Sales · the pipeline" },
   operations: { kicker: "Delivery", title: "Operations · clients, tasks & weekly logs" },
   inbox: { kicker: "Comms", title: "Inbox · team Gmail in one place" },

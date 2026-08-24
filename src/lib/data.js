@@ -23,6 +23,10 @@ import { assembleReportFacts, deterministicReport, buildFactsText } from "../../
  * never disagree about whose claim has run out. */
 import { isOpenStage as isOpen } from "../../lib/sales-rules.js";
 import { normaliseDomain } from "../../lib/sales-import.js";
+/* The team's own day. A number typed in at 8pm in Chicago is still today to
+ * everybody here; UTC would file it under tomorrow, and the database's "one
+ * reading per window per day" rule counts the day it is given. */
+import { teamDate } from "../../lib/brain-context.js";
 
 /* ONE STAGE LADDER, replacing the outreach sheet's two overlapping columns.
  *
@@ -1941,6 +1945,12 @@ export async function generateClientReportPreview(clientId, { instruction, prese
     platformAccounts: previewStore.platformAccounts.filter((a) => a.client_id === clientId),
     vaultItems: previewStore.vaultItems.filter((v) => v.client_id === clientId),
     previousReports: previewStore.clientReports.filter((r) => r.client_id === clientId),
+    /* The sample client's own connected accounts, so preview shows the
+     * "what their own accounts show" section exactly as the real thing does.
+     * Both lists are declared at the bottom of this file (Aug 24 2026) — this
+     * function only ever runs on a click, long after the module has loaded. */
+    snapshots: previewSnapshots.filter((sn) => sn.client_id === clientId),
+    connections: previewConnections.filter((cx) => cx.client_id === clientId && cx.active !== false),
     nowMs: Date.now(),
   });
 
@@ -2468,4 +2478,219 @@ export async function saveConsoleFeedback({ reportId, rating, note }) {
   const { data, error } = await getSupabase()
     .from("admin_console_feedback").insert(clean).select().maybeSingle();
   return error ? { ok: false, error: error.message } : { ok: true, row: data };
+}
+
+/* ==================================================================== */
+/* APPENDED Aug 24 2026 — the client's own connected accounts.           */
+/* Nothing above this line was changed. New sections go BELOW this one.  */
+/* ==================================================================== */
+
+/* Search Console, Business Profile, Analytics and Bing — the accounts the
+ * CLIENT owns, that we are allowed to read. Two tables (migration 0013):
+ *
+ *   admin_client_connections   — one row per account+property we can read.
+ *   admin_connection_snapshots — the numbers we actually read, with the dates
+ *                                they cover and the date we read them.
+ *
+ * THE SNAPSHOT IS THE POINT. A report quotes a snapshot, never a live call, so
+ * the same report always shows the same numbers and can be checked in six
+ * months. Nothing here ever rewrites an old snapshot.
+ *
+ * The scrambled sign-in is not on the connection row at all. It lives in
+ * admin_connection_secrets, a separate table no signed-in browser has any
+ * permission on — only the server's service-role key reaches it. It is a
+ * separate TABLE rather than a column here because taking a permission away
+ * from one column does nothing once the whole table has been granted, which
+ * is how the first version of this got it wrong.
+ */
+
+const CONNECTION_COLUMNS =
+  "id, client_id, provider, auth_kind, label, account_email, property, property_label, " +
+  /* `scope` is what Google GRANTED — the list of permissions, not the token.
+   * The card needs it to spot a sign-in that predates something we now read
+   * and offer "Connect again" before the next refresh fails. The token itself
+   * is not on this table at all (see the note above). */
+  "scope, status, last_synced_at, last_error, meta, notes, active, sort, connected_at, connected_by, " +
+  "created_at, updated_at, added_by";
+
+const previewConnections = [
+  { id: "cx1", client_id: "c1", provider: "gsc", auth_kind: "google", label: "Google Search Console — lakesiderealty-sample.com", account_email: "dana@sample.com", scope: "openid email https://www.googleapis.com/auth/webmasters.readonly", property: "sc-domain:lakesiderealty-sample.com", property_label: "lakesiderealty-sample.com", status: "connected", last_synced_at: daysAgo(1), last_error: null, meta: {}, notes: null, active: true, sort: 0, connected_at: daysAgo(20), created_at: daysAgo(20), updated_at: daysAgo(1) },
+  { id: "cx2", client_id: "c1", provider: "gbp", auth_kind: "google", label: "Google Business Profile — Lakeside Realty (Destin)", account_email: "dana@sample.com", scope: "openid email https://www.googleapis.com/auth/business.manage", property: "locations/1234567890", property_label: "Lakeside Realty — Destin", status: "connected", last_synced_at: daysAgo(1), last_error: null, meta: {}, notes: null, active: true, sort: 1, connected_at: daysAgo(20), created_at: daysAgo(20), updated_at: daysAgo(1) },
+  { id: "cx3", client_id: "c1", provider: "ga4", auth_kind: "manual", label: "Google Analytics 4", account_email: null, scope: null, property: null, property_label: null, status: "manual", last_synced_at: null, last_error: null, meta: {}, notes: "Waiting on the client to add us to Analytics.", active: true, sort: 2, connected_at: null, created_at: daysAgo(6), updated_at: daysAgo(6) },
+  { id: "cx4", client_id: "c2", provider: "gsc", auth_kind: "google", label: "Google Search Console — harborinjurylaw-sample.com", account_email: "j@sample.com", scope: "openid email https://www.googleapis.com/auth/webmasters.readonly", property: "sc-domain:harborinjurylaw-sample.com", property_label: "harborinjurylaw-sample.com", status: "needs_reconnect", last_synced_at: daysAgo(19), last_error: "The client's Google sign-in was withdrawn or expired. Press Connect again.", meta: {}, notes: null, active: true, sort: 0, connected_at: daysAgo(60), created_at: daysAgo(60), updated_at: daysAgo(19) },
+];
+
+/* Sample numbers, deliberately unremarkable. Every one carries the window it
+ * covers and the day it was taken, exactly like a real row — a sample that is
+ * shaped differently from the real thing teaches the wrong lesson. */
+const previewSnapshots = [
+  { id: "sn1", connection_id: "cx1", client_id: "c1", provider: "gsc", property: "sc-domain:lakesiderealty-sample.com", period_start: daysAgo(31).slice(0, 10), period_end: daysAgo(3).slice(0, 10), taken_at: daysAgo(1), taken_on: daysAgo(1).slice(0, 10), source: "api", metrics: { clicks: 412, impressions: 18240, ctr: 412 / 18240, position: 14.2 }, detail: { topQueries: [{ query: "destin realtor", clicks: 61, impressions: 1840, position: 8.1 }, { query: "30a homes for sale", clicks: 44, impressions: 2210, position: 11.6 }], topPages: [{ page: "/", clicks: 150, impressions: 5100 }, { page: "/listings", clicks: 96, impressions: 4300 }] }, note: null, created_at: daysAgo(1) },
+  { id: "sn2", connection_id: "cx2", client_id: "c1", provider: "gbp", property: "locations/1234567890", period_start: daysAgo(33).slice(0, 10), period_end: daysAgo(5).slice(0, 10), taken_at: daysAgo(1), taken_on: daysAgo(1).slice(0, 10), source: "api", metrics: { businessImpressions: 9120, callClicks: 74, directionRequests: 131, websiteClicks: 288, bookings: 0 }, detail: {}, note: null, created_at: daysAgo(1) },
+  { id: "sn3", connection_id: "cx4", client_id: "c2", provider: "gsc", property: "sc-domain:harborinjurylaw-sample.com", period_start: daysAgo(50).slice(0, 10), period_end: daysAgo(22).slice(0, 10), taken_at: daysAgo(19), taken_on: daysAgo(19).slice(0, 10), source: "api", metrics: { clicks: 903, impressions: 40110, ctr: 903 / 40110, position: 9.8 }, detail: { topQueries: [{ query: "injury lawyer near me", clicks: 120, impressions: 5400, position: 6.2 }], topPages: [] }, note: null, created_at: daysAgo(19) },
+];
+
+/* ---- CONNECTIONS -------------------------------------------------- */
+
+/** Every connected account for one client. Pass null for every client's. */
+export async function listClientConnections(clientId = null) {
+  if (!live()) {
+    const rows = (clientId ? previewConnections.filter((c) => c.client_id === clientId) : [...previewConnections])
+      .sort((a, b) => (a.sort || 0) - (b.sort || 0) || String(a.created_at).localeCompare(String(b.created_at)));
+    return { rows, sample: true };
+  }
+  let q = getSupabase().from("admin_client_connections").select(CONNECTION_COLUMNS)
+    .order("sort", { ascending: true })
+    .order("created_at", { ascending: true })
+    .limit(400);
+  if (clientId) q = q.eq("client_id", clientId);
+  const { data, error } = await q;
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+export async function upsertClientConnection(patch) {
+  if (!live()) {
+    const now = new Date().toISOString();
+    if (patch.id) {
+      const i = previewConnections.findIndex((c) => c.id === patch.id);
+      if (i < 0) return { ok: false, error: "That connection is not on the list any more. Refresh the page." };
+      previewConnections[i] = { ...previewConnections[i], ...patch, updated_at: now };
+      return { ok: true, row: previewConnections[i], sample: true };
+    }
+    const row = {
+      id: pid("cx"), client_id: null, provider: "other", auth_kind: "manual", label: "",
+      account_email: null, scope: null, property: null, property_label: null, status: "manual",
+      last_synced_at: null, last_error: null, meta: {}, notes: null, active: true, sort: 0,
+      connected_at: null, created_at: now, updated_at: now, ...patch,
+    };
+    previewConnections.push(row);
+    return { ok: true, row, sample: true };
+  }
+  const supabase = getSupabase();
+  const q = patch.id
+    ? supabase.from("admin_client_connections").update(patch).eq("id", patch.id).select(CONNECTION_COLUMNS).maybeSingle()
+    : supabase.from("admin_client_connections").insert(patch).select(CONNECTION_COLUMNS).maybeSingle();
+  const { data, error } = await q;
+  if (error) {
+    const dup = /duplicate key|unique constraint/i.test(error.message || "");
+    return {
+      ok: false,
+      error: dup
+        ? "This client already has a connection reading that exact property. Change the property, or edit the card that already exists."
+        : error.message,
+    };
+  }
+  /* A write that changed nothing comes back as { data: null, error: null } —
+   * the row is gone, or row-level security filtered it out. Calling that
+   * "saved" is how a change quietly disappears. Same rule as the login cards. */
+  if (!data) {
+    return {
+      ok: false,
+      error: patch.id
+        ? "Nothing was saved — that connection is gone, or your account is not allowed to change it. Refresh the page."
+        : "Nothing was saved. Your account may not be allowed to add one.",
+    };
+  }
+  return { ok: true, row: data };
+}
+
+/** Owners only in the database (migration 0013), same as the login cards. An
+ * admin's delete matches no rows rather than failing, so the rows are counted
+ * — a "Removed" message over a card that is still there is worse than a no. */
+export async function deleteClientConnection(id) {
+  if (!live()) {
+    const before = previewConnections.length;
+    const i = previewConnections.findIndex((c) => c.id === id);
+    if (i >= 0) previewConnections.splice(i, 1);
+    if (previewConnections.length === before) return { ok: false, error: "That connection is not on the list any more." };
+    return { ok: true, sample: true };
+  }
+  const { data, error } = await getSupabase()
+    .from("admin_client_connections").delete().eq("id", id).select("id");
+  if (error) return { ok: false, error: error.message };
+  if (!data || data.length === 0) {
+    return { ok: false, error: "Nothing was removed. Removing a connection is owners only — switch it off instead, or ask an owner." };
+  }
+  return { ok: true };
+}
+
+/* ---- SNAPSHOTS ---------------------------------------------------- */
+
+/** The numbers read for one client, newest first. */
+export async function listConnectionSnapshots(clientId, { provider = null, limit = 60 } = {}) {
+  if (!live()) {
+    let rows = previewSnapshots.filter((s) => s.client_id === clientId);
+    if (provider) rows = rows.filter((s) => s.provider === provider);
+    rows = [...rows].sort((a, b) => String(b.taken_at).localeCompare(String(a.taken_at))).slice(0, limit);
+    return { rows, sample: true };
+  }
+  let q = getSupabase().from("admin_connection_snapshots").select("*")
+    .eq("client_id", clientId)
+    .order("taken_at", { ascending: false })
+    .limit(limit);
+  if (provider) q = q.eq("provider", provider);
+  const { data, error } = await q;
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+/**
+ * Save numbers a person read off a screen and typed in.
+ *
+ * source is forced to "manual" here AND in the database policy. Only the
+ * server may write "api", because only the server actually asked the account.
+ * A typed number that could pass itself off as a measured one would break the
+ * only rule these tables exist to keep.
+ */
+export async function addManualSnapshot({ clientId, connectionId = null, provider, property = "", periodStart, periodEnd, metrics = {}, note = null, userId = null }) {
+  if (!clientId) return { ok: false, error: "No client." };
+  if (!provider) return { ok: false, error: "Pick which account these numbers came from." };
+  if (!periodStart || !periodEnd) return { ok: false, error: "Say which dates these numbers cover." };
+  if (String(periodStart) > String(periodEnd)) return { ok: false, error: "The first date has to come before the last one." };
+
+  /* Empty boxes are left OUT, not saved as zero. A blank that becomes 0 reads
+   * in a report as "nobody called them", which is a claim nobody made. */
+  const clean = {};
+  for (const [k, v] of Object.entries(metrics)) {
+    if (v === "" || v === null || v === undefined) continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) clean[k] = n;
+  }
+  if (!Object.keys(clean).length) return { ok: false, error: "Type at least one number." };
+
+  const takenAt = new Date().toISOString();
+  const row = {
+    connection_id: connectionId,
+    client_id: clientId,
+    provider,
+    property: property || "",
+    period_start: periodStart,
+    period_end: periodEnd,
+    taken_at: takenAt,
+    taken_on: teamDate(Date.parse(takenAt)),
+    taken_by: userId,
+    source: "manual",
+    metrics: clean,
+    detail: note ? { note } : {},
+    note: note || null,
+  };
+
+  if (!live()) {
+    const made = { id: pid("sn"), created_at: takenAt, ...row };
+    previewSnapshots.unshift(made);
+    return { ok: true, row: made, sample: true };
+  }
+  const { data, error } = await getSupabase()
+    .from("admin_connection_snapshots").insert(row).select().maybeSingle();
+  if (error) {
+    const dup = /duplicate key|unique constraint/i.test(error.message || "");
+    return {
+      ok: false,
+      error: dup
+        ? "Numbers for that exact window were already saved today. Change the dates, or remove the earlier one first."
+        : error.message,
+    };
+  }
+  if (!data) return { ok: false, error: "Nothing was saved. Your account may not be allowed to add numbers." };
+  return { ok: true, row: data };
 }

@@ -78,9 +78,9 @@ export default async function handler(req, res) {
   /* Every table this client touches, in one go. Each read is capped, and the
    * caps are generous enough that hitting one is itself worth knowing about —
    * see `capped` below, which is reported rather than shrugged off. */
-  const CAPS = { tasks: 400, weekly: 60, sites: 60, emails: 200, invoices: 120, tickets: 100, notes: 60, accounts: 60, vault: 200, history: 5 };
+  const CAPS = { tasks: 400, weekly: 60, sites: 60, emails: 200, invoices: 120, tickets: 100, notes: 60, accounts: 60, vault: 200, history: 5, connections: 40, snapshots: 400 };
 
-  const [tasks, weekly, sites, invoices, notes, accounts, vault, history, roster] = await Promise.all([
+  const [tasks, weekly, sites, invoices, notes, accounts, vault, history, roster, connections, snapshots] = await Promise.all([
     /* ORDERED, every one. PostgREST returns rows in no defined order without
      * it, so a client at the cap gave a different arbitrary slice on every
      * press — two reports minutes apart with different "counted" numbers. The
@@ -101,6 +101,22 @@ export default async function handler(req, res) {
      * anybody who joined after the code was written, walked straight through.
      * Names only — no emails, no roles, and it never reaches the AI. */
     admin.from("admin_users").select("full_name").eq("active", true).limit(60),
+    /* The client's own connected accounts, and the numbers already read out of
+     * them. NOTHING IS FETCHED FROM GOOGLE HERE. A report quotes a SNAPSHOT —
+     * a reading taken on a known day — so pressing the button twice cannot
+     * produce two different reports, and a report written in March can still
+     * be checked in September. Refreshing the numbers is its own button on the
+     * client page, and it is deliberately not this one: a report that silently
+     * went and fetched would be slow, would fail whenever Google did, and
+     * would quietly change the "measured on" date under an old report. */
+    admin.from("admin_client_connections")
+      .select("id, provider, property, status, active, last_synced_at")
+      .eq("client_id", clientId).limit(CAPS.connections),
+    admin.from("admin_connection_snapshots")
+      .select("id, provider, property, period_start, period_end, taken_at, source, metrics, detail, note")
+      .eq("client_id", clientId)
+      .order("taken_at", { ascending: false })
+      .limit(CAPS.snapshots),
   ]);
 
   const readFail = [tasks, weekly, sites, invoices].find((r) => r.error);
@@ -169,6 +185,8 @@ export default async function handler(req, res) {
      * cannot be read, that check runs with no names in it — which is the
      * headline guarantee of this feature quietly switched off. It says so. */
     ["the team roster (so this report's check on naming people ran without it)", roster.error?.message],
+    ["the client's connected accounts (Search Console, Business Profile, Analytics)", connections.error?.message],
+    ["the numbers already read from the client's own accounts", snapshots.error?.message],
   ]) {
     if (err) softFails.push(`- We could not read ${what} while writing this (${err}). Anything about them is missing here, NOT absent.`);
   }
@@ -186,6 +204,12 @@ export default async function handler(req, res) {
     platformAccounts: accounts.data || [],
     vaultItems: vault.data || [],
     previousReports: history.data || [],
+    /* A failed read here becomes an empty list, and an empty list makes the
+     * gaps section say "no numbers are connected" — which would be a claim,
+     * not a fact. So the failure is recorded in softFails below and named on
+     * the report instead of being silently turned into a sentence. */
+    snapshots: snapshots.error ? [] : (snapshots.data || []),
+    connections: connections.error ? [] : ((connections.data || []).filter((c) => c.active !== false)),
     nowMs: Date.now(),
   });
 
@@ -193,11 +217,22 @@ export default async function handler(req, res) {
    * so on the report rather than letting the reader assume it covers
    * everything — the "fetch at cap, print at cap" trap from the Aug 20 review,
    * in its other form. */
+  /* The readings are capped like everything else, and hitting that cap is
+   * dangerous in a way the others are not: a provider whose newest reading
+   * falls outside the window drops out of facts.measured, and the gaps list
+   * then states that the account "is not connected, or has never been read"
+   * — about an account read every day. Named in the caveats below. */
   const capped = [
     (tasks.data || []).length >= CAPS.tasks && "tasks",
     (emailThreads || []).length >= CAPS.emails && "email threads",
     (invoices.data || []).length >= CAPS.invoices && "invoices",
   ].filter(Boolean);
+
+  /* Named separately because the sentence it needs is a different sentence.
+   * "More readings exist than this read" is not a size warning here — it is
+   * the reason a connected account might be described below as one we have
+   * never read, which would be false. */
+  const snapshotsCapped = !snapshots.error && (snapshots.data || []).length >= CAPS.snapshots;
 
   /* Built once, here, so that BOTH the AI path and the counted path answer to
    * the same fact sheet — and so the cut is known before either of them runs. */
@@ -289,6 +324,9 @@ export default async function handler(req, res) {
        * all of them. */
       cutChars ? `- About ${cutChars} characters of this client's records did not fit on the fact sheet this was written from. The counts are complete; the detailed lists stop partway.` : "",
       contact ? "" : "- Support tickets. This client has no contact email set, and tickets are matched to a client by that address.",
+      snapshotsCapped
+        ? `- This client has more saved readings from their own accounts than this report read — it read the newest ${CAPS.snapshots} and stopped. If an account is described above as one we have never read, check the Connections tab before repeating that.`
+        : "",
       ...softFails,
     ].filter(Boolean).join("\n"),
     source,

@@ -837,3 +837,136 @@ existed a console without this migration could not save a due-date change either
 a brief rejected because migration 0012 has not been run is **not** "put back" in the cell — the
 pop-out has already closed by then, so the text is gone and the toast is the only trace. Run the
 migration before writing briefs you cannot retype.
+
+---
+
+## Migration 0013 — the client's own accounts (added Aug 24 2026)
+
+**What it turns on.** Every client page gets a **Connections** tab. Connect a client's Google
+Search Console, Google Business Profile or Google Analytics once, and this console can read their
+real numbers whenever a report needs them: how many times their site showed up in Google, how many
+people clicked, how many called the business from the map listing, how many tapped for directions.
+
+**Plain words for the initials:**
+
+| Short | Full name | What it tells you |
+|---|---|---|
+| GSC | Google Search Console | How often their site showed in Google, and the clicks |
+| GBP | Google Business Profile | The map listing — calls, direction taps, website taps |
+| GA4 | Google Analytics 4 | What people did once they were on the site |
+
+**We only ever read.** Search Console and Analytics are asked for read-only permission. Business
+Profile has no read-only permission — Google only offers "manage" — so the screen says manage. This
+console has no code anywhere that writes to a listing.
+
+### Step 1 — run the SQL
+
+1. Open **supabase.com** → your project → **SQL Editor** → **New query**.
+2. Open `supabase/migrations/0013_client_connections.sql` in Cursor, select all, copy.
+3. Paste it into the SQL Editor and press **Run**.
+4. It should say **Success. No rows returned.** Nothing on the Connections tab saves until this
+   has run.
+
+### Step 2 — switch six Google APIs on
+
+Same Google Cloud project as the Gmail inbox (§ 5). You are not making a new app.
+
+1. Go to **console.cloud.google.com** and pick the project you made in § 5 (top-left picker).
+2. In the search box at the top, type **Google Search Console API**. Click it. Press **Enable**.
+3. Search **Google Analytics Data API**. Click it. Press **Enable**.
+4. Search **Google Analytics Admin API**. Click it. Press **Enable**.
+5. Search **My Business Account Management API**. Click it. Press **Enable**.
+6. Search **My Business Business Information API**. Click it. Press **Enable**.
+7. Search **Business Profile Performance API**. Click it. Press **Enable**.
+
+> The three Business Profile ones often need access requested first. If a page shows a
+> **Request access** link instead of an **Enable** button, fill that form in. Google reviews those
+> by hand and **we have not been through it yet, so do not promise anybody a date.** Search Console
+> and Analytics work straight away — connect those first and come back to Business Profile.
+
+### Step 2b — tell the consent screen about the new permissions
+
+The Gmail setup in § 5 left the scope list empty. These three are new, and Google will not hand
+them over unless they are on the list.
+
+1. Left menu → **APIs & Services** → **OAuth consent screen** (newer projects call this page
+   **Google Auth Platform** → **Data Access**).
+2. Press **ADD OR REMOVE SCOPES**.
+3. In the filter box, paste each of these in turn and tick it:
+   - `https://www.googleapis.com/auth/webmasters.readonly`
+   - `https://www.googleapis.com/auth/analytics.readonly`
+   - `https://www.googleapis.com/auth/business.manage`
+4. Press **UPDATE**, then **SAVE**.
+
+> **Read this before you try to connect anything.** § 5 set this app to **Internal**, which means
+> only `@aisyndicate.com` accounts can get through the Google sign-in. A client's own Google
+> account **cannot** be used here — Google refuses it before our code sees anything. So the order
+> is: the client adds our address to their Search Console / Business Profile / Analytics first,
+> and only then do we sign in with our own account. If you ever need a client to sign in
+> themselves, the app has to be switched to **External**, which brings a Google verification
+> review with it.
+
+### Step 3 — add the one extra redirect address
+
+1. Still in Google Cloud, left menu → **APIs & Services** → **Credentials**.
+2. Click the **OAuth 2.0 Client ID** you made in § 5.
+3. Under **Authorised redirect URIs**, press **+ ADD URI**.
+4. Paste exactly: `https://admin.aisyndicate.com/api/connect-callback`
+5. Press **+ ADD URI** again and paste: `http://localhost:5173/api/connect-callback`
+6. Press **SAVE**. Google can take five minutes to catch up.
+
+> **For local dev only, one more line.** Running on your own machine there is no proxy header, so
+> the console builds the address as `https://localhost:5173/...` and Google refuses it with
+> `redirect_uri_mismatch`. Put this in `.env.local` and restart the dev server:
+>
+> ```
+> CONNECT_REDIRECT_URI=http://localhost:5173/api/connect-callback
+> ```
+>
+> Do **not** set it in Vercel — the deployed site works this out on its own.
+
+### Step 4 — the key that keeps a client's sign-in safe
+
+`VAULT_KEY` must be set in Vercel. It is the same key the Vault uses. Without it the console
+**refuses to start a sign-in at all** — on purpose, so nobody is ever asked for access that then
+has nowhere safe to be kept.
+
+1. In Vercel → your project → **Settings** → **Environment Variables**, check `VAULT_KEY` is there.
+2. If it is not, make one: in a terminal, run `openssl rand -base64 32` and copy the whole line.
+3. Add it as `VAULT_KEY`, all three environments ticked, **Save**.
+4. **Put the same value into Bitwarden the same minute.** Lose it and every stored password and
+   every stored client sign-in is unreadable for ever.
+5. **Redeploy.** Environment variables only reach a build.
+
+### Step 5 — connect a client
+
+1. Sidebar → **Clients**. Click the client.
+2. Click the **Connections** tab.
+3. **+ Add an account** → pick **Google Search Console** → **Sign in with Google**.
+4. Sign in with the Google account that already has access to that client's Search Console. If
+   nobody at AI Syndicate has access yet, ask the client to add our address first — a connection
+   cannot give us access we do not have.
+5. Google asks whether to allow it. Press **Continue**.
+6. You land back on the client's Connections tab and a box opens asking **which one should we
+   read**. Pick the client's site. Press **Use this one**.
+7. Press **Refresh now**. The numbers appear on the card with the exact dates they cover.
+
+### What "it's working" looks like
+
+- The card says **CONNECTED** and names the site underneath.
+- Numbers appear with a line under them reading `2026-07-25 → 2026-08-21 · READ BY THIS CONSOLE on
+  2026-08-24`.
+- Generate a report on that client and it now has a **What their own accounts show** section, and
+  its "what this could not cover" list no longer says none of their accounts is connected.
+
+### If something goes wrong
+
+| What it says | What it means | What to do |
+|---|---|---|
+| That account can see nothing | The Google account you signed in with has no access to the client's property | Ask the client to add that address, then press **Connect again** |
+| VAULT_KEY isn't set | The key is missing from Vercel, or the build predates it | Step 4 above, then **redeploy** |
+| The sign-in was withdrawn or expired | Somebody removed our access at myaccount.google.com | Press **Connect again** |
+| This usually means the API is switched off | One of the six APIs in step 2 was missed | Switch it on, wait a minute, press **Refresh now** |
+| `redirect_uri_mismatch` | The address in step 3 is missing, or you are local without `CONNECT_REDIRECT_URI` | Step 3, including the local-dev box under it |
+| Google refuses the account at sign-in | You tried a client's own Google account. The app is Internal | Sign in with your aisyndicate.com account, after the client has given it access |
+| Google did not return a refresh token | Google remembers a previous approval | Go to myaccount.google.com/permissions, remove AI Syndicate, connect again |
