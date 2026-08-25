@@ -4297,3 +4297,173 @@ into a real backspace character** (0x08). The file looked right in an editor, `n
 eslint passed, the build passed — and `/\bTheir own…/` matched nothing, so the whole voice rewrite
 was dead. It was only visible in the browser. If a regex with `\b`, `\f` or `\v` in it mysteriously
 never matches, run `grep -rlP '[\x08\x07\x0b\x0c]'` over the repo before doubting the pattern.
+
+---
+
+## §42. EVERYTHING BUILT ON AUG 24–25 2026, AND THE STATE BOARD THAT REPLACES §38
+
+**Read this section, then §39 and §41. Skip §40 unless you want the reasoning behind the fixes.**
+The board in PART 3 **replaces §38's board**. Where §38 and this disagree, this wins. §33 is still
+the current spec for the Overview page and its generator; nothing here touched either.
+
+Four commits, in order:
+
+| Commit | What |
+|---|---|
+| `2eb373d` | Clients page + connect each client's own Google accounts |
+| `53538c6` | Say what shape you want the report in, then send it |
+| `eba6da7` | Take the standing text out of the Generate report box |
+| `c81ea84` | No count badge on the Reports tab |
+
+### PART 1 — WHAT WAS BUILT, IN ORDER
+
+| # | Built | Detail |
+|---|---|---|
+| 1 | **Customers is gone. CLIENTS replaces it** — our own records and Stripe merged into one list, labelled CLIENT / CLIENT + PAYING / SUBSCRIBER, matched on the email address and nothing else | §39 |
+| 2 | **Any row opens the client page** — the SAME `ClientDetail` Operations uses, exported not copied. One client page, two doors | §39 |
+| 3 | **"Make a client"** on a Stripe-only row — a short form pre-filled from Stripe that writes the `admin_clients` row | §39 |
+| 4 | **CONNECTIONS tab on every client** — their Google Search Console, Business Profile and Analytics, connected by Google sign-in and read on demand | §39 |
+| 5 | **Reports quote a SNAPSHOT, never a live call** — `api/client-report.js` reads saved readings and never calls Google | §39 |
+| 6 | **The sign-in itself moved to its own table** after a reviewer proved a column-level REVOKE protects nothing | §40 |
+| 7 | **Generate report asks TWO questions** — what to cover, and who it is for / what shape it comes back in. Migration **0014** | §41 |
+| 8 | **Copy to paste · Email them → · Text them →** on a finished report. Every word lifted from the report; nothing is ever sent | §41 |
+| 9 | **The Clients icon is a person**; the standing text is out of the Generate box; the Reports tab has no count badge | §41, and below |
+| 10 | **New files**: `lib/connectors.js`, `lib/connector-fetch.js`, `lib/report-share.js`, `api/connect-start.js`, `api/connect-callback.js`, `api/connector.js`, `src/components/admin/Clients.jsx`, `src/components/admin/connectionsPanel.jsx`, migrations `0013` `0014`, tests `connectors/` `share/` | |
+
+### PART 2 — THE RULES THESE TWO DAYS ADDED
+
+1. **A secret that must be invisible to the browser goes in its OWN TABLE with no grants. Never a
+   column with a REVOKE on it.** A column-level `REVOKE` does not carve a column out of a
+   table-level `GRANT` in PostgreSQL, and Supabase grants `authenticated` everything on a new public
+   table by default. A reviewer proved on a real Postgres that the first version was readable AND
+   writable by any signed-in admin's browser, while three comments said it was not. §40
+2. **A measurement is a number PLUS the window it covers PLUS the day it was read PLUS who read it.**
+   Anything short of all four is not a measurement and must not be printed as one. §39
+3. **Read-by-us and typed-in-by-us never blend.** The database itself forces every browser-entered
+   reading to say "typed in"; only the server may write "measured". §39
+4. **An empty answer is null, never zero.** "0 phone calls" saved as if measured is a claim nobody
+   made — and it lands hardest on the newly-onboarded client. §40
+5. **Nothing in a client draft is a new sentence.** Every word comes from a report that already
+   passed `checkReport`; a fresh sentence would have skipped it. §41
+6. **NOTHING IS EVER SENT FROM THE CONSOLE.** The Gmail button saves a draft and stops. Do not
+   "improve" this into a send button. §41
+7. **Absence of evidence is not evidence.** When a read comes back at its cap, the wording changes
+   from "there is none" to "I cannot see any from here". §40
+8. **Standing text stops being read.** Three explanation blocks were pushing the two boxes a person
+   came to type below the fold. The rules they described are enforced in code either way. §41
+9. **A count badge is a claim on somebody's attention.** Tasks, sites, connections, logins and weeks
+   count things you may have to act on. Saved reports are a filing cabinet — no badge. (`c81ea84`)
+
+### PART 3 — STATE BOARD (replaces §38's board)
+
+**Nothing in this repo has ever run on admin.aisyndicate.com.** Every claim below is from the sample
+store, the pure suites, a real Postgres for the SQL suites, or watched in Chrome against the dev
+server on localhost:5173. The Playwright passes described in §34 were **not** re-run on Aug 24–25.
+
+**THE PAGES — 15.** As §38, with one change: **Customers is deleted and Clients replaces it**
+(page id `clients`; old `customers` links rewrite themselves). Operations is unchanged apart from a
+new **Connections** tab inside the client page, which the Clients page shows too because it is the
+same component.
+
+**THE ENDPOINTS — 28** (counted from `api/`). §38 said 24; three are new here
+(`connect-start`, `connect-callback`, `connector`) and the old number was already short by one.
+
+**MIGRATIONS — 14, and EIGHT have never been run**
+
+| | State |
+|---|---|
+| 0001–0006 | run |
+| **0007** finance | **not run** |
+| **0008** vault + client reports | **not run** |
+| **0009** sales | **not run** |
+| **0010** console reports | **not run** |
+| **0011** console feedback | **not run** — must go **after 0010** |
+| **0012** task description | **not run** — standalone |
+| **0013** client connections | **not run** — standalone; three tables |
+| **0014** report shape | **not run** — standalone; two columns, and the console works without it |
+
+*(Confirm each one in Supabase rather than trusting a board.)*
+
+**KEYS AND VARS.** `ANTHROPIC_API_KEY` and `VAULT_KEY` still block the most. `VAULT_KEY` now blocks
+the client connections too — without it `/api/connect-start` refuses **before** anybody signs in, on
+purpose, so no client is ever asked for access we then cannot store. `.env.example` gained sections
+8, 9 and 10, which include `VAULT_KEY` and `PLATFORM_SCORE_URL` — both were missing from it before.
+
+**TESTS — TEN suites**
+
+| Suite | Count |
+|---|---|
+| `connectors` | **165 — new** × 5 timezones |
+| `share` | **48 — new** |
+| `overview` | 44 × 5 timezones |
+| `console-report` | 46 × 2 timezones |
+| `ops` | 18 |
+| `sales` | 84 + 20 SQL against a real Postgres |
+| `vault` | 106 + 36 SQL |
+| `brain` | 78 |
+| `inbox` | 47 — **run it with `bash tests/inbox/run.sh`** |
+| `finance` | 53 |
+
+**DO THIS NEXT, IN ORDER**
+
+1. **`rm -f .git/index.lock .git/HEAD.lock`** in Cursor. Committing from the mounted folder left two
+   lock files the mount will not delete, and git — Cursor's included — refuses to run while they
+   exist. See PART 4.
+2. `npm run build`, then push and deploy. Nothing here has ever been live.
+3. Migrations, in this order: **0007, 0008, 0009, 0010, 0011** (after 0010), then **0012, 0013,
+   0014** whenever.
+4. `ANTHROPIC_API_KEY` and `VAULT_KEY` in Vercel, then **redeploy**. VAULT_KEY into Bitwarden the
+   same minute.
+5. **SETUP.md § "Migration 0013"** — six Google APIs to switch on, three scopes to add to the
+   consent screen, one redirect URI. The three Business Profile APIs usually need access requested
+   from Google by hand first, and **we have not been through that**, so promise nobody a date.
+6. **Connect one real client's Search Console and press Refresh.** Nothing here has ever touched a
+   real Google account.
+7. **Generate one report with an AI key set**, asking for the email shape. Every report watched over
+   these two days was the counted fallback — no model has ever answered with a shape block in the
+   prompt.
+8. **Save one real Gmail draft.** That path has only run against sample data.
+
+**KNOWN GAPS — everything in §38's list still stands, plus:**
+
+- **Nothing has been read from a real Google account, and no Gmail draft has ever been saved.**
+- The OAuth app is **Internal**, so a client's own Google account cannot sign in. The client grants
+  our address access first; we sign in as us. Switching to External brings a Google review with it.
+- Local dev needs `CONNECT_REDIRECT_URI=http://localhost:5173/api/connect-callback` or Google
+  refuses with `redirect_uri_mismatch`.
+- Bing is a typed-in card only. Nothing refreshes on a schedule. No chart over time.
+- "Refresh everything" reads at most 8 connections per press. It says what it skipped.
+- Owners can delete a snapshot, which sits awkwardly beside "a report quotes a snapshot, so it has to
+  stay checkable". Deliberate — a wrongly typed number has to be removable — but nothing warns that
+  an old report may be pointing at it.
+- **No test covers the Clients page, the Connections panel, or the share modal.** All 213 new checks
+  are `lib/` and SQL. `matchKey` in `Clients.jsx` says it is exported for the tests; it is not tested.
+- The Clients page reads every connection row once to count them per client. Past 400 rows it says
+  "not known" rather than "none connected", but on a console with hundreds of clients that read
+  should become a counted view.
+- Marking a **lead** Won still does not create the client record. The paying-customer half of that
+  gap is closed; the lead half is not.
+
+### PART 4 — TWO PROCESS TRAPS FROM THESE TWO DAYS
+
+**Writing JavaScript through a Python heredoc turns `\b` into a real backspace character (0x08).**
+The file looks right in an editor. `node --check`, eslint and `npm run build` all pass. The regex
+matches nothing. It was only visible in the browser. When a regex with `\b`, `\f` or `\v` never
+matches, run `grep -rlP '[\x08\x07\x0b\x0c]' --include='*.js' --include='*.jsx' .` before doubting
+the pattern.
+
+**Committing from the mounted folder leaves `.git/index.lock` and `.git/HEAD.lock`, and the mount
+refuses `rm`, `mv` AND `tar` on them.** The way through:
+
+1. `tar` the whole `.git` minus `*.lock` into `/tmp/g.git`.
+2. `git --git-dir=/tmp/g.git --work-tree=<repo> add -A && commit`.
+3. **Copy the new loose objects back FIRST.** They were written into `/tmp/g.git`, not the repo.
+   Skipping this leaves the ref pointing at a commit the repo does not have and git answers
+   **`fatal: bad object HEAD`** — which looks like a corrupted repo and is not. Copy the objects and
+   it comes straight back.
+4. `cp -f /tmp/g.git/refs/heads/main <repo>/.git/refs/heads/main` — **`cp` overwrites where `mv` and
+   `rm` both fail.**
+5. Verify from the repo's own `.git`: `log`, `fsck`, and
+   `git show <sha>:<changed file> | grep -c "<the removed text>"`.
+
+The locks themselves survive all of this. **Ryder has to remove them in Cursor.**
