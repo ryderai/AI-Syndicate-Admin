@@ -647,7 +647,14 @@ export function ClientDetail({
       <div className="aia-tabs" role="tablist" aria-label="Client sections" style={{ marginBottom: 16 }}>
         {[["tasks", "Tasks", openCount], ["websites", "Websites", sites.length], /* ACTIVE ones only. A client with three connections all switched off
                  * showed a "3" next to a panel that greys every one of them out. */
-                ["connections", "Connections", connections.rows.filter((c) => c.active !== false).length], ["platform", "Platform login", accounts.rows.length], ["vault", "Vault", vault.rows.length], ["reports", "Reports", reports.rows.length], ["weekly", "Weekly log", weekly.length]].map(([id, label, count]) => (
+                ["connections", "Connections", connections.rows.filter((c) => c.active !== false).length], ["platform", "Platform login", accounts.rows.length], ["vault", "Vault", vault.rows.length],
+                /* NO COUNT on Reports. Ryder, Aug 25 2026. The badge is a
+                 * red dot with a number in it — it reads as "something needs
+                 * you", and a report you generated yesterday does not. The
+                 * other tabs count things you might have to act on: open
+                 * tasks, sites, connected accounts, logins. Saved reports are
+                 * a filing cabinet. */
+                ["reports", "Reports", 0], ["weekly", "Weekly log", weekly.length]].map(([id, label, count]) => (
           <button key={id} onClick={() => setTab(id)} role="tab" aria-selected={tab === id} className={`aia-tab ${tab === id ? "active" : ""}`}>
             <span className="aia-tab-dot" aria-hidden="true" />
             {label}
