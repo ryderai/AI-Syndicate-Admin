@@ -273,16 +273,15 @@ function GenerateModal({ client, live, onClose, onDone }) {
         <button className="btn btn-accent" onClick={go} disabled={busy || over || shapeOver}>{busy ? "Reading the records…" : "Generate"}</button>
       </>}
     >
-      <p className="adm-rep-explain">
-        It reads everything this console holds about {client.name} — tasks, the weekly log, websites, email threads,
-        follow-ups, invoices, support tickets and the notes the team wrote — counts it, and writes one answer in the
-        shape you ask for. Every number in it has to appear in those counts, or the draft is thrown away.
-        {" "}It also uses the numbers already read from {client.name}&apos;s own accounts on the Connections tab. It does
-        not go and fetch them now: a report quotes a reading taken on a known day, so pressing this button twice
-        cannot produce two different reports. Press <strong>Refresh</strong> on the Connections tab first if you
-        want today&apos;s numbers.
-      </p>
-
+      {/* THE EXPLANATIONS ARE GONE FROM THIS BOX. Ryder, Aug 25 2026: "remove
+        * the descriptions". Three blocks of standing text — what it reads,
+        * what the shape box may not change, what a report will never do —
+        * were pushing the two things you actually came here to type below the
+        * fold. Text that never changes stops being read after the second
+        * time; the rules it described are enforced in code either way
+        * (checkReport in lib/client-report.js), and they are written down in
+        * CONTEXT-FOR-AI.md §41 for whoever needs them. Do not put them back
+        * without asking. */}
       <div className="label" style={{ marginBottom: 6 }}>Start from one of these</div>
       <div className="adm-rep-presets">
         {REPORT_PRESETS.map((p) => (
@@ -297,10 +296,7 @@ function GenerateModal({ client, live, onClose, onDone }) {
         ))}
       </div>
 
-      <Field
-        label="Now say what you want, in your own words"
-        hint="This is what actually gets sent. Change it, add to it, or write your own. Example: “the 10-second version, only what is blocked”."
-      >
+      <Field label="Now say what you want, in your own words">
         <TextArea
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}
@@ -310,7 +306,7 @@ function GenerateModal({ client, live, onClose, onDone }) {
       </Field>
       <div className={`adm-rep-count${over ? " bad" : ""}`}>
         {instruction.length} / {MAX_INSTRUCTION_CHARS} characters
-        {over ? " — too long. Trim it, or the facts get squeezed out of the way." : ""}
+        {over ? " — too long, trim it" : ""}
       </div>
 
       <div className="label" style={{ marginTop: 18, marginBottom: 6 }}>And how should it read?</div>
@@ -327,10 +323,7 @@ function GenerateModal({ client, live, onClose, onDone }) {
         ))}
       </div>
 
-      <Field
-        label="Who is it for, and what shape do you want back"
-        hint="This decides the wording and the layout, so you can paste the answer straight where it is going. Example: “write it as an email to Dana, warm but short, no headings”."
-      >
+      <Field label="Who is it for, and what shape do you want back">
         <TextArea
           value={shape}
           onChange={(e) => setShape(e.target.value)}
@@ -340,22 +333,9 @@ function GenerateModal({ client, live, onClose, onDone }) {
       </Field>
       <div className={`adm-rep-count${shapeOver ? " bad" : ""}`}>
         {shape.length} / {MAX_SHAPE_CHARS} characters
-        {shapeOver ? " — too long. Trim it." : ""}
+        {shapeOver ? " — too long, trim it" : ""}
       </div>
 
-      <div className="adm-rep-rules">
-        <strong>What this second box cannot do:</strong> change what is true. It decides who the answer is
-        written for and what shape it comes back in. Everything below still applies to an email exactly as it
-        applies to a report.
-        <br /><br />
-        <strong>What it will never do:</strong> make up a number that is not in our records, promise a result, or
-        write down a job for a person. If a draft does any of those, it is thrown away and you get the plain counted
-        version instead — and the page tells you that is what happened.
-        <br /><br />
-        <strong>What it does carry:</strong> the notes your team wrote about this client, word for word, and the
-        client&apos;s own notes field. Nothing from the vault beyond a count. If somebody pasted something private
-        into a note, it will be in this report and in anything you forward — worth a look before you send it.
-      </div>
     </Modal>
   );
 }
