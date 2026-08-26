@@ -19,11 +19,20 @@ const STATUS_TONE = {
 };
 const PRIORITY_TONE = { urgent: "#df1b41", high: "#ff9f43", normal: "#6366f1", low: "#9eb1c7" };
 
+/* The words for each choice in the filter, in one place, so the dropdown and
+ * the empty state can never disagree about what is on screen. Aug 26 2026. */
+const FILTER_LABELS = { all: "All tickets", openish: "Open + pending" };
+function filterLabel(f) {
+  return FILTER_LABELS[f] || f[0].toUpperCase() + f.slice(1);
+}
+
 export default function Tickets({ member }) {
   const [tickets, setTickets] = useState({ rows: [], sample: true });
   const [loadedAt, setLoadedAt] = useState(0);
   const [team, setTeam] = useState([]);
-  const [statusFilter, setStatusFilter] = useState("openish");
+  /* Aug 26 2026 — Ryder wants the page to open on every ticket, not just the
+   * live ones, so the history is there without changing the filter first. */
+  const [statusFilter, setStatusFilter] = useState("all");
   const [openTicket, setOpenTicket] = useState(null);
 
   useScreenContext(() => ({
@@ -68,11 +77,23 @@ export default function Tickets({ member }) {
       </div>
 
       <div className="card" style={{ padding: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        {/* The order of these options is deliberately unchanged, so nobody has to
+          * hunt for the one they always pick. "All tickets" is second in the list
+          * but it is the default, and that is fine: the select is controlled by
+          * statusFilter, so whatever the default is shows as chosen on the first
+          * paint. Aug 26 2026 for Ryder. */}
         <select className="adm-input" style={{ width: 180 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="openish">Open + pending</option>
           <option value="all">All tickets</option>
           {TICKET_STATUSES.map((s) => <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>)}
         </select>
+        {/* The three cards above always count the whole pile, whatever the filter
+          * says. This line is the one that tracks the filter, so the numbers up
+          * there never look like they are lying about the table below. */}
+        <span style={{ fontSize: 12, color: "var(--ink-dim)" }}>
+          {rows.length} of {tickets.rows.length} {tickets.rows.length === 1 ? "ticket" : "tickets"}
+          {statusFilter === "all" ? "" : ` · ${filterLabel(statusFilter)}`}
+        </span>
         <div style={{ marginLeft: "auto" }}>
           <button className="btn btn-accent" onClick={() => setNewOpen(true)}>+ New ticket</button>
         </div>
@@ -82,9 +103,17 @@ export default function Tickets({ member }) {
         <EmptyState
           icon="🎫"
           title={tickets.rows.length === 0 ? "No tickets yet" : "Nothing in this view"}
+          /* The old line here said "switch the filter to All tickets", which is a
+             lie now that All tickets is what the page opens on. Say which filter
+             is actually in force instead. Aug 26 2026, Ryder's ask. */
+          /* There is no arm here for the All tickets filter, and there cannot be
+             one: on "all", rows IS tickets.rows, so an empty rows means an empty
+             pile and the first arm already covers it. Aug 26 2026 — the arm that
+             used to sit here said "this should not happen" and never once ran, so
+             it was a safety net that caught nothing. */
           body={tickets.rows.length === 0
             ? "Log the first one when a customer emails or messages with a problem. Later, the platform and the inbox can open tickets here automatically — the plumbing is already in place."
-            : "Switch the filter to All tickets to see history."}
+            : `Nothing is sitting in "${filterLabel(statusFilter)}" right now. Switch the filter to All tickets to see the ${tickets.rows.length} we do have.`}
           action={tickets.rows.length === 0 && <button className="btn btn-accent" onClick={() => setNewOpen(true)}>+ New ticket</button>}
         />
       ) : (

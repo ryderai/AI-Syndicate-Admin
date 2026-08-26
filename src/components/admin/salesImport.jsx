@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import {
   insertLeadsBatch, insertCompaniesBatch, findExistingCompanies, findExistingLeadKeys,
   upsertLeadList, findLeadListByTab, upsertLeadSource, addLeadActivity, logActivity,
+  startImportBatch, finishImportBatch,
 } from "../../lib/data.js";
 import { toast } from "../../lib/toast.js";
 import { parseXlsxAllTabs, readSheetFile, readPasted, hasUnzipSupport } from "../../lib/sheet.js";
@@ -47,6 +48,10 @@ export function SalesImportModal({ member, team, onClose, reload }) {
   const [label, setLabel] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [result, setResult] = useState(null);
+  /* Kept so the import record can name the file it came from. Without it,
+     "Outreach sheet" is the only clue three imports later about which download
+     produced which rows. */
+  const [fileName, setFileName] = useState(null);
   const [progress, setProgress] = useState("");
   const fileRef = useRef(null);
 
@@ -83,6 +88,7 @@ export function SalesImportModal({ member, team, onClose, reload }) {
     }
     setBusy(true);
     try {
+      setFileName(file.name || null);
       const name = (file.name || "").toLowerCase();
       if (name.endsWith(".xlsx") || name.endsWith(".xlsm")) {
         const all = await parseXlsxAllTabs(await file.arrayBuffer());
@@ -189,6 +195,24 @@ export function SalesImportModal({ member, team, onClose, reload }) {
   const doImport = async () => {
     setBusy(true);
     try {
+      /* THE BATCH IS OPENED FIRST, before a single row is written. A run that
+       * dies half way still leaves a row naming what it was, and those rows are
+       * still clearable — an import with no batch behind it is one nobody can
+       * undo. */
+      setProgress("Recording this import…");
+      const batch = await startImportBatch({
+        label: label.trim() || "Outreach sheet",
+        sourceFile: fileName || null,
+        tabs: plans.map(({ tab }) => tab.name),
+        counts: { planned: totals.usable, firms: totals.companies },
+        userId: member.user_id,
+      });
+      const batchId = batch.ok ? batch.id : null;
+      if (!batch.ok) {
+        toast.warn("This import will not be undoable",
+          "The import record could not be saved, most likely because migration 0016 has not been run. Everything still imports — but Start over will not be able to find these rows later.");
+      }
+
       setProgress("Saving the list…");
       const src = await upsertLeadSource({
         label: label.trim() || "Outreach sheet",
@@ -228,6 +252,7 @@ export function SalesImportModal({ member, team, onClose, reload }) {
           ...(existingList ? { id: existingList.id } : { created_by: member.user_id }),
           name: tab.name, vertical: plan.companies[0]?.vertical || null,
           sheet_tab: tab.name, source_id: sourceId,
+          ...(batchId ? { import_batch_id: batchId } : {}),
         });
         const listId = list.ok ? list.row?.id || null : null;
 
@@ -241,6 +266,7 @@ export function SalesImportModal({ member, team, onClose, reload }) {
           employees: c.employees, annual_revenue: c.annual_revenue,
           linkedin_url: c.linkedin_url, facebook_url: c.facebook_url, twitter_url: c.twitter_url,
           site_score: c.site_score, created_by: member.user_id,
+          ...(batchId ? { import_batch_id: batchId } : {}),
         })));
         if (!saved.ok) { toast.error(`Firms failed on ${tab.name}`, saved.error); setBusy(false); setProgress(""); return; }
         companyTotal += saved.count;
@@ -256,6 +282,7 @@ export function SalesImportModal({ member, team, onClose, reload }) {
           list_id: listId,
           source_id: sourceId,
           last_import_at: new Date().toISOString(),
+          ...(batchId ? { import_batch_id: batchId } : {}),
         }));
         skippedTotal += plan.leads.length - keep.length;
 
@@ -288,6 +315,15 @@ export function SalesImportModal({ member, team, onClose, reload }) {
           noteProblems += keep.length;
         }
       }
+
+      /* Closed with what ACTUALLY landed, not what was planned. The planned
+       * number is already on the row from the start; overwriting it with the
+       * real one would lose the difference, which is the only evidence that a
+       * run fell short. */
+      await finishImportBatch(batchId, {
+        planned: totals.usable, firms_planned: totals.companies,
+        contacts: leadTotal, firms: companyTotal, skipped: skippedTotal,
+      });
 
       await logActivity({
         actor: member.user_id, kind: "sales_import",

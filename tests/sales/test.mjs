@@ -842,6 +842,356 @@ test("list health separates never-touched from claimed-but-quiet", () => {
 });
 
 /* ================================================================== */
+/* 14. THE REP'S TWO PAGES                                             */
+/* ================================================================== */
+/* Aug 26 2026: reps got their own logins, and with them Leads (the floor) and
+ * My leads — the SAME SalesPage with a mode, not a copy of it. Owner and admin
+ * did not change.
+ *
+ * These read the components as text, the way the vault tests do, because the
+ * files are JSX and node cannot import them. The two decision tables inside
+ * them are plain data, though, so those are pulled out and evaluated for real
+ * rather than matched with a regex: a test that only greps can be satisfied by
+ * a comment, and this is exactly the code a checker caught lying yesterday.
+ */
+
+const srcOf = (rel) => readFileSync(new URL(`../../${rel}`, import.meta.url), "utf8");
+const SIDEBAR = srcOf("src/components/admin/Sidebar.jsx");
+const DASH = srcOf("src/components/AdminDashboard.jsx");
+const SALESPAGE = srcOf("src/components/admin/SalesPage.jsx");
+
+/** Lift a top-level `const NAME = <literal>;` out of a JSX file and evaluate
+ *  it. Only safe for the literals below, which hold strings and arrays and
+ *  nothing else — check that before pointing this at anything new. ROE is
+ *  handed in because one of those strings quotes the first-contact window from
+ *  the rules rather than repeating the number, which is what we want it to do. */
+function literal(src, name) {
+  const start = src.indexOf(`const ${name} = `);
+  assert.ok(start >= 0, `${name} is not declared at the top level any more`);
+  const open = src.indexOf("=", start) + 1;
+  // Walk the brackets rather than guessing where the literal ends — the
+  // declarations below span many lines and carry comments between entries.
+  let depth = 0, i = open, started = false;
+  for (; i < src.length; i += 1) {
+    const c = src[i];
+    if (c === "{" || c === "[") { depth += 1; started = true; }
+    else if (c === "}" || c === "]") { depth -= 1; if (started && depth === 0) { i += 1; break; } }
+  }
+  assert.ok(started && depth === 0, `could not read the ${name} literal`);
+  return new Function("ROE", `return (${src.slice(open, i)});`)(ROE);
+}
+
+const SECTIONS = literal(SIDEBAR, "SECTIONS");
+const MODES = literal(SALESPAGE, "MODES");
+
+/* The two functions the dashboard's role gate is built on. Two lines each in
+ * Sidebar.jsx, repeated here because the file cannot be imported — if either
+ * changes shape these break, which is the point. */
+const groupsFor = (role) => SECTIONS.filter((g) => g.roles.includes(role));
+const pageIdsFor = (role) => groupsFor(role).flatMap((g) =>
+  g.items.flatMap(([id, , kids]) => [id, ...(kids || []).map(([kid]) => kid)]));
+
+test("a rep's sidebar is Work, Leads and My leads, and nothing else", () => {
+  assert.deepEqual(pageIdsFor("sales"), ["work", "leads", "mine"]);
+});
+
+test("a rep lands on Work, because the landing page is the first one their role has", () => {
+  // AdminDashboard: allowedIds[0] when the role cannot see Overview.
+  assert.equal(pageIdsFor("sales")[0], "work");
+});
+
+test("the owner's menu did not change: one Sales page, and the rep's ids are not in it", () => {
+  const owner = pageIdsFor("owner");
+  assert.ok(owner.includes("sales"), "the owner must keep the four-tab Sales page");
+  assert.ok(!owner.includes("leads") && !owner.includes("mine"), "the rep's pages are not the owner's");
+  assert.deepEqual(pageIdsFor("owner"), pageIdsFor("admin"), "admin and owner are still the same menu");
+  const salesGroup = groupsFor("owner").filter((g) => g.group === "Sales");
+  assert.equal(salesGroup.length, 1, "an owner must see exactly one Sales group");
+  assert.deepEqual(salesGroup[0].items, [["sales", "Sales"]]);
+});
+
+test("a rep cannot reach a page their role does not list", () => {
+  for (const id of ["sales", "overview", "clients", "vault", "team", "settings", "operations"]) {
+    assert.ok(!pageIdsFor("sales").includes(id), `${id} must not be openable by a rep`);
+  }
+});
+
+test("the rep's two items are named in Ryder's words", () => {
+  const items = groupsFor("sales").flatMap((g) => g.items).map(([, label]) => label);
+  assert.deepEqual(items, ["Work", "Leads", "My leads"]);
+});
+
+test("every rep page id has a sidebar icon", () => {
+  for (const id of pageIdsFor("sales")) {
+    assert.ok(new RegExp(`^\\s{2}${id}: <svg`, "m").test(SIDEBAR), `no icon for ${id}`);
+  }
+});
+
+test("#/dashboard/sales still lands a rep somewhere, and the old renames survive", () => {
+  const renamed = literal(DASH, "RENAMED");
+  assert.equal(renamed.leads, "sales", "old links that say leads must still reach Sales");
+  assert.equal(renamed.customers, "clients");
+  const split = literal(DASH, "SPLIT_FOR_ROLE");
+  assert.equal(split.sales, "leads", "a rep opening the owner's Sales page must land on the floor");
+  assert.ok(pageIdsFor("sales").includes(split.sales), "the split points at a page a rep actually has");
+  // And the split is only read when the role cannot open what was named, so an
+  // owner's address is untouched.
+  assert.match(DASH, /allowedIds\.includes\(named\) \? named : \(SPLIT_FOR_ROLE\[named\] \|\| named\)/);
+});
+
+test("both rep pages route to the one SalesPage, with a mode", () => {
+  assert.match(DASH, /case "leads": return <SalesPage member=\{member\} mode="floor" \/>/);
+  assert.match(DASH, /case "mine": return <SalesPage member=\{member\} mode="mine" \/>/);
+  assert.match(DASH, /case "sales": return <SalesPage member=\{member\} \/>/);
+  // One import of SalesPage. A second component would be the drifted copy.
+  assert.equal((DASH.match(/from "\.\/admin\/SalesPage\.jsx"/g) || []).length, 1);
+});
+
+test("the floor is locked to unclaimed and My leads to the rep's own", () => {
+  assert.equal(MODES.floor.owner, "floor");
+  assert.equal(MODES.mine.owner, "mine");
+  // The names on the pages, so the lock is said out loud somewhere.
+  assert.ok(MODES.floor.saying && MODES.mine.saying);
+});
+
+test("no tile on a locked page can widen it, and none is left filtering nothing", () => {
+  // "floor", "mine" and "owed" all move the owner filter or the view, so they
+  // cannot appear on a locked page at all.
+  for (const [mode, cfg] of Object.entries(MODES)) {
+    for (const banned of ["floor", "mine", "owed"]) {
+      assert.ok(!cfg.tiles.includes(banned), `${mode} must not carry the ${banned} tile`);
+    }
+  }
+  // The floor's six tiles were all either inert or lock-breaking, so it has none.
+  assert.deepEqual(MODES.floor.tiles, []);
+  assert.deepEqual(MODES.mine.tiles, ["atRisk", "meetings", "won"]);
+});
+
+test("the floor has a real Claim button, and says what claiming costs you", () => {
+  /* REWRITTEN Aug 26 2026. The old version asserted the hint pointed at the
+   * Sales Owner dropdown, "because the sheet has no Claim button". It has one
+   * now — an unclaimed row on the floor renders it — so the assertion was
+   * pinning wording that had become false. The hint's real job is the second
+   * half: saying what claiming puts on the clock BEFORE you press it. */
+  assert.match(MODES.floor.hint, /Claim/, "a floor a rep cannot act on is just a list");
+  assert.ok(
+    MODES.floor.hint.includes(String(ROE.FIRST_CONTACT_BUSINESS_DAYS)),
+    "the hint must quote the real first-contact window, not a number typed twice",
+  );
+  assert.ok(!MODES.mine.hint, "My leads is not a page you claim from");
+  assert.match(SALESPAGE, /hint=\{lock \? lock\.hint : null\}/, "and the owner's page gets no hint");
+
+  /* The button exists, only on the floor, and only ever with your own id. A
+   * Claim that could file a lead under somebody else is not a claim. */
+  const SHEET = readFileSync(new URL("../../src/components/admin/salesSheet.jsx", import.meta.url), "utf8");
+  assert.match(SHEET, /claimAs && !l\.owner_id/, "the button is for UNCLAIMED rows only");
+  assert.match(SHEET, /onAssign\(row, claimAs\)/, "and it goes through the same assign path as the dropdown");
+  assert.match(
+    SALESPAGE,
+    /claimAs=\{lock\?\.owner === "floor" \? member\.user_id : null\}/,
+    "the floor page is the only one that sends a claimer, and it sends YOU",
+  );
+});
+
+test("the lock is applied to the set, not to a dropdown", () => {
+  /* REWRITTEN Aug 26 2026. The filter chain is a function now, because the list
+   * tabs have to count from the same filters the sheet is showing (see the
+   * tab-count test below). The rule this test guards is unchanged and asserted
+   * harder: the chain filters whatever it is HANDED, and every call site hands
+   * it `scopeLeads` — the lock — so there is no path that filters the board. */
+  assert.match(SALESPAGE, /const filterLeads = useCallback\(\(source, \{ skipList = false \} = \{\}\) => \{\s*\n\s*let list = source;/);
+  assert.match(SALESPAGE, /const rows = useMemo\(\(\) => filterLeads\(scopeLeads\), /);
+  for (const m of SALESPAGE.match(/filterLeads\([a-zA-Z]+/g) || []) {
+    assert.ok(m === "filterLeads(source" || m === "filterLeads(scopeLeads",
+      `filterLeads is called on ${m.slice(13)} — every caller must hand it the locked set`);
+  }
+  assert.match(SALESPAGE, /if \(!lock\) \{\s*\n\s*if \(ownerFilter === "mine"\)/);
+  assert.match(SALESPAGE, /if \(lock\.owner === "floor"\) return all\.filter\(\(l\) => !l\.owner_id\);/);
+  // And the control is gone rather than left to be overridden.
+  assert.match(SALESPAGE, /\{!lock && \(\s*\n\s*<select className="adm-input adm-sl-sel" data-filter="owner"/);
+});
+
+test("switching a tile off returns to the page you are on, not the owner's defaults", () => {
+  // tileOff is what pressTile restores. Every one of its values has to come
+  // from the lock when there is one — a rep sent back to "all" would be
+  // looking at everybody's leads under a page called My leads.
+  const m = /const tileOff = useMemo\(\(\) => \(\{([\s\S]*?)\}\), \[/.exec(SALESPAGE);
+  assert.ok(m, "tileOff is not built with useMemo any more");
+  assert.match(m[1], /view: lock \? "lists"/);
+  assert.match(m[1], /owner: lock \? lock\.owner/);
+  assert.match(SALESPAGE, /if \(lock && !lock\.tiles\.includes\(id\)\) return;/);
+  assert.match(SALESPAGE, /setOwnerFilter\(lock \? lock\.owner : "all"\);/);
+});
+
+test("a locked page is the sheet only, and its numbers are counted from it", () => {
+  // No My Day, Pipeline or Firms: the view is derived, not trusted.
+  assert.match(SALESPAGE, /const shownView = lock \? "lists" : view;/);
+  for (const v of ["day", "lists", "pipeline", "firms"]) {
+    assert.ok(SALESPAGE.includes(`{shownView === "${v}" && (`), `the ${v} view still reads raw view state`);
+  }
+  // The tiles and the list tabs count from the page's own set.
+  assert.match(SALESPAGE, /const counts = useMemo\(\(\) => \{\s*\n\s*const all = scopeLeads;/);
+  // The tab number is tabScope, which IS the page's set — see the next test.
+  assert.match(SALESPAGE, /\{allTabLabel\} <span>\{tabScope\.length\}<\/span>/);
+});
+
+/* ================================================================== */
+/* THE FOUR DEFECTS A CHECKER FOUND ON THE REP'S TWO PAGES            */
+/* Aug 26 2026. Every one of these has a click sequence behind it.     */
+/* ================================================================== */
+
+const SHEETJSX = srcOf("src/components/admin/salesSheet.jsx");
+const DATAJS = srcOf("src/lib/data.js");
+
+test("1 — a rep cannot open a lead that is not on their page, however they arrive", () => {
+  /* #/dashboard/mine?lead=<a lead another rep owns> opened the drawer on it:
+   * full timeline, every field editable, and the drawer's own Claim and Release
+   * buttons, from a page called "My leads". Both readers checked board.leads —
+   * the whole board, which getSalesBoard loads for every role. */
+  assert.match(SALESPAGE, /const openLeadById = useCallback\(\(id\) => \{/,
+    "opening has to be one guarded call, not setOpenId handed out");
+  assert.match(SALESPAGE, /if \(lock && !scopeIds\.has\(id\)\) \{/,
+    "the guard has to be the LOCK, not the board");
+  assert.match(SALESPAGE, /const scopeIds = useMemo\(\(\) => new Set\(scopeLeads\.map\(\(l\) => l\.id\)\), \[scopeLeads\]\);/);
+
+  // Nothing may set openId except the guard and the close button.
+  const sets = SALESPAGE.match(/setOpenId\([^)]*\)/g) || [];
+  assert.deepEqual([...new Set(sets)].sort(), ["setOpenId(id)", "setOpenId(null)"],
+    `setOpenId is called with something else: ${sets.join(", ")}`);
+  // ...and no view is handed the raw setter any more.
+  assert.ok(!SALESPAGE.includes("onOpen={setOpenId}"), "a view still opens leads without the guard");
+  assert.equal((SALESPAGE.match(/onOpen=\{openLeadById\}/g) || []).length, 4,
+    "all four views open through the guard");
+
+  // The deep link goes through it too.
+  assert.match(SALESPAGE, /if \(board\.leads\.some\(\(l\) => l\.id === linkedLeadId\)\) openLeadById\(linkedLeadId\);/);
+
+  // Silence is the wrong answer: a rep following a stale link is told why, in
+  // the mode's own words — off the floor and not-yours are different reasons.
+  assert.match(SALESPAGE, /toast\.error\("That contact is not on this page", lock\.notOnPage\);/);
+  for (const [mode, cfg] of Object.entries(MODES)) {
+    assert.ok(cfg.notOnPage && cfg.notOnPage.length > 20, `${mode} has no refusal to say`);
+    assert.ok(!/Somebody else holds/.test(MODES.mine.notOnPage),
+      "My leads must not claim somebody holds it — it may simply be on the floor");
+  }
+
+  // And the owner's path is not narrowed: no lock, no check.
+  assert.ok(/if \(lock && !scopeIds\.has\(id\)\)/.test(SALESPAGE) && !/if \(!scopeIds\.has\(id\)\)/.test(SALESPAGE),
+    "the owner must still be able to open anything on the board");
+});
+
+test("2 — no number on a locked page counts rows the sheet is not showing", () => {
+  /* A rep holding 3 won leads and nothing open read "All lists 3" over
+   * "Nothing matches those filters" — the tab counted from scopeLeads, which is
+   * not stage-filtered, while the sheet defaults to open only. On the floor the
+   * tab is the only number on the page, and it was counting lost rows. */
+  assert.match(
+    SALESPAGE,
+    /const tabScope = useMemo\(\s*\n\s*\(\) => \(lock \? filterLeads\(scopeLeads, \{ skipList: true \}\) : scopeLeads\),/,
+    "a locked page's tabs must count from the filtered set, minus the tabs' own filter",
+  );
+  // The owner keeps the old convention — the same expression says both.
+  assert.match(SALESPAGE, /tabScope=\{tabScope\}/);
+  // Per-list tabs too, not just "All lists".
+  assert.match(SALESPAGE, /const n = tabScope\.filter\(\(x\) => x\.list_id === l\.id\)\.length;/);
+  // scopeLeads survives for exactly one job: which empty screen is true.
+  assert.ok(!/<span>\{scopeLeads\.length\}<\/span>/.test(SALESPAGE),
+    "a tab is still printing the unfiltered count");
+});
+
+test("2 — a Clear button that cannot change anything is not drawn", () => {
+  // Compared against the page's OWN opening values, so the default stage box —
+  // a filter nobody set — does not count as something to clear.
+  assert.match(SALESPAGE, /const canClear = \(\s*\n\s*q\.trim\(\) !== "" \|\| listFilter !== tileOff\.list \|\| stageFilter !== tileOff\.stage/);
+  assert.match(SALESPAGE, /\|\| ownerFilter !== tileOff\.owner \|\| tileFilter !== null/);
+  assert.match(SALESPAGE, /canClear=\{canClear\}/);
+  assert.match(SALESPAGE, /\{scopeLeads\.length && canClear\s*\n\s*\? <button className="btn" style=\{\{ marginTop: 12 \}\} onClick=\{onClear\}>Clear the filters<\/button>/);
+  // And the third empty screen exists: nothing to clear, and rows still hidden.
+  assert.match(SALESPAGE, /const stageHiding = !canClear && scopeLeads\.length > 0 && finished === scopeLeads\.length;/,
+    "the 'they are all finished' sentence has to be counted, not inferred");
+  assert.match(SALESPAGE, /const finished = useMemo\(\(\) => scopeLeads\.filter\(\(l\) => !isOpenStage\(l\.stage\)\)\.length, \[scopeLeads\]\);/);
+  assert.match(SALESPAGE, /"Nothing open here right now\."/);
+  assert.match(SALESPAGE, /Set the stage box to \"Every stage\" to see/,
+    "the empty screen has to name the control that would actually help");
+});
+
+test("3 — the column the Claim button lives in cannot be switched off on the floor", () => {
+  /* Columns → uncheck "Sales Owner" → every Claim button gone, permanently
+   * (one localStorage key, shared by every page that draws this sheet) under a
+   * hint that still read "press Claim to take it". */
+  assert.match(SHEETJSX, /const pinned = claimAs \? "owner" : null;/,
+    "the pin has to be tied to claimAs, which is what 'you claim from this page' means");
+  assert.match(SHEETJSX, /const shownKeys = pinned && !columns\.includes\(pinned\)/);
+  assert.match(SHEETJSX, /const visible = SHEET_COLUMNS\.filter\(\(c\) => shownKeys\.includes\(c\.key\)\);/,
+    "the table must render from the pinned list, not the saved one");
+  // The saved preference is untouched, so the owner's page still honours it.
+  assert.match(SHEETJSX, /useEffect\(\(\) => \{ savePrefs\(\{ columns, groupBy \}\); \}, \[columns, groupBy\]\);/);
+  // The menu says why rather than looking broken.
+  assert.match(SHEETJSX, /disabled=\{last \|\| isPinned\}/);
+  assert.match(SHEETJSX, /The Claim button lives in this column/);
+  // And the menu's own state reads the pinned list, or the tick would be wrong.
+  assert.match(SHEETJSX, /const on = shownKeys\.includes\(c\.key\);/);
+});
+
+test("4 — the Claim button cannot fire twice", () => {
+  assert.match(SHEETJSX, /const \[claiming, setClaiming\] = useState\(null\);/);
+  assert.match(SHEETJSX, /disabled=\{busy\}/);
+  assert.match(SHEETJSX, /if \(claiming === row\.id\) return;/,
+    "disabled is what a person sees; this is what a queued second event meets");
+  assert.match(SHEETJSX, /try \{ await onAssign\(row, claimAs\); \} finally \{ setClaiming\(null\); \}/);
+  // My Day's Claim button is the same button and gets the same guard.
+  assert.match(SALESPAGE, /if \(claimingId\) return;\s*\n\s*setClaimingId\(lead\.id\);/);
+  assert.match(SALESPAGE, /disabled=\{claimingId === l\.id\}/);
+});
+
+test("4 — the write refuses a lead somebody already holds, in both branches", () => {
+  /* claimLead was an unconditional update. Two reps inside the reload window
+   * both got a green "Claimed", two "Claimed by X" rows were written, and
+   * claimed_at was re-stamped — restarting the 3-business-day clock. */
+  assert.match(DATAJS, /expectUnclaimed = false \} = \{\}\) \{/,
+    "opt-in, or the owner's reassign-to-another-rep dropdown would start refusing");
+  assert.match(DATAJS, /if \(expectUnclaimed\) query = query\.is\("owner_id", null\);/,
+    "the database has to decide, not a read a moment earlier");
+  assert.match(DATAJS, /const \{ data, error \} = await query\.select\("id"\);/,
+    "the rows the predicate let through have to come back in the same statement");
+  assert.match(DATAJS, /done = expectUnclaimed \? \(data \|\| \[\]\)\.map\(\(r\) => r\.id\) : ids;/);
+
+  // THE PREVIEW BRANCH IS NOT LOOSER THAN THE LIVE ONE. Bitten twice before.
+  assert.match(DATAJS, /if \(expectUnclaimed && previewStore\.leads\[i\]\.owner_id\) continue;/);
+  assert.equal((DATAJS.match(/if \(expectUnclaimed && !done\.includes\(leadId\)\) \{/g) || []).length, 2,
+    "both branches must refuse the loser at the same point");
+  // One refusal message, shared, so the two cannot drift apart.
+  assert.match(DATAJS, /const TAKEN = "Somebody else claimed this lead first, so nothing was written\./);
+  // A timeline line only for the leads actually written.
+  assert.match(DATAJS, /for \(const id of done\) \{/);
+  assert.ok(!/for \(const id of ids\) \{\s*\n\s*await addLeadActivity/.test(DATAJS),
+    "a sibling that was already somebody's must not get a 'Claimed by X' it never received");
+
+  // The loser is told what happened rather than congratulated.
+  assert.equal((SALESPAGE.match(/toast\.error\("Somebody got there first", res\.error\)/g) || []).length, 2,
+    "both claim paths on this page must report the loss");
+  assert.match(SALESPAGE, /expectUnclaimed: !lead\.owner_id/);
+  // And the owner's deliberate reassignment is not asserted against.
+  assert.ok(!/expectUnclaimed: true/.test(SALESPAGE),
+    "the flag must follow what the row said, not be hardcoded on");
+});
+
+test("the doc block over the rep's readers is true of the code under it", () => {
+  /* It said "Both readers below refuse" when handed no user id. There is one
+   * reader below, and it did not refuse: listReminders(undefined) returns
+   * everybody's rows and a `userId &&` three files away was the only thing
+   * stopping them being counted. The code was made true. */
+  const sect = DATAJS.slice(DATAJS.indexOf("THE REP'S WORK PAGE"));
+  assert.ok(!/Both readers below refuse/.test(sect), "the comment still claims two refusing readers");
+  assert.match(sect, /askRepReport now\s*\n \* returns an error before it reads anything\./);
+  const fn = sect.slice(sect.indexOf("export async function askRepReport"));
+  const gate = fn.indexOf("if (!userId) {");
+  assert.ok(gate > 0, "askRepReport does not refuse without a user id");
+  assert.ok(gate < fn.indexOf("listReminders("),
+    "the refusal has to come BEFORE anything is read, not after");
+});
+
+/* ================================================================== */
 
 console.log("\nSALES — rules and import\n");
 console.log(results.join("\n"));

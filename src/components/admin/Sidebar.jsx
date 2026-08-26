@@ -2,6 +2,7 @@ import { useState } from "react";
 import LogoMark from "../LogoMark.jsx";
 import { signOut } from "../../lib/auth.js";
 import { isConfigured } from "../../lib/supabase.js";
+import { leavePreviewAccount } from "../../lib/previewAccounts.js";
 
 const Icon = {
   work: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="1" fill="currentColor" /></svg>,
@@ -16,6 +17,12 @@ const Icon = {
   /* A target with a tick — claim it, work it, close it. Deliberately not
    * the old "leads" radar: the page is a sales floor now, not a list. */
   sales: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /><circle cx="9" cy="7" r="4" /></svg>,
+  /* The rep's two halves of the same page. Rows and a claim, not a radar:
+   * Leads is the floor drawn as rows of people, so the icon is rows. My leads
+   * is the same rows with a name on them, so it is a person with a tick.
+   * Ryder, Aug 26 2026. */
+  leads: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="9" y1="6" x2="21" y2="6" /><line x1="9" y1="12" x2="21" y2="12" /><line x1="9" y1="18" x2="21" y2="18" /><circle cx="4" cy="6" r="1.4" /><circle cx="4" cy="12" r="1.4" /><circle cx="4" cy="18" r="1.4" /></svg>,
+  mine: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="7.5" cy="7" r="4" /><polyline points="16 12 18.5 14.5 23 10" /></svg>,
   operations: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a4 4 0 0 1-4-4V5a2 2 0 0 1 2-2h11" /></svg>,
   inbox: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /></svg>,
   tickets: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /><path d="M9 9h6M9 13h4" /></svg>,
@@ -46,8 +53,29 @@ const SECTIONS = [
   { group: "Yours", roles: ["owner", "admin", "sales"], items: [
     ["work", "Work"],
   ]},
-  { group: "Sales", roles: ["owner", "admin", "sales"], items: [
+  /* SALES IS TWO DIFFERENT MENUS — Ryder, Aug 26 2026.
+   *
+   * Owner and admin keep the one Sales page with its four tabs. Nothing here
+   * changed for them, and nothing should: this list is the only place their
+   * sidebar comes from, so an edit to their entry is an edit to their console.
+   *
+   * A rep gets the same page twice, once locked to the floor and once locked
+   * to their own leads — two ids, ONE component (SalesPage with a mode). The
+   * console spent Aug 25 deleting a second client list that had drifted from
+   * the first, so a copied SalesPage was never on the table.
+   *
+   * Two entries with the same group name rather than one entry with a
+   * role-aware item list: sectionsForRole filters BEFORE anything is drawn, so
+   * exactly one of these ever reaches the menu and the group name can never
+   * appear twice. */
+  { group: "Sales", roles: ["owner", "admin"], items: [
     ["sales", "Sales"],
+  ]},
+  { group: "Sales", roles: ["sales"], items: [
+    // Ryder's own words for these two, in his own order: the floor first,
+    // because that is where a rep's day starts.
+    ["leads", "Leads"],
+    ["mine", "My leads"],
   ]},
   { group: "Delivery", roles: ["owner", "admin"], items: [
     ["operations", "Operations"],
@@ -126,7 +154,7 @@ export default function Sidebar({ section, setSection, member, go }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: "white", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Command</div>
             <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", fontFamily: "var(--mono)", letterSpacing: "0.06em" }}>
-              INTERNAL · {member.role.toUpperCase()}
+              INTERNAL · {String(member.role || "no role").toUpperCase()}
             </div>
           </div>
         </div>
@@ -188,10 +216,20 @@ export default function Sidebar({ section, setSection, member, go }) {
           </div>
           <button
             onClick={async () => {
-              if (isConfigured()) await signOut();
-              go("/signin");
+              if (isConfigured()) {
+                await signOut();
+                go("/signin");
+                return;
+              }
+              /* PREVIEW MODE. There is no session to end and no /signin screen
+               * on this path — sign-in is switched off. Dropping the picked
+               * account sends you back to the account picker, which is what
+               * "sign out" means here. Aug 26 2026: before this, the button
+               * routed to a sign-in page that immediately bounced you back in
+               * as the same hard-coded owner, so it looked broken. */
+              leavePreviewAccount();
             }}
-            title="Sign out"
+            title={isConfigured() ? "Sign out" : "Sign out and pick a different account"}
             style={{ background: "none", border: 0, color: "rgba(255,255,255,0.4)", cursor: "pointer", padding: 4, display: "flex" }}
             onMouseEnter={(e) => (e.currentTarget.style.color = "white")}
             onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(255,255,255,0.4)")}

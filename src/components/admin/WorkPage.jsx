@@ -10,6 +10,7 @@ import {
 } from "../../lib/data.js";
 import { toast } from "../../lib/toast.js";
 import { useScreenContext } from "../../lib/screenContext.js";
+import RepBrief from "./repBrief.jsx";
 
 /* WORK — the page you open to get through the day.
  *
@@ -108,6 +109,21 @@ function Scoreboard({ counts, onJump, activeTab }) {
 
 export default function WorkPage({ member }) {
   const userId = member?.user_id || null;
+  /* THE REP'S VERSION OF THIS PAGE IS A DIFFERENT PAGE, and only for the sales
+   * role. An owner or an admin opening Work sees exactly what they saw before
+   * Aug 26 2026 — same tiles, same tabs, nothing added.
+   *
+   * Why it is not simply given to everybody: a rep lands here and this IS their
+   * console, so their pipeline and a box that answers questions about it belong
+   * on it. An owner lands here to get through their own day and already has the
+   * console-wide answer box on Overview, which reads everything. /api/rep-report
+   * pins its snapshot to the rep scope for every caller, owner included — so an
+   * owner pressing this button would get a NARROWER answer than the one the
+   * Overview box gives them, from a box that looks the same. Two boxes that
+   * answer the same question differently is how somebody stops trusting both.
+   *
+   * Ryder, Aug 26 2026: reps get their own page. */
+  const isRep = member?.role === "sales";
   const [tab, setTab] = useState("tasks");
   const [work, setWork] = useState(null);
   const [notes, setNotes] = useState(null);
@@ -289,6 +305,11 @@ export default function WorkPage({ member }) {
       </div>
 
       <Scoreboard counts={work.counts} onJump={goTab} activeTab={tab} />
+
+      {/* THE REP'S WORK PAGE, in Ryder's order: the box you ask a question in,
+        * then your own numbers. Both come from the `work` object already read
+        * above, so nothing here can disagree with the tiles it sits under. */}
+      {isRep && <RepBrief member={member} work={work} />}
 
       {/* Tabs — each section is its own page. Counts live on the tab so you can
        * see what is waiting behind it without opening it. */}

@@ -95,20 +95,60 @@ export function Popover({ anchor, onClose, width = 232, children }) {
     setPos({ left, top });
   }, [anchor]);
 
+  /* `onClose` is an inline arrow at every call site, so it is a new function on
+   * every parent render. Held in a ref and read through a stable callback, the
+   * effect below runs ONCE per open instead of tearing down and re-arming on
+   * every background reload — which is what made the leak below possible in
+   * the first place. */
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; }, [onClose]);
+  const close = useCallback(() => closeRef.current?.(), []);
+
   useEffect(() => {
-    const down = (e) => { if (ref.current && !ref.current.contains(e.target)) onClose(); };
-    const key = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    const down = (e) => { if (ref.current && !ref.current.contains(e.target)) close(); };
+    const key = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
     document.addEventListener("mousedown", down, true);
     document.addEventListener("keydown", key, true);
-    window.addEventListener("resize", onClose);
-    window.addEventListener("scroll", onClose, true);
+
+    /* THE SCROLL LISTENER IS ARMED ONE FRAME LATE, ON PURPOSE.
+     *
+     * Found Aug 25 2026 by WATCHING the built page, not by reading this file.
+     * Clicking a cell that is not fully in view makes the browser scroll the
+     * table sideways to show it. That scroll event is queued, so it arrived
+     * AFTER this popover had mounted — and closed it in the same instant it
+     * opened. On the Sales sheet, which is wide enough that half the columns
+     * are off screen, the Company and Status menus could not be opened at all.
+     * The Operations table has the same shape and the same bug, quieter only
+     * because its columns are narrower.
+     *
+     * A real scroll by a person still closes it, which is what this listener
+     * was written for. What is skipped is the one scroll that opening caused.
+     *
+     * BOTH TIMERS ARE CANCELLED. The first version cancelled the frame and not
+     * the timeout scheduled INSIDE it, so a cleanup landing between the two
+     * left an armed scroll listener attached forever, to a closure whose
+     * popover was already gone — and it then shut the NEXT popover on its
+     * opening scroll. One leak per occurrence. Caught by a reviewer. */
+    let armed = false;
+    let tick = 0;
+    const onMove = () => { if (armed) close(); };
+    const raf = requestAnimationFrame(() => {
+      tick = setTimeout(() => {
+        armed = true;
+        window.addEventListener("resize", onMove);
+        window.addEventListener("scroll", onMove, true);
+      }, 0);
+    });
+
     return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(tick);
       document.removeEventListener("mousedown", down, true);
       document.removeEventListener("keydown", key, true);
-      window.removeEventListener("resize", onClose);
-      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
     };
-  }, [onClose]);
+  }, [close]);
 
   return createPortal(
     <div ref={ref} className="adm-db-pop" style={{ left: pos.left, top: pos.top, width }} role="dialog">
@@ -422,7 +462,7 @@ export function PersonCell({ value, options, onChange, filter = null }) {
 }
 
 /** Free text. Enter saves (Cmd/Ctrl+Enter when multiline), Escape puts it back. */
-export function TextCell({ value, onChange, placeholder = "Empty", multiline, strong, strike, required }) {
+export function TextCell({ value, onChange, placeholder = "Empty", multiline, strong, strike, required, title }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || "");
 
@@ -449,7 +489,10 @@ export function TextCell({ value, onChange, placeholder = "Empty", multiline, st
   }
 
   return (
-    <button type="button" className="adm-db-btn" onClick={() => setEditing(true)}>
+    /* `title` is the hover explanation. Added for the Sales sheet's First/Last
+     * name cells, where a person has to be able to find out that the value they
+     * are looking at was SPLIT from a full name rather than typed. */
+    <button type="button" className="adm-db-btn" title={title} onClick={() => setEditing(true)}>
       {value
         ? (
           /* A multiline cell keeps its line breaks. Without this the brief you

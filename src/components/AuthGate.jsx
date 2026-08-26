@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
 import { useAuth, signOut } from "../lib/auth.js";
+import { usePreviewAccount } from "../lib/previewAccounts.js";
+import PreviewSignIn from "./PreviewSignIn.jsx";
 import LogoMark from "./LogoMark.jsx";
 
 /* AuthGate for the ADMIN console. Stricter than the platform's:
  *
- *   1. No Supabase env → PREVIEW mode: render children with sample data.
+ *   1. No Supabase env → PREVIEW mode: pick an account, then render children
+ *      with sample data. Before Aug 26 2026 this step signed everybody in as a
+ *      hard-coded owner with no screen at all; now you choose which role you
+ *      are, so the sales view can actually be tested. There was no password on
+ *      this path then and there is none now — see lib/previewAccounts.js.
  *   2. Loading session → brand splash.
  *   3. No user → /signin.
  *   4. Signed in but NOT on the admin_users roster → hard "not authorized"
@@ -71,13 +77,18 @@ function NotAuthorized({ email, go }) {
 
 export default function AuthGate({ children, go }) {
   const { user, loading, configured, membership } = useAuth();
+  /* Read on every render, not only in the preview branch: a hook has to be
+   * called the same number of times each time or React loses track of them. */
+  const previewAccount = usePreviewAccount();
 
   useEffect(() => {
     if (!configured || loading) return;
     if (!user) go?.("/signin");
   }, [configured, loading, user, go]);
 
-  if (!configured) return children; // preview mode
+  /* PREVIEW MODE. Nobody picked an account yet → the picker. It stands in for
+   * the sign-in screen, which does not exist on this path. */
+  if (!configured) return previewAccount ? children : <PreviewSignIn />;
   if (loading) return <LoadingSplash />;
   if (!user) return null;
   if (membership === undefined) return <LoadingSplash />; // roster check in flight

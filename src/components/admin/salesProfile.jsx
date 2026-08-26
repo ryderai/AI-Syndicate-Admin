@@ -4,7 +4,11 @@ import {
   LEAD_STAGES, LEAD_STAGE_LABELS, LEAD_STAGE_HELP,
   listLeadActivity, addLeadActivity, listProposals, upsertProposal, deleteProposal,
   claimLead, releaseLead, upsertLead, upsertCompany, claimTextSend, logActivity,
+  listTasks, listWeekly, listClientReports, listTickets,
+  markLeadWon, wonMessage,
 } from "../../lib/data.js";
+import { listInvoices } from "../../lib/finance.js";
+import { buildPersonTimeline, timelineSummary } from "../../../lib/person-timeline.js";
 import {
   claimState, cadenceState, scoreGate, textGate, companyClaimWarning,
   CADENCE, SEVEN_MOVES, ROE,
@@ -47,6 +51,15 @@ export default function SalesProfile({
   const [tab, setTab] = useState("work");
   const [activity, setActivity] = useState(null);
   const [proposals, setProposals] = useState([]);
+  /* Everything that happened AFTER the sale. Only fetched once this person is
+   * attached to a client — before that there is nothing to fetch, and firing
+   * five reads on every drawer open for the 99% of contacts who are not
+   * clients would make opening a lead slow for no reason.
+   *
+   * `null` means NOT READ. It is not the same as `[]`, and the timeline says
+   * which it was underneath — an unread source and an empty one look identical
+   * on screen and mean opposite things. */
+  const [after, setAfter] = useState({ tasks: null, weekly: null, reports: null, invoices: null, tickets: null, incomplete: [] });
   const [busy, setBusy] = useState(false);
   const [scoring, setScoring] = useState(false);
   const [logOpen, setLogOpen] = useState(null);       // 'call' | 'email' | 'text' | 'linkedin' | 'note'
@@ -56,7 +69,44 @@ export default function SalesProfile({
     const [a, p] = await Promise.all([listLeadActivity(lead.id), listProposals(lead.id)]);
     setActivity(a.rows);
     setProposals(p.rows);
-  }, [lead.id]);
+
+    const clientId = lead.client_id || company?.client_id || null;
+    if (!clientId) { setAfter({ tasks: null, weekly: null, reports: null, invoices: null, tickets: null, incomplete: [] }); return; }
+    const [t, w, r, inv, k] = await Promise.all([
+      listTasks(clientId), listWeekly(clientId), listClientReports(clientId), listInvoices(), listTickets(),
+    ]);
+    /* Invoices and tickets are read WHOLE — neither reader takes a client id —
+     * and both have their own row limits. Past those limits an older client's
+     * rows simply are not in what came back, and filtering here cannot tell
+     * that apart from having none. So the cap is carried through to the
+     * timeline and printed, instead of a short read looking like a quiet one. */
+    /* EVERY reader's own limit, not just the two whole-table ones. A reviewer
+     * found that `listClientReports` stops at 25 — about six months of weekly
+     * reports — and `listTasks` at 500, and neither was reported. A cap that is
+     * not said is a timeline quietly missing its own history, in a file whose
+     * stated rule is "THE CAP SAYS SO". */
+    const INVOICE_LIMIT = 1000;
+    const TICKET_LIMIT = 500;
+    const REPORT_LIMIT = 25;
+    const TASK_LIMIT = 500;
+    const incomplete = [];
+    if (!inv.error && (inv.rows || []).length >= INVOICE_LIMIT) incomplete.push("invoices");
+    if (!k.error && (k.rows || []).length >= TICKET_LIMIT) incomplete.push("support tickets");
+    if (!r.error && (r.rows || []).length >= REPORT_LIMIT) incomplete.push("reports");
+    if (!t.error && (t.rows || []).length >= TASK_LIMIT) incomplete.push("the work list");
+
+    setAfter({
+      /* A read that FAILED comes back null, not empty. Turning an error into an
+       * empty array here would print "nothing was ever done for this client"
+       * with total confidence. */
+      tasks: t.error ? null : (t.rows || []),
+      weekly: w.error ? null : (w.rows || []),
+      reports: r.error ? null : (r.rows || []),
+      invoices: inv.error ? null : (inv.rows || []).filter((x) => x.client_id === clientId),
+      tickets: k.error ? null : (k.rows || []).filter((x) => x.client_id === clientId),
+      incomplete,
+    });
+  }, [lead.id, lead.client_id, company?.client_id]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -124,18 +174,28 @@ export default function SalesProfile({
     await reload();
   };
 
-  const flipToClient = async () => {
-    if (!await patch({ stage: "won", became_customer: true, closed_at: new Date().toISOString() }, "Won — flipped to a paying client.")) return;
+  /* THE ONE WON PATH FOR THIS WHOLE DRAWER.
+   *
+   * Three buttons in here used to close a deal — this one, the Stage dropdown,
+   * and setting a proposal to Won — and all three wrote `stage:"won"` by hand
+   * and created no client. Because the sheet's converting path skipped
+   * anything already at Won, using any of them first made the working path a
+   * no-op for that lead FOREVER. All three call this now. See markLeadWon in
+   * src/lib/data.js for the rules it holds. */
+  const doWin = async (extraPatch = {}) => {
+    setBusy(true);
+    const res = await markLeadWon(lead, { actor: member.user_id, extraPatch });
+    setBusy(false);
+    if (!res.ok) { toast.error("Could not mark it won", res.error); return false; }
     await logActivity({ actor: member.user_id, kind: "lead_won", title: `Won: ${lead.name || lead.company}` });
-    /* NOT DONE HERE, and not pretended: creating the row on the Clients page
-     * and pointing admin_companies.client_id at it. The previous version called
-     * upsertCompany with the value it had just read — which wrote nothing at
-     * all while looking like a hand-off. The record, its history and its
-     * proposals are all still here under Won; the delivery side has to be
-     * started by hand on the Clients page for now. */
-    toast.success("Marked as won",
-      "Same record, same history. Start them on the Clients page when onboarding begins — that link is not automatic yet.");
+    const m = wonMessage(res);
+    toast[m.tone](m.title, m.body);
+    await load();
+    await reload();
+    return true;
   };
+
+  const flipToClient = () => doWin();
 
   return createPortal(
     <>
@@ -203,11 +263,11 @@ export default function SalesProfile({
               claim={claim} cadence={cadence} text={text} gate={gate}
               busy={busy} onClaim={doClaim} onRelease={doRelease}
               siblings={siblings} onLog={setLogOpen} onPatch={patch}
-              onFlip={flipToClient} teamName={teamName}
+              onFlip={flipToClient} onWin={doWin} teamName={teamName}
             />
           )}
 
-          {tab === "timeline" && <TimelineTab activity={activity} teamName={teamName} />}
+          {tab === "timeline" && <TimelineTab activity={activity} proposals={proposals} after={after} lead={lead} teamName={teamName} />}
 
           {tab === "details" && (
             <DetailsTab lead={lead} company={company} onPatch={patch} reload={reload} />
@@ -216,7 +276,7 @@ export default function SalesProfile({
           {tab === "proposals" && (
             <ProposalsTab
               proposals={proposals} lead={lead} member={member}
-              onAdd={() => setProposalOpen(true)} reload={load} onPatch={patch}
+              onAdd={() => setProposalOpen(true)} reload={load} onPatch={patch} onWin={doWin}
             />
           )}
 
@@ -249,7 +309,7 @@ export default function SalesProfile({
 
 function WorkTab({
   lead, member, team, claim, cadence, text, gate, busy,
-  onClaim, onRelease, siblings, onLog, onPatch, onFlip, teamName,
+  onClaim, onRelease, siblings, onLog, onPatch, onFlip, onWin, teamName,
 }) {
   const unclaimedSiblings = siblings.filter((s) => !s.owner_id && s.id !== lead.id);
   const mine = lead.owner_id === member.user_id;
@@ -369,10 +429,16 @@ function WorkTab({
       <div className="adm-sl-two">
         <label className="adm-sl-fieldwrap">
           <div className="label">Stage</div>
-          <select className="adm-input" value={lead.stage} onChange={(e) => onPatch(
-            { stage: e.target.value, ...(["won", "lost", "skip_90", "bad_contact"].includes(e.target.value) ? { closed_at: new Date().toISOString() } : { closed_at: null }) },
-            `${LEAD_STAGE_LABELS[lead.stage]} → ${LEAD_STAGE_LABELS[e.target.value]}`
-          )}>
+          <select className="adm-input" value={lead.stage} onChange={(e) => {
+            /* Won goes through the one Won path, so choosing it from this
+               dropdown creates the client exactly like the green button does.
+               Before this it silently did not, and then blocked the button. */
+            if (e.target.value === "won") { if (!busy) onWin(); return; }
+            onPatch(
+              { stage: e.target.value, ...(["lost", "skip_90", "bad_contact"].includes(e.target.value) ? { closed_at: new Date().toISOString() } : { closed_at: null }) },
+              `${LEAD_STAGE_LABELS[lead.stage]} → ${LEAD_STAGE_LABELS[e.target.value]}`
+            );
+          }}>
             {LEAD_STAGES.map((s) => <option key={s} value={s}>{LEAD_STAGE_LABELS[s]}</option>)}
           </select>
           <div className="adm-sl-help">{LEAD_STAGE_HELP[lead.stage]}</div>
@@ -415,8 +481,13 @@ function WorkTab({
         <NextStep lead={lead} onPatch={onPatch} />
       </div>
 
+      {/* disabled while busy, like every other action in this panel. Without it
+          a double-click ran the whole Won path twice: the database is safe (the
+          row lock serialises it and the second call reports already_customer)
+          but the stage patch and its timeline line are written BEFORE that
+          lock, so the record picked up two "→ Won" entries. */}
       {mine && ["proposal", "meeting"].includes(lead.stage) && (
-        <button className="btn btn-accent" style={{ marginTop: 18 }} onClick={onFlip}>
+        <button className="btn btn-accent" style={{ marginTop: 18 }} disabled={busy} onClick={onFlip}>
           They signed — mark as won
         </button>
       )}
@@ -453,49 +524,92 @@ function NextStep({ lead, onPatch }) {
 /* TIMELINE                                                            */
 /* ================================================================== */
 
-const TYPE_LABEL = {
-  call: "Call", email: "Email", text: "Text", linkedin: "LinkedIn",
-  note: "Note", status_change: "Stage change", assigned: "Assigned",
-  claim: "Claimed", unclaim: "Unclaimed", reopen: "Back on the floor",
-  score: "Site score", proposal: "Proposal", import: "Imported",
-  cadence: "Cadence", open: "They opened an email",
-};
+/* The words for each kind of event moved into lib/person-timeline.js
+ * (EVENT_KINDS), so the timeline and anything else that reads it cannot end up
+ * with two different words for a phone call. */
 
-function TimelineTab({ activity, teamName }) {
+/* THE WHOLE LIFE OF ONE PERSON, IN ONE LIST.
+ *
+ * Was: the sales activity rows and nothing else, so the record stopped at the
+ * sale. Everything after it — the work we did, the weekly logs, the reports,
+ * the invoices, the support tickets — lived on the Clients page behind a link
+ * nothing wrote. Two histories of the same relationship, neither of them whole.
+ *
+ * Ryder, Aug 25 2026: *"context saved to all people in our system from the time
+ * there created as a lead all the way to a paying client and beyond."*
+ *
+ * Every line says which table it was read out of, and the footer says what was
+ * NOT read. See lib/person-timeline.js for the five rules this obeys.
+ */
+function TimelineTab({ activity, proposals, after, lead, teamName }) {
   if (activity === null) return <div className="adm-sl-loading">Reading the timeline…</div>;
-  if (!activity.length) {
+
+  const t = buildPersonTimeline(
+    { lead, activity, proposals, ...after },
+    { teamName },
+  );
+
+  /* THE SUMMARY IS PRINTED EVEN WHEN THE LIST IS EMPTY.
+   *
+   * The first version returned early here and never rendered it — so the
+   * sources that could not be read, and the entries whose dates were
+   * unreadable, were dropped at exactly the moment the screen was at its most
+   * confident. An empty list is the one place "nothing happened" and "we could
+   * not look" are hardest to tell apart. */
+  if (!t.events.length) {
     return (
       <div className="adm-sl-empty">
-        <strong>Nothing has happened yet.</strong>
+        <strong>Nothing on the record yet.</strong>
         <div>The first call or email you log starts the timeline. Nothing here is ever
           overwritten — that is the whole difference from the spreadsheet.</div>
+        <div className="adm-sl-tl-summary" style={{ marginTop: 12 }}>{timelineSummary(t)}</div>
       </div>
     );
   }
+
+  /* Where the star goes: the newest chase-era entry is the first one below the
+   * line, because the list runs newest first. Worked out once rather than by
+   * mutating a flag inside the map — a variable reassigned during render is
+   * not reliable across re-renders, and React's own lint rule says so. */
+  const divideAt = t.becameClientAt ? t.events.findIndex((e) => e.era === "chase") : -1;
+
   return (
-    <div className="adm-timeline">
-      {activity.map((a) => (
-        <div key={a.id} className="adm-timeline-item">
-          <div className="adm-sl-tl-top">
-            <span className="adm-sl-tl-type">{TYPE_LABEL[a.type] || a.type}</span>
-            {a.outcome && <span className="adm-sl-tl-out">{a.outcome.toUpperCase().replace(/_/g, " ")}</span>}
-            <span className="adm-sl-tl-when">{timeAgo(a.created_at).toUpperCase()}</span>
-          </div>
-          {a.body && <div className="adm-sl-tl-body">{a.body}</div>}
-          <div className="adm-sl-tl-who">{a.actor ? teamName(a.actor) || "someone" : "the system"}</div>
-        </div>
-      ))}
-    </div>
+    <>
+      <div className="adm-sl-tl-summary">{timelineSummary(t)}</div>
+      <div className="adm-timeline">
+        {t.events.map((e, i) => {
+          const mark = i === divideAt;
+          return (
+            <div key={e.id}>
+              {mark ? (
+                <div className="adm-sl-tl-divide">
+                  <span>★ became a paying client</span>
+                </div>
+              ) : null}
+              <div className={`adm-timeline-item adm-sl-tl-${e.era}`}>
+                <div className="adm-sl-tl-top">
+                  <span className="adm-sl-tl-icon" aria-hidden="true">{e.icon}</span>
+                  <span className="adm-sl-tl-type">{e.head}</span>
+                  {e.title && <span className="adm-sl-tl-out">{e.title}</span>}
+                  {e.amountCents !== null && <span className="adm-sl-tl-amt">{money(e.amountCents)}</span>}
+                  <span className="adm-sl-tl-when">{timeAgo(e.at).toUpperCase()}</span>
+                </div>
+                {e.detail && <div className="adm-sl-tl-body">{e.detail}</div>}
+                <div className="adm-sl-tl-who">
+                  {e.by === "theirs" ? "them"
+                    : e.by === "system" ? "the system"
+                      : e.who || "someone"}
+                  <span className="adm-sl-tl-src"> · from {e.sourceLabel}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {t.truncated && <div className="adm-sl-tl-cap">{t.truncated}</div>}
+    </>
   );
 }
-
-/* ================================================================== */
-/* DETAILS                                                             */
-/* ================================================================== */
-
-/* The person's fields live on the lead, the firm's on the company. That split
- * is the point: change the website here and it changes for everybody at the
- * firm, which is what stops the sheet's four-copies-three-stale problem. */
 
 function DetailsTab({ lead, company, onPatch, reload }) {
   const [c, setC] = useState(company || null);
@@ -618,7 +732,7 @@ const PROPOSAL_STATUS = [
   ["won", "Won"], ["lost", "Lost"], ["withdrawn", "Withdrawn"],
 ];
 
-function ProposalsTab({ proposals, lead, member, onAdd, reload, onPatch }) {
+function ProposalsTab({ proposals, lead, member, onAdd, reload, onPatch, onWin }) {
   return (
     <>
       <div className="adm-sl-rowbetween">
@@ -656,7 +770,9 @@ function ProposalsTab({ proposals, lead, member, onAdd, reload, onPatch }) {
               });
               if (!res.ok) { toast.error("Could not save", res.error); return; }
               await addLeadActivity({ leadId: lead.id, actor: member.user_id, type: "proposal", body: `Proposal "${p.title}" → ${status}.` });
-              if (status === "won") await onPatch({ stage: "won", became_customer: true, closed_at: now }, "Proposal won.");
+              /* Same one path. This used to write stage/became_customer by hand
+                 and make no client — and then block the button that would. */
+              if (status === "won") { await onWin(); }
               if (status === "lost") await onPatch({ stage: "lost", closed_at: now }, "Proposal lost.");
               await reload();
             }}>

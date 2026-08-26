@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal, Field, TextInput, TextArea, Select, EmptyState, SourceBadge } from "./shared.jsx";
 import { Chip } from "./opsCells.jsx";
 import { toast } from "../../lib/toast.js";
@@ -6,7 +6,10 @@ import { apiFetch } from "../../lib/adminApi.js";
 import { isConfigured } from "../../lib/supabase.js";
 import {
   upsertClientSite, deleteClientSite, readSavedStanding, computeStandingPreview,
+  listClientContacts, listLeadActivity, listTasks, listClientSites, listWeekly,
+  listClientReports, listClientConnections, listVaultItems,
 } from "../../lib/data.js";
+import { buildTimeline, prettyDay, joinWords } from "../../lib/clientTimeline.js";
 import { SITE_KINDS, SITE_KIND_LABELS, SITE_KIND_HELP, normalizeUrl, prettyUrl } from "../../../lib/client-standing.js";
 
 /* The two client-page sections added Aug 18 2026:
@@ -347,5 +350,332 @@ function SiteModal({ client, site, nextSort, onClose, reload }) {
         <TextArea value={f.notes} onChange={set("notes")} style={{ minHeight: 70 }} />
       </Field>
     </Modal>
+  );
+}
+
+/* ==================================================================== */
+/* THE WHOLE STORY OF THIS CLIENT — every record we hold, in order      */
+/* ==================================================================== */
+/* Added Aug 25 2026 as "How they started", which showed only the sales side.
+ * Turned into the client's whole timeline Aug 26 2026. Ryder: "a timeline of
+ * the client from creation to now, with everything we have done, with dates."
+ *
+ * A client page used to begin on the day the money started. Everything before
+ * it — who rang them, how many times, what nearly lost it — was on the Sales
+ * page behind a link nothing wrote (migration 0015 writes it now). Everything
+ * AFTER it was scattered across six tabs, so nobody could read the job as one
+ * thing. This reads all of it and prints one list, oldest at the top, because
+ * it is a story and a story reads forward.
+ *
+ * The merging is not in here. It is in src/lib/clientTimeline.js, which is
+ * plain functions with a test suite, because the rules it holds are the quiet
+ * kind that break without anything looking broken. This file only fetches and
+ * draws.
+ *
+ * WHAT IT WILL NOT DO
+ *
+ * It will not print zero when it could not read. A section we failed to read
+ * and a section with nothing in it look identical once both are counted as 0,
+ * and they mean opposite things. Failed reads are named, with the reason, above
+ * the list.
+ *
+ * It will not let a thin list mean "we did nothing". The line at the top says
+ * when our records BEGIN. Work done for a client we took on before this console
+ * existed is in no row this code can read, and an old client with four events
+ * must not read as an old client we ignored.
+ *
+ * It will not let two kinds of fact read alike. Every row is stamped with the
+ * record it came from — "sales call", "weekly log", "task" — because a phone
+ * call somebody logged and a week of work somebody wrote up are not the same
+ * sort of claim.
+ */
+export function SalesHistoryPanel({ client, teamName = () => null }) {
+  /* Pulled apart rather than passed whole. The effect below only needs these
+     four fields, and depending on the object itself would re-read every record
+     for the client each time the parent re-rendered. */
+  const { id: clientId, name: clientName, created_at: clientCreatedAt, start_date: clientStartDate } = client;
+  const [state, setState] = useState({ loading: true, tl: null, contacts: [], crashed: null });
+
+  useEffect(() => {
+    let alive = true;
+    setState({ loading: true, tl: null, contacts: [], crashed: null });
+
+    (async () => {
+      /* The contacts read comes FIRST and alone. Calls and emails are read one
+         lead at a time (listLeadActivity takes a single lead id), so there is
+         no way to ask for them until we know who is at this firm. */
+      const contacts = await listClientContacts(clientId);
+      const ids = (contacts.rows || []).map((r) => r.id);
+
+      const [acts, tasks, sites, weekly, reports, connections, vault] = await Promise.all([
+        Promise.all(ids.map((id) => listLeadActivity(id))),
+        listTasks(clientId),
+        listClientSites(clientId),
+        listWeekly(clientId),
+        listClientReports(clientId),
+        listClientConnections(clientId),
+        listVaultItems(clientId),
+      ]);
+
+      /* Keyed by lead id, so a person whose log failed to read stays told apart
+         from a person with an empty log. A flat array would lose that. */
+      const activityByContact = {};
+      ids.forEach((id, i) => { activityByContact[id] = acts[i]; });
+
+      if (!alive) return;
+      setState({
+        loading: false,
+        contacts: contacts.rows || [],
+        crashed: null,
+        tl: buildTimeline({
+          client: { id: clientId, name: clientName, created_at: clientCreatedAt, start_date: clientStartDate },
+          contacts, activityByContact, tasks, sites, weekly, reports, connections, vault,
+        }),
+      });
+    })().catch((e) => {
+      /* A thrown error is different from a reader answering `{ error }`: it
+         means the whole load stopped part-way, so we know nothing about any
+         section and must not draw a list at all. */
+      if (alive) setState({ loading: false, tl: null, contacts: [], crashed: e?.message || String(e) });
+    });
+
+    return () => { alive = false; };
+  }, [clientId, clientName, clientCreatedAt, clientStartDate]);
+
+  if (state.loading) return <div className="adm-sl-loading">Reading everything we have on this client…</div>;
+
+  if (state.crashed) {
+    return (
+      <div className="card adm-cp-saleshist">
+        <strong>The timeline could not be built.</strong>
+        <p>
+          {state.crashed} The load stopped part-way, so nothing is shown rather than half of it —
+          this is not the same as saying there is nothing to show.
+        </p>
+      </div>
+    );
+  }
+
+  const tl = state.tl;
+  const eventWord = tl.events.length === 1 ? "dated thing" : "dated things";
+  /* Aug 26 2026: EVERY SENTENCE BELOW TURNS ON THIS. Something we could not
+     read is unknown, and an unknown printed as a number is a lie whichever
+     number is chosen. So nothing here states a total, a cause, or a start date
+     without first checking whether all eight reads actually worked. */
+  const someUnread = tl.unknown.length > 0;
+
+  return (
+    <div className="card adm-cp-saleshist">
+      <div className="adm-cp-saleshist-head">
+        <strong>
+          {/* With a failed read the true total is not known, so it is not
+              printed. With SOME events and a failed read we know a floor and
+              nothing more, which is what "at least" says. Printing a bare count
+              in either case reported an unknown as a measurement. */}
+          {someUnread
+            ? (tl.events.length
+              ? `At least ${tl.events.length} ${eventWord} we wrote down about ${clientName || "this client"}`
+              : `We could not read part of the record for ${clientName || "this client"}, so how many dated things we hold is not known`)
+            : `${tl.events.length} ${eventWord} we wrote down about ${clientName || "this client"}`}
+        </strong>
+        {/* NOT "everything we did for them". This counts ROWS WE HOLD. Work
+            nobody wrote down is not in any of these tables and this panel has
+            no way to know it happened.
+
+            Both numbers below come from tl.kinds, which counts the eight kinds
+            of record once each. They used to be counted two different ways —
+            distinct source words for the first, one entry per failed read for
+            the second — so the page could say "read from 2 kinds of record, 5
+            of them could not be read". Same denominator now, so it cannot. */}
+        <span>
+          Read from {tl.kinds.read} of the {tl.kinds.total} kinds of record we hold on a client
+          {tl.kinds.read > 0 ? `: ${joinWords(tl.kinds.readLabels)}.` : "."}
+          {tl.kinds.failed > 0
+            ? ` ${tl.kinds.failed} of the ${tl.kinds.total} could not be read — ${tl.kinds.failed === 1 ? "that one is unknown, not empty, and it is" : "those are unknown, not empty, and they are"} named below.`
+            : ""}
+        </span>
+        <div style={{ marginTop: 8 }}><SourceBadge mode={tl.sample ? "sample" : "live"} /></div>
+      </div>
+
+      {/* Ryder asked for this line by name. Absence of a record is not evidence
+          that nothing happened, and on an old client it usually is not. */}
+      <div className="adm-tl-begin">
+        {tl.recordsBegin && !tl.recordsBeginIsFloor ? (
+          <>
+            Our records for this client begin on <strong>{prettyDay(tl.recordsBegin)}</strong>. Anything
+            before that was not written down here.
+          </>
+        ) : tl.recordsBegin ? (
+          /* A read came back full, so the oldest row we have is only the oldest
+             row we LOADED. This line used to name that date as the day our
+             records begin, which for a contact with 250 logged calls named a
+             day in April while fifty January calls sat unread. The date still
+             shows — a list with no stated floor is its own kind of lie — but it
+             is now described as where the read started. */
+          <>
+            The list below starts on <strong>{prettyDay(tl.recordsBegin)}</strong>. That is where the
+            read started, not where our records start: {joinWords(tl.capped.map((c) => c.source))} came
+            back holding every row it was allowed to load, so there may be older rows nobody fetched.
+            Until that read can say whether it saw everything, we cannot say when our records begin.
+          </>
+        ) : someUnread ? (
+          <>
+            We cannot say when our records for this client begin, because part of what we hold could
+            not be read. That is not the same as nothing having happened, and it is not the same as
+            nothing having been written down — the reads that failed are named below.
+          </>
+        ) : (
+          <>
+            We hold no dated record for this client yet. Every read worked and every one came back
+            empty, so nothing about them has been written down in this console.
+          </>
+        )}
+      </div>
+
+      {tl.unknown.length > 0 ? (
+        <div className="adm-tl-unknown">
+          <strong>Part of the record could not be read, so it is unknown — not empty.</strong>
+          <ul>
+            {/* Indexed key: two contacts at a firm can share a name, so the
+                source words alone are not unique. */}
+            {tl.unknown.map((u, i) => (
+              <li key={`${u.source}-${i}`}><b>{u.source}:</b> {u.why}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {/* Carried over word for word in meaning from the old panel: a read that
+          fell back to the narrow query, or hit its row cap, gives a list that
+          is real but short. Saying so HERE, above the list, is the point — the
+          first version of the old panel showed this only when it had rows, so
+          the one case where it mattered most threw the caveat away. */}
+      {tl.caveats.map((c, i) => (
+        <div className="adm-cp-saleshist-warn" key={`${c.source}-${i}`}><b>{c.source}:</b> {c.note}</div>
+      ))}
+
+      {tl.notes.map((n) => (
+        <div className="adm-tl-note" key={n}>{n}</div>
+      ))}
+
+      {tl.events.length ? (
+        <ol className="adm-tl-list">
+          {tl.events.map((e) => (
+            <li key={e.key} className="adm-tl-row">
+              <span className="adm-tl-when">{prettyDay(e.ymd)}</span>
+              {/* The source is never optional and never abbreviated. It is the
+                  only thing telling the reader whether they are looking at a
+                  logged phone call or a week somebody wrote up. */}
+              <span className="adm-tl-src">{e.source}</span>
+              <span className="adm-tl-what">
+                {e.title}
+                {e.detail ? <span className="adm-tl-detail">{e.detail}</span> : null}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="adm-tl-note">
+          {someUnread ? (
+            /* It used to tell the reader to go and add a task when the real
+               problem was that we could not read the tasks they already have. */
+            <>
+              Part of what we hold about this client could not be read, so there is no story to print.
+              This is not an empty history — until those reads work, what is there is unknown. The
+              reads that failed are named above.
+            </>
+          ) : (
+            <>
+              Nothing we hold about this client carries a date we can read, so there is no story to
+              print yet. Adding a task, a website or a weekly entry starts one.
+            </>
+          )}
+        </div>
+      )}
+
+      {tl.undated.length ? (
+        <div className="adm-tl-undated">
+          <strong>True, but we cannot say when</strong>
+          <p>
+            These are real facts from the same records. Nothing on the row says what day they
+            happened, and a guessed date in the list above would be worse than this list.
+          </p>
+          <ul>
+            {tl.undated.map((u) => (
+              <li key={u.key}>
+                <span className="adm-tl-src">{u.source}</span> {u.title}
+                {u.why ? <span className="adm-tl-detail">Why there is no date: {u.why}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {/* THE SALES SIDE, kept as its own short list under the story.
+          Two reasons it did not just dissolve into the timeline. One: the ★ and
+          the link into each person's full Sales timeline are the fastest way
+          into the detail, and a flat list of events has nowhere to put them.
+          Two: the "no sales record is linked" guidance below is still the most
+          useful sentence on this tab for a client whose firm was never joined,
+          and it only makes sense next to the people. */}
+      <div className="adm-tl-sub">
+        {tl.sales.state === "unknown" ? (
+          <>
+            <strong>The sales side could not be read.</strong>
+            <p>
+              Nothing above is counted from it. That is not the same as saying there is none — see
+              the reason in the unknown list at the top.
+            </p>
+          </>
+        ) : tl.sales.state === "none" ? (
+          <>
+            <strong>No sales record is linked to this client.</strong>
+            <p>
+              Either they never went through the pipeline, or the firm in Sales has not been joined
+              to this client record yet. Marking their deal <strong>Won</strong> on the Sales page
+              links the two, and every call and email logged during the chase then joins the story
+              above.
+            </p>
+          </>
+        ) : (
+          <>
+            <strong>
+              {state.contacts.length} {state.contacts.length === 1 ? "person" : "people"} on record at this firm
+            </strong>
+            {/* NOT "came through the sales pipeline". This is everyone we hold
+                at the firm linked to this client, which includes contacts added
+                by hand and contacts nobody ever worked. Saying they all came
+                through the pipeline counted three dead rows as three sales
+                conversations. */}
+            <p>
+              Everyone we hold at the firm, worked or not. A star marks a contact whose own deal
+              closed — migration 0015 lets more than one person at a firm close their own, so there
+              can be several.
+            </p>
+            <ul className="adm-cp-saleshist-list">
+              {state.contacts.map((r) => (
+                <li key={r.id}>
+                  <a href={`#/dashboard/sales?lead=${r.id}`} title="Open their whole timeline in Sales">
+                    <span className="adm-cp-sh-name">
+                      {r.name || "unnamed contact"}
+                      {r.became_customer ? <span className="adm-cp-sh-star" title="This contact closed a deal">★</span> : null}
+                    </span>
+                    <span className="adm-cp-sh-title">{r.title || "no job title on file"}</span>
+                    <span className="adm-cp-sh-meta">
+                      {r.owner_id ? `worked by ${teamName(r.owner_id) || "someone"}` : "nobody claimed them"}
+                      {/* "first contact", not "first spoken to": that date is set
+                          by a logged email or LinkedIn message as well as a
+                          call. And "no first-contact date", not "never
+                          contacted" — nothing here can know that. */}
+                      {r.first_contact_at ? " · has a first-contact date" : " · no first-contact date"}
+                    </span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    </div>
   );
 }

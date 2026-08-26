@@ -6,7 +6,7 @@ import {
   TASK_CATEGORIES, TASK_PHASES, TASK_PRIORITIES, TASK_PRIORITY_LABELS,
 } from "../../lib/data.js";
 import { toast } from "../../lib/toast.js";
-import { StandingCard, SitesPanel } from "./clientPage.jsx";
+import { StandingCard, SitesPanel, SalesHistoryPanel } from "./clientPage.jsx";
 import { PlatformAccountsPanel, usePlatformAccounts } from "./platformAccounts.jsx";
 import { VaultPanel, useVaultItems } from "./vaultParts.jsx";
 import { ClientReportsPanel, useClientReports } from "./clientReports.jsx";
@@ -14,26 +14,34 @@ import { ConnectionsPanel, useClientConnections } from "./connectionsPanel.jsx";
 import {
   SourceBadge, Modal, Field, TextInput, TextArea, Select, EmptyState, } from "./shared.jsx";
 import TaskDatabase, {
-  TaskBoard, COLUMNS, DEFAULT_COLUMNS, GROUP_OPTIONS, plusDaysISO, isOverdue, isGroupBy,
+  TaskBoard, COLUMNS, DEFAULT_COLUMNS, GROUP_OPTIONS, isOverdue, isGroupBy,
 } from "./opsTable.jsx";
 import { Popover, PRIORITY_ICON } from "./opsCells.jsx";
 import { useScreenContext } from "../../lib/screenContext.js";
+import { useRoute } from "../../lib/router.js";
 
 /* Operations — the Notion replacement, in Notion's own shape.
  *
  * One database of tasks with views over the top of it, exactly like the
- * Operations table in Notion: All tasks grouped by client, This week, a
- * board by status, and the client's own page with its weekly log. Every
- * cell edits in place. Nothing is read-only.
+ * Operations table in Notion: All tasks grouped by client, and a board by
+ * status. Every cell edits in place. Nothing is read-only.
  *
  * The page owns the one copy of the task list. Cells report changes up,
- * the page saves and rolls back on failure. */
+ * the page saves and rolls back on failure.
+ *
+ * Two views were taken out on Aug 26 2026, both Ryder's call:
+ *
+ *   This week — the same tasks the All tasks view already showed, just
+ *   hidden down to seven days. A due-date filter is not a view.
+ *   Clients & weekly log — the console had TWO client lists, and two lists
+ *   of the same people drift apart. The Clients page is the only one now.
+ *   Clicking a client here goes there. The client page itself did not move:
+ *   ClientDetail still lives in this file and the Clients page opens it,
+ *   weekly log tab and all. */
 
 const VIEWS = [
   { id: "all", icon: "📋", label: "All tasks", groupBy: "client", showDone: true },
-  { id: "week", icon: "📅", label: "This week", groupBy: "due", showDone: false },
   { id: "board", icon: "🗂", label: "Board", groupBy: "status", showDone: true },
-  { id: "clients", icon: "🏢", label: "Clients & weekly log" },
 ];
 
 /* The columns a click can filter on that have no dropdown in the toolbar.
@@ -60,11 +68,16 @@ function writePrefs(p) {
 
 export default function Operations({ member }) {
   const prefs = useMemo(() => readPrefs(), []);
+  const [, go] = useRoute();
   const [clients, setClients] = useState({ rows: [], sample: true });
   const [tasks, setTasks] = useState([]);
   const [team, setTeam] = useState([]);
   /* Settings are remembered PER VIEW. One shared pair meant switching to Board
    * and back reset the grouping you had chosen on All tasks. */
+  /* Anyone who used this page before Aug 26 2026 may have "week" or "clients"
+   * saved as their view. Those views are gone, so the saved name is checked
+   * against the list that exists NOW and falls back to All tasks. Without the
+   * check a returning user would open the page and see nothing at all. */
   const startView = VIEWS.some((v) => v.id === prefs.viewId) ? prefs.viewId : "all";
   const startSaved = (prefs.byView && prefs.byView[startView]) || VIEWS.find((v) => v.id === startView) || {};
   const [viewId, setViewId] = useState(startView);
@@ -97,10 +110,7 @@ export default function Operations({ member }) {
    * hand. These four have no dropdown of their own. */
   const [facets, setFacets] = useState({});
   const [colAnchor, setColAnchor] = useState(null);
-  const [selectedClientId, setSelectedClientId] = useState(null);
   const [taskModal, setTaskModal] = useState(null);   // null | {} | task
-  const [addClientOpen, setAddClientOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
 
   const loadTasks = useCallback(async () => {
     const t = await listTasks();
@@ -111,7 +121,6 @@ export default function Operations({ member }) {
   const loadClients = useCallback(async () => {
     const c = await listClients();
     setClients(c);
-    setSelectedClientId((cur) => (cur && c.rows.some((x) => x.id === cur) ? cur : (c.rows[0]?.id || null)));
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -191,10 +200,7 @@ export default function Operations({ member }) {
 
   const visibleHere = useCallback((t) => {
     const q = query.trim().toLowerCase();
-    if (viewId === "week") {
-      if (t.status === "done") return false;
-      if (!t.due_date || t.due_date > plusDaysISO(7)) return false;
-    } else if (!showDone && t.status === "done") return false;
+    if (!showDone && t.status === "done") return false;
 
     if (clientFilter !== "all" && (t.client_id || "__none") !== clientFilter) return false;
 
@@ -213,25 +219,30 @@ export default function Operations({ member }) {
      * description was unfindable before. */
     if (q && !`${t.name} ${t.latest_report || ""} ${t.description || ""}`.toLowerCase().includes(q)) return false;
     return true;
-  }, [viewId, showDone, clientFilter, assigneeFilter, query, me, facets]);
+  }, [showDone, clientFilter, assigneeFilter, query, me, facets]);
 
   const filtered = useMemo(() => tasks.filter(visibleHere), [tasks, visibleHere]);
 
   const openCount = filtered.filter((t) => t.status !== "done").length;
   const lateCount = filtered.filter(isOverdue).length;
 
-  const openClient = (clientId) => { setSelectedClientId(clientId); setViewId("clients"); };
+  /* Clicking a client leaves Operations. The Clients page is the only client
+   * list now (Ryder, Aug 26 2026), and it reads which client is open out of
+   * the address, so the way to open one is to change the address. `go` is the
+   * right call here and not stampRoute: the user chose to go there, so Back
+   * should bring them back to the task table. */
+  const openClient = (clientId) => { go(`/dashboard/clients?id=${clientId}`); };
 
   /* What the assistant may see of this page: the view, the task count, and the
    * titles on screen. Stated, not scraped — see src/lib/screenContext.js. */
   useScreenContext(() => ({
     page: "Operations",
     label: `${filtered.length} task${filtered.length === 1 ? "" : "s"} in the "${viewId}" view`,
-    record: selectedClientId
-      ? { type: "client", id: selectedClientId, label: clients.rows.find((c) => c.id === selectedClientId)?.name || "a client" }
-      : null,
+    /* No record: this page no longer opens a client, so there is never one
+     * "current client" here to tell the assistant about. */
+    record: null,
     visible: filtered.slice(0, 20).map((t) => `${t.title} (${t.status})`),
-  }), [filtered, viewId, selectedClientId, clients.rows]);
+  }), [filtered, viewId]);
 
   /* One entry point for every click-to-filter in the table. Client and owner
    * are routed into the dropdowns that already exist for them; the rest go
@@ -327,14 +338,10 @@ export default function Operations({ member }) {
         </div>
         <div className="adm-db-head-right">
           <SourceBadge mode={clients.sample ? "sample" : "live"} />
-          {viewId === "clients" ? (
-            <>
-              <button className="btn btn-sm" onClick={() => setImportOpen(true)}>Import clients</button>
-              <button className="btn btn-accent btn-sm" onClick={() => setAddClientOpen(true)}>+ Add client</button>
-            </>
-          ) : (
-            <button className="btn btn-accent btn-sm" onClick={() => setTaskModal({})}>+ New task</button>
-          )}
+          {/* Add client and Import clients used to sit here, but only on the
+              clients view. They moved to the Clients page with the list they
+              belong to. */}
+          <button className="btn btn-accent btn-sm" onClick={() => setTaskModal({})}>+ New task</button>
         </div>
       </div>
 
@@ -345,186 +352,112 @@ export default function Operations({ member }) {
         </div>
       ) : null}
 
-      {viewId === "clients" ? (
-        <ClientsView
-          clients={clients} tasks={tasks} team={team} member={member}
-          selectedId={selectedClientId} setSelectedId={setSelectedClientId}
-          reloadClients={loadClients} onPatch={patchTask} onCreate={createTask}
-          onOpen={(t) => setTaskModal(t)} onAddClient={() => setAddClientOpen(true)}
+      {/* toolbar */}
+      <div className="adm-db-toolbar">
+        <input
+          className="adm-input adm-db-search" placeholder="Search tasks…"
+          value={query} onChange={(e) => setQuery(e.target.value)}
         />
-      ) : (
-        <>
-          {/* toolbar */}
-          <div className="adm-db-toolbar">
-            <input
-              className="adm-input adm-db-search" placeholder="Search tasks…"
-              value={query} onChange={(e) => setQuery(e.target.value)}
-            />
-            {viewId !== "board" && (
-              <label className="adm-db-ctl">
-                Group by
-                <select className="adm-input adm-db-mini" value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
-                  {GROUP_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+        {viewId !== "board" && (
+          <label className="adm-db-ctl">
+            Group by
+            <select className="adm-input adm-db-mini" value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
+              {GROUP_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+        )}
+        <label className="adm-db-ctl">
+          Client
+          <select className="adm-input adm-db-mini" value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
+            <option value="all">Everyone</option>
+            {clients.rows.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            <option value="__none">No client</option>
+          </select>
+        </label>
+        <label className="adm-db-ctl">
+          Owner
+          <select className="adm-input adm-db-mini" value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
+            <option value="all">Anyone</option>
+            <option value="__me">Just mine</option>
+            {team.map((m) => <option key={m.user_id} value={m.user_id}>{m.full_name || m.email}</option>)}
+            <option value="__none">Unassigned</option>
+          </select>
+        </label>
+        <label className="adm-db-check-ctl">
+          <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />
+          Show done
+        </label>
+        {viewId !== "board" && (
+          <button className="btn btn-sm" onClick={(e) => setColAnchor(e.currentTarget.getBoundingClientRect())}>Columns</button>
+        )}
+        <div className="adm-db-tally">
+          <strong>{filtered.length}</strong> shown · {openCount} open
+          {lateCount ? <> · <span className="adm-db-late">{lateCount} late</span></> : null}
+        </div>
+      </div>
+
+      {activeFilters.length > 0 && (
+        <div className="adm-db-filters">
+          <span className="adm-db-filters-label">Filtered by</span>
+          {activeFilters.map((f) => (
+            <button
+              key={f.key} type="button" className="adm-db-filter-chip"
+              onClick={f.clear} title="Remove this filter"
+            >{f.label} <span aria-hidden="true">×</span></button>
+          ))}
+          {activeFilters.length > 1 ? (
+            <button type="button" className="adm-db-link" onClick={clearAllFilters}>Clear all</button>
+          ) : null}
+        </div>
+      )}
+
+      {colAnchor && (
+        <Popover anchor={colAnchor} width={210} onClose={() => setColAnchor(null)}>
+          <div className="adm-db-pop-pad">
+            <div className="label" style={{ marginBottom: 8 }}>Columns to show</div>
+            {COLUMNS.map((c) => (
+              <label key={c.key} className={`adm-db-colrow${c.locked ? " locked" : ""}`}>
+                <input
+                  type="checkbox" checked={c.locked || columns.includes(c.key)} disabled={c.locked}
+                  onChange={(e) => setColumns((cur) => (
+                    e.target.checked ? [...cur, c.key] : cur.filter((k) => k !== c.key)
+                  ))}
+                />
+                {c.label}
               </label>
-            )}
-            <label className="adm-db-ctl">
-              Client
-              <select className="adm-input adm-db-mini" value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
-                <option value="all">Everyone</option>
-                {clients.rows.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                <option value="__none">No client</option>
-              </select>
-            </label>
-            <label className="adm-db-ctl">
-              Owner
-              <select className="adm-input adm-db-mini" value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
-                <option value="all">Anyone</option>
-                <option value="__me">Just mine</option>
-                {team.map((m) => <option key={m.user_id} value={m.user_id}>{m.full_name || m.email}</option>)}
-                <option value="__none">Unassigned</option>
-              </select>
-            </label>
-            {viewId !== "week" && (
-              <label className="adm-db-check-ctl">
-                <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />
-                Show done
-              </label>
-            )}
-            {viewId !== "board" && (
-              <button className="btn btn-sm" onClick={(e) => setColAnchor(e.currentTarget.getBoundingClientRect())}>Columns</button>
-            )}
-            <div className="adm-db-tally">
-              <strong>{filtered.length}</strong> shown · {openCount} open
-              {lateCount ? <> · <span className="adm-db-late">{lateCount} late</span></> : null}
-            </div>
+            ))}
           </div>
+        </Popover>
+      )}
 
-          {activeFilters.length > 0 && (
-            <div className="adm-db-filters">
-              <span className="adm-db-filters-label">Filtered by</span>
-              {activeFilters.map((f) => (
-                <button
-                  key={f.key} type="button" className="adm-db-filter-chip"
-                  onClick={f.clear} title="Remove this filter"
-                >{f.label} <span aria-hidden="true">×</span></button>
-              ))}
-              {activeFilters.length > 1 ? (
-                <button type="button" className="adm-db-link" onClick={clearAllFilters}>Clear all</button>
-              ) : null}
-            </div>
-          )}
-
-          {colAnchor && (
-            <Popover anchor={colAnchor} width={210} onClose={() => setColAnchor(null)}>
-              <div className="adm-db-pop-pad">
-                <div className="label" style={{ marginBottom: 8 }}>Columns to show</div>
-                {COLUMNS.map((c) => (
-                  <label key={c.key} className={`adm-db-colrow${c.locked ? " locked" : ""}`}>
-                    <input
-                      type="checkbox" checked={c.locked || columns.includes(c.key)} disabled={c.locked}
-                      onChange={(e) => setColumns((cur) => (
-                        e.target.checked ? [...cur, c.key] : cur.filter((k) => k !== c.key)
-                      ))}
-                    />
-                    {c.label}
-                  </label>
-                ))}
-              </div>
-            </Popover>
-          )}
-
-          {tasks.length === 0 ? (
-            <EmptyState
-              icon="✓"
-              title="No tasks yet"
-              body="Add the first one. A task needs nothing but a name — client, owner, due date and the rest can be filled in from the table afterwards."
-              action={<button className="btn btn-accent" onClick={() => setTaskModal({})}>+ New task</button>}
-            />
-          ) : filtered.length === 0 ? (
-            <EmptyState
-              icon="🔍" title="Nothing matches"
-              body="The filters above are hiding every task."
-              action={activeFilters.length ? <button className="btn" onClick={clearAllFilters}>Clear the filters</button> : null}
-            />
-          ) : viewId === "board" ? (
-            <TaskBoard tasks={filtered} clients={clients.rows} team={team} onPatch={patchTask} onOpen={(t) => setTaskModal(t)} />
-          ) : (
-            <TaskDatabase {...dbProps} />
-          )}
-        </>
+      {tasks.length === 0 ? (
+        <EmptyState
+          icon="✓"
+          title="No tasks yet"
+          body="Add the first one. A task needs nothing but a name — client, owner, due date and the rest can be filled in from the table afterwards."
+          action={<button className="btn btn-accent" onClick={() => setTaskModal({})}>+ New task</button>}
+        />
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon="🔍" title="Nothing matches"
+          body="The filters above are hiding every task."
+          action={activeFilters.length ? <button className="btn" onClick={clearAllFilters}>Clear the filters</button> : null}
+        />
+      ) : viewId === "board" ? (
+        <TaskBoard tasks={filtered} clients={clients.rows} team={team} onPatch={patchTask} onOpen={(t) => setTaskModal(t)} />
+      ) : (
+        <TaskDatabase {...dbProps} />
       )}
 
       {taskModal !== null && (
         <TaskModal
           task={taskModal.id ? taskModal : null}
           clients={clients.rows} team={team}
-          defaultClientId={clientFilter !== "all" && clientFilter !== "__none" ? clientFilter : (viewId === "clients" ? selectedClientId : null)}
+          defaultClientId={clientFilter !== "all" && clientFilter !== "__none" ? clientFilter : null}
           onClose={() => setTaskModal(null)} reload={loadTasks}
         />
       )}
-      {addClientOpen && <ClientModal member={member} onClose={() => setAddClientOpen(false)} reload={loadClients} />}
-      {importOpen && <ImportClientsModal member={member} onClose={() => setImportOpen(false)} reload={loadClients} />}
     </>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* CLIENTS VIEW — the client list, their tasks, and the weekly log      */
-/* ------------------------------------------------------------------ */
-
-function ClientsView({
-  clients, tasks, team, member, selectedId, setSelectedId,
-  reloadClients, onPatch, onCreate, onOpen, onAddClient,
-}) {
-  const selected = clients.rows.find((c) => c.id === selectedId) || null;
-
-  if (clients.rows.length === 0) {
-    return (
-      <EmptyState
-        icon="🏢"
-        title="No clients yet"
-        body="Add the first client by hand, or bulk-import the whole roster from Notion — the Import button takes a simple JSON list and creates everything at once."
-        action={<button className="btn btn-accent" onClick={onAddClient}>Add the first client</button>}
-      />
-    );
-  }
-
-  return (
-    <div className="adm-ops-grid">
-      <div className="card" style={{ padding: 10 }}>
-        {clients.rows.map((c) => {
-          const open = tasks.filter((t) => t.client_id === c.id && t.status !== "done").length;
-          const late = tasks.filter((t) => t.client_id === c.id && isOverdue(t)).length;
-          return (
-            <button
-              key={c.id} onClick={() => setSelectedId(c.id)}
-              className={`adm-ops-client${c.id === selectedId ? " on" : ""}`}
-            >
-              <div className="adm-ops-client-top">
-                <span className="adm-ops-client-name">{c.name}</span>
-                <span className={`adm-ops-client-status ${c.status}`}>{(c.status || "").toUpperCase()}</span>
-              </div>
-              <div className="adm-ops-client-sub">
-                {c.stage}{c.domain ? ` · ${c.domain}` : ""}
-              </div>
-              <div className="adm-ops-client-sub">
-                {open} open{late ? <span className="adm-db-late"> · {late} late</span> : null}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {selected ? (
-        <ClientDetail
-          key={selected.id} client={selected} member={member}
-          clients={clients.rows} team={team}
-          tasks={tasks.filter((t) => t.client_id === selected.id)}
-          reloadClients={reloadClients} onPatch={onPatch} onCreate={onCreate} onOpen={onOpen}
-        />
-      ) : null}
-    </div>
   );
 }
 
@@ -654,7 +587,14 @@ export function ClientDetail({
                  * other tabs count things you might have to act on: open
                  * tasks, sites, connected accounts, logins. Saved reports are
                  * a filing cabinet. */
-                ["reports", "Reports", 0], ["weekly", "Weekly log", weekly.length]].map(([id, label, count]) => (
+                ["reports", "Reports", 0],
+                /* Where this client came from. NO COUNT, for the same reason
+                   Reports has none: it is a filing cabinet, not a thing that
+                   needs you. Added Aug 25 2026 — before it, a client page began
+                   on the day the money started and the whole chase was
+                   invisible from here. */
+                ["sales", "How they started", 0],
+                ["weekly", "Weekly log", weekly.length]].map(([id, label, count]) => (
           <button key={id} onClick={() => setTab(id)} role="tab" aria-selected={tab === id} className={`aia-tab ${tab === id ? "active" : ""}`}>
             <span className="aia-tab-dot" aria-hidden="true" />
             {label}
@@ -676,6 +616,11 @@ export function ClientDetail({
         <VaultPanel client={client} vault={vault} />
       ) : tab === "reports" ? (
         <ClientReportsPanel client={client} reports={reports} autoOpen={reportAuto} onAutoOpened={() => setReportAuto(false)} />
+      ) : tab === "sales" ? (
+        <SalesHistoryPanel client={client} teamName={(id) => {
+          const m = team.find((x) => x.user_id === id);
+          return m ? (m.full_name || m.email) : null;
+        }} />
       ) : tab === "tasks" ? (
         tasks.length ? (
           <TaskDatabase
@@ -938,7 +883,10 @@ function WeekModal({ client, week, nextWeekNo, onClose, reload }) {
   );
 }
 
-function ImportClientsModal({ member, onClose, reload }) {
+/* Exported Aug 26 2026: the clients view that used to hold the Import button
+ * is gone, so the button lives on the Clients page now. The modal itself did
+ * not need to move — it only needs to be reachable from there. */
+export function ImportClientsModal({ member, onClose, reload }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
 

@@ -541,3 +541,87 @@ export function useHealth() {
   }, []);
   return health;
 }
+
+/* ------------------------------------------------------------------ */
+/* FILTER TABS — one row of tabs, a count on each, one active at a time */
+/* ------------------------------------------------------------------ */
+
+/* Added Aug 26 2026 at Ryder's request. He pointed at the list tabs on the
+ * Sales sheet — "Everybody 7 · Luxury Agents 3 · Car Dealership 1" — and asked
+ * for the same row on the Clients page and above the Vault groups, in place of
+ * a side rail on one and a long scroll on the other.
+ *
+ * It reuses the `adm-sh-tabs` CSS the Sales sheet already uses rather than
+ * adding a second set of rules that look almost the same. One row, one
+ * stylesheet block: when the look changes, it changes everywhere at once.
+ *
+ * Rules this component enforces so no caller can get them wrong:
+ *
+ *   - Exactly ONE tab is active. `value` decides which; there is no way to
+ *     express two.
+ *   - Clicking the ACTIVE tab does nothing. It does not toggle the row off,
+ *     because a tab row with nothing selected has no meaning — there would be
+ *     no answer to "which of these am I looking at". The way back to everything
+ *     is the first tab, which is why `allId` exists and is always drawn.
+ *   - A count of 0 is still PRINTED. A tab that hides its zero reads as "we
+ *     have not counted this", and an empty group is a fact worth seeing.
+ *   - A count of `null` prints NOTHING at all, which is how a caller says "not
+ *     counted" and means it. Never pass 0 for unknown.
+ *
+ * tabs: [{ id, label, count }]  — count may be a number or null
+ */
+export function FilterTabs({
+  tabs, value, onChange, ariaLabel = "Filters",
+  allId = "all", allLabel = "Everybody", allCount = null,
+  emptyNote = null,
+}) {
+  const all = [{ id: allId, label: allLabel, count: allCount }, ...(tabs || [])];
+
+  /* Left and right arrows walk the row. Added Aug 26 2026 with the row itself:
+   * `role="tablist"` is a promise to anyone using a keyboard or a screen reader
+   * that the arrows work, and a promise the browser does not keep on its own.
+   * Without this, the reader announces "tab, 2 of 5" and then the arrows do
+   * nothing, which is worse than not claiming to be tabs at all.
+   *
+   * Only the selected tab is in the tab order (`tabIndex`), which is the other
+   * half of the same pattern: one Tab press reaches the row, then the arrows
+   * move inside it, rather than Tab having to walk past every group. */
+  /* Focus has to travel WITH the selection. Without the `.focus()` below, the
+   * pressed key selected the next tab but left the finger on the old button, so
+   * a second press moved to the same place again and the row felt stuck. */
+  const move = (e, i, step) => {
+    const at = (i + step + all.length) % all.length;
+    const next = all[at];
+    if (!next) return;
+    const row = e.currentTarget.parentElement;
+    const btn = row ? row.querySelectorAll('[role="tab"]')[at] : null;
+    if (btn) btn.focus();
+    if (next.id !== value) onChange(next.id);
+  };
+
+  return (
+    <div className="adm-sh-tabs" role="tablist" aria-label={ariaLabel}>
+      {all.map((t, i) => (
+        <button
+          key={t.id} type="button" role="tab"
+          aria-selected={value === t.id}
+          tabIndex={value === t.id ? 0 : -1}
+          className={value === t.id ? "active" : ""}
+          onClick={() => { if (value !== t.id) onChange(t.id); }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowRight") { e.preventDefault(); move(e, i, 1); }
+            else if (e.key === "ArrowLeft") { e.preventDefault(); move(e, i, -1); }
+            else if (e.key === "Home") { e.preventDefault(); move(e, 0, 0); }
+            else if (e.key === "End") { e.preventDefault(); move(e, all.length - 1, 0); }
+          }}
+        >
+          {t.label}
+          {t.count === null || t.count === undefined ? null : <span>{t.count}</span>}
+        </button>
+      ))}
+      {tabs && tabs.length === 0 && emptyNote
+        ? <span className="adm-sh-tabnone">{emptyNote}</span>
+        : null}
+    </div>
+  );
+}

@@ -27,6 +27,16 @@ import { normaliseDomain } from "../../lib/sales-import.js";
  * everybody here; UTC would file it under tomorrow, and the database's "one
  * reading per window per day" rule counts the day it is given. */
 import { teamDate } from "../../lib/brain-context.js";
+/* The rep's Work page. The counting and the answer shaping are pure and shared
+ * with tests/rep-brief, so preview mode and the live endpoint cannot count the
+ * same rows two different ways. */
+import {
+  repSnapshotFromRows, buildRepPreviewAnswer, checkInstruction,
+} from "./repBrief.js";
+/* Live mode posts to /api/rep-report through the same wrapper every other
+ * endpoint call in this console goes through — it adds the bearer token and it
+ * is the thing that refuses the call in preview mode. */
+import { apiFetch } from "./adminApi.js";
 
 /* ONE STAGE LADDER, replacing the outreach sheet's two overlapping columns.
  *
@@ -169,12 +179,20 @@ const previewStore = {
     { id: "n1", author_id: "preview-user", title: "Michelle domain cutover", body: "Registrar is GoDaddy. Nameservers stay, just the A record.\nAsk CJ for the go-ahead before the swap — she has an open house Saturday.", pinned: true, link_type: null, link_id: null, created_at: daysAgo(2), updated_at: daysAgo(1) },
     { id: "n2", author_id: "preview-user", title: "Things that keep biting me", body: "Vercel Root Directory = the 404 cause, every time.\nCheck the MEASURED timestamp before quoting any score.", pinned: false, link_type: null, link_id: null, created_at: daysAgo(9), updated_at: daysAgo(9) },
     { id: "n3", author_id: "preview-user", title: null, body: "Harbor Injury wants their report on Thursdays, not Fridays.", pinned: false, link_type: "client", link_id: "c2", created_at: daysAgo(4), updated_at: daysAgo(4) },
+    /* The rep's own note. Added Aug 26 2026 with the account picker: notes are
+     * private to their author, so once the preview stopped leaking the owner's
+     * notes to everybody, the rep had an empty Notes tab and nothing to test. */
+    { id: "n4", author_id: "preview-rep", title: "My call script notes", body: "Lead with their AI Access score, not the pitch.\nDana at Harborline answers before 9am, never after 4.", pinned: true, link_type: null, link_id: null, created_at: daysAgo(3), updated_at: daysAgo(2) },
   ],
   reminders: [
     { id: "r-email-1", owner_id: "preview-user", body: "Chase the second office address for Harbor Injury Law", due_at: new Date(Date.now() - 26 * 3600e3).toISOString(), done_at: null, link_type: "email", link_id: "et4", created_by: "preview-user", created_at: daysAgo(5), updated_at: daysAgo(5) },
     { id: "r1", owner_id: "preview-user", body: "Chase Summit Roofing on the proposal", due_at: daysAgo(2), done_at: null, link_type: "client", link_id: "c3", created_by: "preview-user", created_at: daysAgo(8) },
     { id: "r2", owner_id: "preview-user", body: "Send Sarah Chen the audit before the 2pm call", due_at: daysAgo(0), done_at: null, link_type: "lead", link_id: "l1", created_by: "preview-user", created_at: daysAgo(3) },
     { id: "r3", owner_id: "preview-user", body: "Re-scan Lakeside after the schema rollout", due_at: daysAgo(-2), done_at: null, link_type: "client", link_id: "c1", created_by: "preview-user", created_at: daysAgo(5) },
+    /* The rep's own reminders, for the same reason as note n4 above. One due
+     * today and one already late, so the rep's Work tiles are not all zero. */
+    { id: "r4", owner_id: "preview-rep", body: "Email #1 to Dana Whitfield at Harborline", due_at: daysAgo(0), done_at: null, link_type: "lead", link_id: "l6", created_by: "preview-rep", created_at: daysAgo(2) },
+    { id: "r5", owner_id: "preview-rep", body: "Try Tom Rivera on his mobile", due_at: daysAgo(1), done_at: null, link_type: "lead", link_id: "l2", created_by: "preview-rep", created_at: daysAgo(4) },
     { id: "r4", owner_id: "preview-user", body: "Ask about the second office address", due_at: daysAgo(-6), done_at: null, link_type: "client", link_id: "c2", created_by: "preview-user", created_at: daysAgo(1) },
     { id: "r5", owner_id: "preview-user", body: "Book the quarterly review", due_at: daysAgo(6), done_at: daysAgo(5), link_type: null, link_id: null, created_by: "preview-user", created_at: daysAgo(12) },
   ],
@@ -223,6 +241,12 @@ const previewStore = {
   ],
   team: [
     { user_id: "preview-user", email: "you@aisyndicate.com", full_name: "Preview Admin", role: "owner", active: true, created_at: daysAgo(60) },
+    /* Added Aug 26 2026 with the account picker: you can now enter the preview
+     * console as an admin, and an account you can sign in as has to appear on
+     * the Team page too — a member the console lets you be but does not list is
+     * a screen disagreeing with itself. Nothing in the sample data is assigned
+     * to them on purpose, which is what a brand-new admin actually looks like. */
+    { user_id: "preview-admin", email: "admin@aisyndicate.com", full_name: "Sample Admin", role: "admin", active: true, created_at: daysAgo(9) },
     { user_id: "preview-rep", email: "rep@aisyndicate.com", full_name: "Sample Rep", role: "sales", active: true, created_at: daysAgo(20) },
   ],
 
@@ -771,9 +795,16 @@ export async function updateTeamMember(userId, patch) {
 
 export async function listNotes(authorId) {
   if (!live()) {
-    const rows = [...previewStore.notes].sort(
-      (a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updated_at.localeCompare(a.updated_at)
-    );
+    /* Filter by author here too. Aug 26 2026: the preview branch ignored
+     * `authorId` while the live branch below filters on it, so once you could
+     * enter the preview console as the rep, the rep was shown the owner's
+     * private notes. A preview that leaks something the real thing locks down
+     * is worse than no preview — it teaches you the console is fine. */
+    const rows = [...previewStore.notes]
+      .filter((n) => !authorId || n.author_id === authorId)
+      .sort(
+        (a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updated_at.localeCompare(a.updated_at)
+      );
     return { rows, sample: true };
   }
   let q = getSupabase().from("admin_notes").select("*")
@@ -819,7 +850,9 @@ export async function deleteNote(id) {
 /** Open reminders (done_at is null) unless includeDone. Soonest due first. */
 export async function listReminders(ownerId, { includeDone = false } = {}) {
   if (!live()) {
-    let rows = [...previewStore.reminders];
+    /* Same fix as listNotes above, same date, same reason: the preview branch
+     * ignored `ownerId` and handed the owner's follow-ups to every account. */
+    let rows = previewStore.reminders.filter((r) => !ownerId || r.owner_id === ownerId);
     if (!includeDone) rows = rows.filter((r) => !r.done_at);
     rows.sort((a, b) => a.due_at.localeCompare(b.due_at));
     return { rows, sample: true };
@@ -962,6 +995,20 @@ export async function getMyWork(userId) {
     clients: clients.rows,
     tasks: myTasks,
     contactable,
+    /* THE RAW ROWS, and null when the read failed.
+     *
+     * Added Aug 26 2026 for the rep's Work page, which needs every lead the
+     * person owns — not just the ones owed a contact — to show how their claims
+     * stand and what stage their own pipeline is in. It reads them from HERE
+     * rather than calling listLeads() again on purpose: two reads of the same
+     * table are two snapshots, and two snapshots are how the tiles at the top of
+     * a page end up disagreeing with the panel below them.
+     *
+     * null, not [], when the read failed. That is the only thing telling "you
+     * own no leads" apart from "your leads could not be read", and printing the
+     * second one as a zero says "nothing there", which is a different claim. */
+    leadRows: leads.error ? null : leads.rows,
+    reminderRows: reminders.error ? null : reminders.rows,
     tickets: myTickets,
     reminders: reminders.rows,
     counts: {
@@ -2207,8 +2254,25 @@ export async function deleteProposal(id) {
  * `claimed_at` and `cadence_started_at` are stamped together: the 3-day first
  * contact clock and the 5-touch cadence both start at the claim, so setting
  * one without the other gives a lead a cadence that started at the epoch.
+ *
+ * `expectUnclaimed` — THE DOUBLE-CLAIM GUARD. Aug 26 2026, found by a checker.
+ *
+ * This was an unconditional update, so two reps pressing Claim on the same
+ * floor row inside the reload window both got a green "Claimed" toast, both
+ * wrote a "Claimed by X" line on the timeline, `claimed_at` was re-stamped, and
+ * the second write silently won. The rep who saw "Claimed" first did not hold
+ * the lead and was not told.
+ *
+ * So a caller who believes the lead is free says so, and the DATABASE decides:
+ * the update carries `owner_id is null` and hands back the rows it actually
+ * touched. Whoever loses is told what happened instead of being congratulated.
+ *
+ * It is opt-in, not the default, because reassigning a lead that already has an
+ * owner is a real thing an owner does from the Sales Owner dropdown — a blanket
+ * predicate here would have broken that. Callers pass `expectUnclaimed: true`
+ * exactly when the row they were looking at showed as unclaimed.
  */
-export async function claimLead(leadId, userId, { alsoSiblings = [], name = "someone", fresh = true } = {}) {
+export async function claimLead(leadId, userId, { alsoSiblings = [], name = "someone", fresh = true, expectUnclaimed = false } = {}) {
   const now = new Date().toISOString();
   /* Only the CURRENT claim's clock is reset. `first_contact_at` and
    * `last_touch_at` are history and are never touched here.
@@ -2226,27 +2290,58 @@ export async function claimLead(leadId, userId, { alsoSiblings = [], name = "som
   };
   const ids = [leadId, ...alsoSiblings.filter((id) => id !== leadId)];
 
+  /* The message both branches give the loser. One string, in one place: a
+   * preview that says something softer than the live path is how a race stops
+   * being tested before it is shipped. */
+  const TAKEN = "Somebody else claimed this lead first, so nothing was written. Reload to see who holds it now.";
+
+  /* Which ids were actually written. Under `expectUnclaimed` that is decided by
+   * the query, not by what we read a moment ago — and only these get a timeline
+   * line, so a sibling that was already somebody's does not get a "Claimed by
+   * X" it did not receive. */
+  let done;
+
   if (!live()) {
+    /* THE PREVIEW BRANCH MATCHES THE LIVE ONE, predicate for predicate. A
+     * preview looser than its query is a trap this repo has been bitten by
+     * twice: the race passes by hand on sample data and fails in production. */
+    done = [];
     for (const id of ids) {
       const i = previewStore.leads.findIndex((l) => l.id === id);
-      if (i >= 0) previewStore.leads[i] = { ...previewStore.leads[i], ...patch };
+      if (i < 0) continue;
+      if (expectUnclaimed && previewStore.leads[i].owner_id) continue;
+      previewStore.leads[i] = { ...previewStore.leads[i], ...patch };
+      done.push(id);
+    }
+    if (expectUnclaimed && !done.includes(leadId)) {
+      return { ok: false, taken: true, sample: true, error: TAKEN };
     }
   } else {
-    const { error } = await getSupabase().from("admin_leads").update(patch).in("id", ids);
+    let query = getSupabase().from("admin_leads").update(patch).in("id", ids);
+    if (expectUnclaimed) query = query.is("owner_id", null);
+    /* `select` so the rows the predicate let through come back. Counting on a
+     * separate read afterwards would be the same two-step race one step later. */
+    const { data, error } = await query.select("id");
     if (error) return { ok: false, error: error.message };
+    done = expectUnclaimed ? (data || []).map((r) => r.id) : ids;
+    if (expectUnclaimed && !done.includes(leadId)) {
+      return { ok: false, taken: true, error: TAKEN };
+    }
   }
 
-  /* One timeline line per lead, so a rep opening any of them later can see it
-   * was claimed as part of a firm rather than by itself. */
-  for (const id of ids) {
+  /* One timeline line per lead written, so a rep opening any of them later can
+   * see it was claimed as part of a firm rather than by itself. */
+  for (const id of done) {
     await addLeadActivity({
       leadId: id, actor: userId, type: "claim",
-      body: ids.length > 1
-        ? `Claimed by ${name} — with ${ids.length - 1} other contact${ids.length === 2 ? "" : "s"} at this firm.`
+      body: done.length > 1
+        ? `Claimed by ${name} — with ${done.length - 1} other contact${done.length === 2 ? "" : "s"} at this firm.`
         : `Claimed by ${name}.`,
     });
   }
-  return { ok: true, count: ids.length };
+  /* What was CLAIMED, not what was asked for. The screen says "and 3 others at
+   * this firm" off this number. */
+  return { ok: true, count: done.length, asked: ids.length };
 }
 
 /** Hand a lead back to the floor, with a reason on its timeline. Never a
@@ -2326,10 +2421,16 @@ export function touchCountsByLead(activityRows) {
 
 /** Everything the Sales page needs, in one read, so the tiles and the lists
  * can never be counting different snapshots of the same pipeline. */
+/** How far back getSalesBoard reads activity. Exported, because two columns on
+ *  the sheet are counted from it and the words on them must name the same
+ *  number the read used. Hardcoding 90 in the page is how a column ends up
+ *  claiming a lifetime fact from a 90-day count. */
+export const ACTIVITY_WINDOW_DAYS = 90;
+
 export async function getSalesBoard() {
   const [leads, companies, lists, team, activity, proposals, sources] = await Promise.all([
     listLeads(), listCompanies(), listLeadLists(), listTeam(),
-    listAllLeadActivity(90), listProposals(), listLeadSources(),
+    listAllLeadActivity(ACTIVITY_WINDOW_DAYS), listProposals(), listLeadSources(),
   ]);
   return {
     leads: leads.rows,
@@ -2701,3 +2802,581 @@ export async function addManualSnapshot({ clientId, connectionId = null, provide
   if (!data) return { ok: false, error: "Nothing was saved. Your account may not be allowed to add numbers." };
   return { ok: true, row: data };
 }
+
+/* ============================================================================
+ * ONE RECORD, LEAD → PAYING CLIENT → BEYOND  (Aug 25 2026, append-only)
+ *
+ * Ryder: "have everything connected and context saved to all people in our
+ * system from the time there created as a lead all the way to a paying client
+ * and beyond."
+ *
+ * The tables were built for this on Aug 22 and then nothing ever wrote the
+ * links. Marking a deal Won put a green pill on a row and stopped. Migration
+ * 0015 adds the one function that closes it; this is the browser's side of it.
+ *
+ * THE RULE HERE: the browser never decides whether a client already exists.
+ * It asks the database to do the whole thing in one statement, because "read,
+ * then write if missing" is a race two open tabs both win — which is the same
+ * reason the one-text rule had to move into the database in 0009.
+ * ==========================================================================*/
+
+/**
+ * Turn a won lead into a paying client, and attach everybody at that firm.
+ *
+ * Safe to call twice: the second call returns the same client id and changes
+ * nothing. Returns `{ ok, clientId, alreadyLinked }`, or `{ ok:false, error }`
+ * with a reason a person can read.
+ */
+export async function convertLeadToClient(leadId, { actor = null, stage = "Onboarding" } = {}) {
+  if (!live()) {
+    const lead = previewStore.leads.find((l) => l.id === leadId);
+    if (!lead) return { ok: false, error: "No such contact." };
+    if (lead.client_id && lead.became_customer) {
+      return { ok: true, clientId: lead.client_id, created: false, alreadyLinked: true, siblings: 0, sample: true };
+    }
+
+    const company = previewStore.companies?.find((c) => c.id === lead.company_id) || null;
+    let clientId = lead.client_id || company?.client_id || null;
+    let created = false;
+    const name = (company?.name || lead.company || lead.name || "").trim();
+    /* The same name match the SQL does, so preview and live cannot behave
+     * differently. A contact added by hand has no firm row, so without this a
+     * second person at the same firm would make a SECOND client here while the
+     * database reused the first. Preview drifting from live is how a bug gets
+     * demonstrated as working. */
+    const nameKey = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const bare = (v) => String(v || "").toLowerCase().replace(/^https?:\/\/(www\.)?|\/$/g, "");
+    if (!clientId && name) {
+      const want = bare(company?.domain || lead.domain || "");
+      /* Same rule as the SQL: a blank website on either side does not block the
+       * match; two DIFFERENT websites do. */
+      const hit = previewStore.clients.find((c) => nameKey(c.name) === nameKey(name)
+        && (!c.domain || !want || bare(c.domain) === want));
+      if (hit) clientId = hit.id;
+    }
+    if (!clientId) {
+      if (!name) return { ok: false, error: "This contact has no firm name and no person name, so there is nothing to call the client." };
+      created = true;
+      clientId = pid("c");
+      previewStore.clients.unshift({
+        id: clientId, name,
+        domain: company?.domain || lead.domain || null,
+        vertical: company?.vertical || lead.vertical || null,
+        stage: stage || "Onboarding", status: "active",
+        start_date: new Date().toISOString().slice(0, 10),
+        contact_name: lead.name || null, contact_email: lead.email || null,
+        contact_phone: lead.phone || company?.phone || null,
+        company_id: company?.id || null, origin: "sales",
+        notes: "Came up through the sales pipeline.",
+        links: {}, created_at: new Date().toISOString(),
+      });
+    }
+    let siblings = 0;
+    if (company) {
+      company.client_id = clientId;
+      for (const l of previewStore.leads) {
+        if (l.company_id === company.id && l.id !== leadId && !l.client_id) { l.client_id = clientId; siblings += 1; }
+      }
+    }
+    Object.assign(lead, {
+      client_id: clientId, became_customer: true,
+      became_customer_at: new Date().toISOString(), became_customer_by: actor,
+      stage: "won", closed_at: lead.closed_at || new Date().toISOString(),
+    });
+    return { ok: true, clientId, created, alreadyLinked: false, siblings, sample: true };
+  }
+
+  const { data, error } = await getSupabase().rpc("admin_lead_to_client", {
+    p_lead: leadId, p_actor: actor, p_stage: stage,
+  });
+  if (error) {
+    /* The function raises in plain words for the two cases a person can act on.
+     * Passing the raw Postgres text through unchanged is worse than useless —
+     * "P0001" tells nobody what to do. */
+    const msg = String(error.message || "");
+    if (msg.includes("nothing to call the client")) {
+      return { ok: false, error: "This contact has no firm name and no person name, so there is nothing to call the client. Add the company on the Details tab first." };
+    }
+    if (msg.includes("not authorized")) {
+      return { ok: false, error: "Your account is not allowed to do that." };
+    }
+    if (msg.includes("admin_lead_to_client") || msg.includes("does not exist") || error.code === "42883") {
+      return { ok: false, error: "Migration 0015 has not been run on the database yet, so nothing can be linked. Nothing was changed." };
+    }
+    return { ok: false, error: msg };
+  }
+  if (!data || !data.client_id) return { ok: false, error: "Nothing came back. No client was created." };
+  /* The three states are kept apart all the way to the screen. Returning only
+   * an id made the page say "they are now a client" every single time,
+   * including the times when nothing at all had been created. */
+  return {
+    ok: true,
+    clientId: data.client_id,
+    created: data.created === true,
+    alreadyLinked: data.already_customer === true,
+    siblings: Number(data.siblings || 0),
+  };
+}
+
+/**
+ * Every person we hold for one client — whoever closed the deal AND everybody
+ * else at that firm. This is what makes a client page able to show the chase
+ * that happened before the money started.
+ *
+ * Read through the database function so the "which firm belongs to this
+ * client" join lives in exactly one place. Falls back to a plain read on the
+ * columns if 0015 has not been run, and SAYS SO rather than returning an empty
+ * list — an empty list reads identically to "this client never was a lead".
+ */
+export async function listClientContacts(clientId) {
+  if (!live()) {
+    const company = previewStore.companies?.find((c) => c.client_id === clientId) || null;
+    const rows = previewStore.leads.filter(
+      (l) => l.client_id === clientId || (company && l.company_id === company.id),
+    );
+    return { rows, sample: true };
+  }
+  const { data, error } = await getSupabase().rpc("admin_client_contacts", { p_client: clientId });
+  if (!error) return { rows: data || [], sample: false };
+
+  const fallback = await getSupabase().from("admin_leads").select("*").eq("client_id", clientId);
+  if (fallback.error) {
+    return {
+      rows: [], sample: false,
+      error: "The sales history could not be read, so nothing below counts it. Migration 0015 may not have been run.",
+    };
+  }
+  return {
+    rows: fallback.data || [], sample: false,
+    partial: "Read without the firm join, so contacts at this firm who were never linked to the client may be missing. Migration 0015 may not have been run.",
+  };
+}
+
+/**
+ * MARK A DEAL WON — the ONE path, wherever the button lives.
+ *
+ * There are four places a person can close a deal: the Sales sheet's status
+ * cell, the profile drawer's status dropdown, the drawer's big green "They
+ * signed" button, and setting a proposal to won. Before this, ONE of them
+ * created a client and the other three quietly did not — and because the
+ * converting one skipped anything already at stage `won`, using any of the
+ * other three first made the working path a no-op for that lead forever. A
+ * deal closed on the green button could never become a client through the
+ * screen at all. Found by a reviewer, not by a test.
+ *
+ * So all four call this. The rules it holds:
+ *
+ * 1. THE STAGE MOVE IS SAVED FIRST AND SEPARATELY. If the link then fails, the
+ *    close is still recorded and the message says exactly which half did not
+ *    happen — rather than a half-done thing nobody can see.
+ * 2. THE GUARD IS `became_customer`, NOT `client_id`. Every contact at a firm
+ *    gets `client_id` the moment ONE of them closes — that is the whole point —
+ *    so a client_id guard means a firm can record exactly one sale, ever, and
+ *    the rep who closes the second one watches the button do nothing. Being
+ *    attached to a client and having closed a deal are two different facts.
+ *    (Migration 0015 has the same rule, for the same reason, in SQL.)
+ * 3. IT NEVER SAYS MORE THAN IT DID. The result carries `created`,
+ *    `alreadyLinked` and `siblings` so the message on screen can be true.
+ */
+export async function markLeadWon(lead, { actor, stage = "Onboarding", extraPatch = {} } = {}) {
+  const wasWon = lead.stage === "won";
+  if (!wasWon) {
+    const res = await upsertLead({ id: lead.id, stage: "won", closed_at: lead.closed_at || new Date().toISOString(), ...extraPatch });
+    if (!res.ok) return { ok: false, error: res.error, stageMoved: false };
+    await addLeadActivity({
+      leadId: lead.id, actor, type: "status_change",
+      body: `${LEAD_STAGE_LABELS[lead.stage] || lead.stage} → Won`,
+    });
+  } else if (Object.keys(extraPatch).length) {
+    const res = await upsertLead({ id: lead.id, ...extraPatch });
+    if (!res.ok) return { ok: false, error: res.error, stageMoved: false };
+  }
+
+  /* BOTH, exactly as migration 0015 checks both. `became_customer` alone was
+   * wrong and a reviewer proved it: a lead can carry the flag with no client
+   * behind it — the assistant's set-stage tool used to write it directly, and
+   * `client_id` is `on delete set null`, so deleting a client leaves every
+   * contact at that firm flagged and unlinked. Guarding on the flag alone made
+   * every one of those permanently unconvertible, and told the person "already
+   * a client" about a client that does not exist. When they disagree, let the
+   * database decide — it is the thing that can actually look. */
+  if (lead.became_customer && lead.client_id) {
+    return { ok: true, stageMoved: !wasWon, conversion: { ok: true, clientId: lead.client_id, created: false, alreadyLinked: true, siblings: 0 } };
+  }
+  const conversion = await convertLeadToClient(lead.id, { actor, stage });
+  return { ok: true, stageMoved: !wasWon, conversion };
+}
+
+/** The one sentence to show after markLeadWon, true in every case it can end
+ *  in. Kept next to the function so the words and the states cannot drift. */
+export function wonMessage(result) {
+  const c = result?.conversion;
+  if (!c?.ok) {
+    return {
+      tone: "error",
+      title: result?.stageMoved ? "Marked Won, but not linked to a client" : "Not linked to a client",
+      body: c?.error || "The client link did not happen. Nothing else was changed.",
+    };
+  }
+  if (c.alreadyLinked) {
+    /* Only ever said when there is a real client id behind it. Saying "already
+     * a client" with `clientId: null` was describing a state that cannot be
+     * true, and it was reachable. */
+    if (!c.clientId) {
+      return {
+        tone: "error", title: "Marked Won, but no client record was found",
+        body: "This contact is flagged as a customer but is not linked to any client record. Nothing was created. Tell whoever looks after the console.",
+      };
+    }
+    return { tone: "info", title: "Already a client", body: "This deal was already recorded as closed, so nothing new was created." };
+  }
+  if (c.created) {
+    return {
+      tone: "success", title: "Won — and a client record was created",
+      body: c.siblings > 0
+        ? `The other ${c.siblings} contact${c.siblings === 1 ? "" : "s"} we hold at this firm now point at the same client, so every call and note stays on the record.`
+        : "Every call, email and note logged during the chase stays on the record.",
+    };
+  }
+  return {
+    tone: "success", title: "Won — linked to their existing client record",
+    body: c.siblings > 0
+      ? `No new client was created; this firm already had one. The other ${c.siblings} contact${c.siblings === 1 ? "" : "s"} here now point at it too.`
+      : "No new client was created — this firm already had one.",
+  };
+}
+
+/* ============================================================================
+ * IMPORT BATCHES, AND STARTING OVER  (Aug 25 2026, append-only)
+ *
+ * Ryder: "i cant have the real google sheet messed up at all, then when we
+ * actually start using the admin then i want to delete all that data and import
+ * the list fresh again so that everything is up to date."
+ *
+ * The first half was already true: the importer reads a DOWNLOADED copy and
+ * there is no code path from this console to Google Sheets at all. Nothing can
+ * write back to the spreadsheet because nothing knows how.
+ *
+ * The second half needed this. Every press of Import files a batch row, and a
+ * batch can be undone — or everything imported can be cleared at once, which is
+ * the thing to press on go-live day.
+ *
+ * THE RULE: the browser NEVER works out what to delete. It asks the database
+ * for a dry run, shows exactly that, and then asks the same function to do it.
+ * One statement decides both times, so the number on the screen and the number
+ * that goes cannot come apart — which is precisely how the importer once
+ * printed "412 rows dropped" and imported all 412.
+ * ==========================================================================*/
+
+const PREVIEW_BATCHES = [];
+
+export async function listImportBatches(limit = 40) {
+  if (!live()) return { rows: [...PREVIEW_BATCHES].slice(0, limit), sample: true };
+  const { data, error } = await getSupabase()
+    .from("admin_import_batches").select("*").order("created_at", { ascending: false }).limit(limit);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+/** Opened at the START of an import, so a run that dies half way still leaves a
+ *  row naming what it was — and those rows are still clearable. An import with
+ *  no batch behind it is one nobody can undo. */
+export async function startImportBatch({ label, sourceFile, tabs, counts, userId }) {
+  const row = {
+    label: String(label || "").trim() || "Outreach sheet",
+    source_file: sourceFile || null,
+    tabs: tabs || [],
+    counts: counts || {},
+    created_by: userId || null,
+  };
+  if (!live()) {
+    const made = { id: pid("ib"), ...row, created_at: new Date().toISOString(), cleared_at: null };
+    PREVIEW_BATCHES.unshift(made);
+    return { ok: true, id: made.id, sample: true };
+  }
+  const { data, error } = await getSupabase().from("admin_import_batches").insert(row).select("id").maybeSingle();
+  /* A missing table means migration 0016 has not been run. The import still
+   * goes ahead without a batch — refusing to import because the undo is not
+   * installed would be the safety feature breaking the thing it protects — and
+   * the screen says the run will not be undoable. */
+  if (error) return { ok: false, error: error.message, id: null };
+  return { ok: true, id: data?.id || null };
+}
+
+export async function finishImportBatch(batchId, counts) {
+  if (!batchId) return { ok: true };
+  if (!live()) {
+    const b = PREVIEW_BATCHES.find((x) => x.id === batchId);
+    if (b) b.counts = counts;
+    return { ok: true, sample: true };
+  }
+  const { error } = await getSupabase().from("admin_import_batches").update({ counts }).eq("id", batchId);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/**
+ * Ask what a clear-out WOULD do (`dryRun: true`), or do it.
+ *
+ * Scope is exactly one of `batchId`, `listId`, or `allImported`. The database
+ * raises if that is not true — a delete that guesses its own scope is the worst
+ * kind there is.
+ *
+ * Returns `{ ok, leads, companies, lists, kept, keptTotal, considered }`.
+ * `kept` is a reason → count map, in plain words, and it is shown rather than
+ * summed away: "we refused to touch 12 of them" and "nothing happened" look
+ * identical otherwise.
+ */
+export async function clearImport({ batchId = null, listId = null, allImported = false, dryRun = true, expectLeads = null, role = null } = {}) {
+  /* THE SAME REFUSALS THE SQL MAKES, MADE HERE TOO, BEFORE ANYTHING ELSE.
+   *
+   * Preview mode had none of them: `clearImport({ dryRun: false })` with no
+   * arguments fell through both branches and deleted every imported lead in the
+   * store, and a sales rep could run it because the only thing stopping them
+   * was a hidden button. A preview that behaves differently from live is how a
+   * bug gets demonstrated as working. Found by a reviewer. */
+  const scopes = (batchId ? 1 : 0) + (listId ? 1 : 0) + (allImported ? 1 : 0);
+  if (scopes === 0) return { ok: false, error: "Nothing to clear: name an import, a list, or ask for everything imported." };
+  if (scopes > 1) return { ok: false, error: "Clear one thing at a time: an import, a list, or everything imported." };
+  if (role && role !== "owner" && role !== "admin") {
+    return { ok: false, error: "Only an owner or an admin can clear an import." };
+  }
+
+  if (!live()) {
+    /* Preview mode mirrors the SQL's rules exactly, or a person testing the
+     * button here would be shown behaviour the real thing does not have. */
+    const inScope = previewStore.leads.filter((l) => {
+      if (batchId) return l.import_batch_id === batchId;
+      if (listId) return l.list_id === listId;
+      return ["sheet", "csv", "import", "scraper"].includes(l.source);
+    });
+    const reason = (l) => {
+      if (l.client_id || l.became_customer) return "they are a paying client";
+      if (!["sheet", "csv", "import", "scraper"].includes(l.source)) return "added by hand, not imported";
+      if ((previewStore.proposals || []).some((p) => p.lead_id === l.id && p.status !== "draft")) return "a proposal has gone out";
+      /* Anything the import did not write itself — same rule as the SQL. The
+       * five-type list this replaced missed `claim` and `status_change`, which
+       * is most of what a rep actually does. */
+      if (previewStore.leadActivity.some((a) => a.lead_id === l.id && a.type !== "import")) {
+        return "somebody has worked them in here";
+      }
+      return null;
+    };
+    const kept = {};
+    const go = [];
+    for (const l of inScope) {
+      const why = reason(l);
+      if (why) kept[why] = (kept[why] || 0) + 1;
+      else go.push(l);
+    }
+    const goIds = new Set(go.map((l) => l.id));
+    const companies = (previewStore.companies || []).filter((c) => !c.client_id
+      && c.import_batch_id
+      && go.some((l) => l.company_id === c.id)
+      && !previewStore.leads.some((l) => l.company_id === c.id && !goIds.has(l.id)));
+    const lists = (previewStore.leadLists || []).filter((li) => go.some((l) => l.list_id === li.id)
+      && !previewStore.leads.some((l) => l.list_id === li.id && !goIds.has(l.id)));
+
+    const out = {
+      ok: true, dryRun, sample: true,
+      leads: go.length, companies: companies.length, lists: lists.length,
+      companiesKept: (previewStore.companies || []).filter((c) => !c.client_id
+        && !c.import_batch_id
+        && go.some((l) => l.company_id === c.id)
+        && !previewStore.leads.some((l) => l.company_id === c.id && !goIds.has(l.id))).length,
+      kept, keptTotal: Object.values(kept).reduce((a, b) => a + b, 0),
+      considered: inScope.length,
+    };
+    if (dryRun) return out;
+
+    /* The same handshake the database makes. Nothing can change underneath a
+     * single-threaded browser store, so this can only ever pass here — it
+     * exists so the two paths have the same shape and the UI is exercising the
+     * real contract in sample mode. */
+    if (expectLeads !== null && expectLeads !== go.length) {
+      return { ok: false, error: `This changed while you were looking at it: you were shown ${expectLeads} and there are now ${go.length}. Nothing was deleted — look again.` };
+    }
+
+    previewStore.leads = previewStore.leads.filter((l) => !goIds.has(l.id));
+    previewStore.leadActivity = previewStore.leadActivity.filter((a) => !goIds.has(a.lead_id));
+    if (previewStore.proposals) previewStore.proposals = previewStore.proposals.filter((p) => !goIds.has(p.lead_id));
+    const coIds = new Set(companies.map((c) => c.id));
+    if (previewStore.companies) previewStore.companies = previewStore.companies.filter((c) => !coIds.has(c.id));
+    const liIds = new Set(lists.map((l) => l.id));
+    if (previewStore.leadLists) previewStore.leadLists = previewStore.leadLists.filter((l) => !liIds.has(l.id));
+    for (const b of PREVIEW_BATCHES) {
+      if ((batchId && b.id === batchId) || (allImported && !b.cleared_at)) {
+        b.cleared_at = new Date().toISOString();
+        b.cleared_counts = out;
+      }
+    }
+    /* On the record here too. The SQL writes this row under the banner "a bulk
+     * delete with no trace is how a team stops trusting a tool" — and preview
+     * mode, the only path the browser walkthrough exercises, was writing
+     * nothing. The property being demonstrated was absent from the
+     * demonstration. */
+    previewStore.activity.unshift({
+      id: pid("g"), actor: "preview-user", kind: "import_cleared",
+      title: `Cleared ${out.leads} imported contact${out.leads === 1 ? "" : "s"}`,
+      body: `${out.companies} firm${out.companies === 1 ? "" : "s"} and ${out.lists} list${out.lists === 1 ? "" : "s"} went with them. Kept ${out.keptTotal} that were not test data.`,
+      created_at: new Date().toISOString(),
+    });
+    return out;
+  }
+
+  const { data, error } = await getSupabase().rpc("admin_clear_import", {
+    p_batch: batchId, p_list: listId, p_all_imported: allImported, p_dry_run: dryRun,
+    p_expect_leads: expectLeads,
+  });
+  if (error) {
+    const msg = String(error.message || "");
+    if (msg.includes("only an owner or admin")) {
+      return { ok: false, error: "Only an owner or an admin can clear an import." };
+    }
+    if (msg.includes("nothing to clear") || msg.includes("one thing at a time")) {
+      return { ok: false, error: msg };
+    }
+    if (msg.includes("changed while you were looking at it")) {
+      return { ok: false, error: msg, stale: true };
+    }
+    /* Only the error code that actually means "no such function". Matching the
+     * words "does not exist" caught a missing COLUMN and any unrelated missing
+     * relation too, and told the person to run a migration that was already
+     * run — sending them to fix the wrong thing. */
+    if (error.code === "42883") {
+      return { ok: false, error: "Migration 0016 has not been run on the database yet, so nothing can be cleared. Nothing was changed." };
+    }
+    return { ok: false, error: msg };
+  }
+  if (!data) return { ok: false, error: "Nothing came back. Nothing was deleted." };
+  return {
+    ok: true,
+    dryRun: data.dry_run === true,
+    leads: Number(data.leads || 0),
+    companies: Number(data.companies || 0),
+    lists: Number(data.lists || 0),
+    kept: data.kept || {},
+    keptTotal: Number(data.kept_total || 0),
+    considered: Number(data.considered || 0),
+    /* Firms left standing with nobody at them, because a person built them
+     * rather than an import. Counted so the screen can say so. */
+    companiesKept: Number(data.companies_kept || 0),
+  };
+}
+
+
+/* ============================================================================
+ * THE REP'S WORK PAGE
+ *
+ * Aug 26 2026, for CJ giving the sales reps their own logins. Scoped to one
+ * person, and refusing to run without a user id.
+ *
+ * WHY THE USER ID IS A HARD REQUIREMENT HERE. A falsy id does not quietly
+ * return nothing — it returns EVERYBODY'S. getMyWork's `mine()` filter passes
+ * every row in the system, and listReminders(undefined) hands back the whole
+ * table. On a rep's page that prints another rep's work as theirs.
+ *
+ * THE COMMENT USED TO SAY "both readers below refuse" AND NOTHING DID. Found by
+ * a checker, Aug 26 2026: there is one reader below, not two, and it did not
+ * refuse — it called listReminders(undefined) and leaned on a downstream
+ * `userId &&` in repSnapshotFromRows to stop the rows being counted. Everybody's
+ * reminders were read into the browser and one guard, three files away, was all
+ * that stood between them and the answer box.
+ *
+ * The code was made true rather than the comment, because "a guard somewhere
+ * downstream" is the shape of every leak this section exists to prevent, and a
+ * refusal at the door is the only version a reader can check. askRepReport now
+ * returns an error before it reads anything. getMyWork's own fail-open is called
+ * out where it lives and at its call sites (AdminDashboard.jsx) — it is not this
+ * section's to change today, and no new call site may pass it a falsy id.
+ * ==========================================================================*/
+
+/** How far back the rep's answer box reads lead activity. 21 days, because that
+ * is the window lib/brain-context.js caps the server-side read at and
+ * assembleRepFacts saves as `activityWindowDays` — a preview that read further
+ * back would count touches the live answer cannot see. */
+export const REP_ACTIVITY_WINDOW_DAYS = 21;
+
+/**
+ * Ask for a written rundown of your own sales work.
+ *
+ * LIVE: POST /api/rep-report, which reads the records server-side, asks the
+ * model, throws away a draft that fails the gate, and saves the row.
+ * PREVIEW: the same counted answer the endpoint falls back to, built by the same
+ * functions in lib/rep-report.js from the sample rows. No model, nothing saved,
+ * and it says both out loud — `counted_only: true`, `saved: false`, `sample:
+ * true`.
+ *
+ * Both branches hand back the endpoint's exact response shape, so the panel has
+ * one code path. Using the real helpers rather than faking prose is the point:
+ * what Ryder clicks today is what a rep gets tomorrow, minus the writing.
+ */
+export async function askRepReport({ instruction, userId } = {}) {
+  /* Refused before anything is read or sent. An empty box is a mis-click, and
+   * the wording matches the endpoint's 400 so the two cannot disagree. */
+  const gate = checkInstruction(instruction);
+  if (!gate.ok) return { ok: false, error: gate.error };
+
+  /* And refused without a user id, in BOTH branches — see the note above this
+   * section. Not just the preview: the live endpoint scopes itself from the
+   * session, so a missing id there means the page has lost track of who is
+   * asking, and an answer about "your work" from a page that does not know
+   * whose work it is has nothing to be right about. */
+  if (!userId) {
+    return {
+      ok: false,
+      error: "Nobody is signed in as far as this page can tell, so nothing was read. This answer is about one person's own work and would otherwise count everybody's. Sign in again and ask once more.",
+    };
+  }
+
+  if (live()) {
+    const res = await apiFetch("/api/rep-report", { method: "POST", body: { instruction: gate.instruction } });
+    if (!res.ok) return { ok: false, error: res.error };
+    if (!res.data?.report) return { ok: false, error: "Nothing came back. Try again." };
+    return { ok: true, report: res.data.report, sample: false };
+  }
+
+  const nowMs = Date.now();
+  const since = new Date(nowMs - REP_ACTIVITY_WINDOW_DAYS * 86400000).toISOString();
+  const [leads, activity, reminders, companies, lists, proposals, sources, team] = await Promise.all([
+    listLeads(),
+    listAllLeadActivity(REP_ACTIVITY_WINDOW_DAYS),
+    /* The person asking, and nobody else. The reader filters and
+     * repSnapshotFromRows filters again — see the note in that function. */
+    listReminders(userId),
+    listCompanies(),
+    listLeadLists(),
+    listProposals(),
+    listLeadSources(),
+    listTeam(),
+  ]);
+
+  /* Anything that failed is NAMED, not swallowed. assembleRepFacts turns these
+   * keys into the "these reads failed and are UNKNOWN, not empty" line, and a
+   * preview that hides a broken read teaches the wrong thing about the console. */
+  const errors = {};
+  const rowsOf = (r, key) => {
+    if (r?.error) errors[key] = r.error;
+    return r?.rows || [];
+  };
+
+  const snap = repSnapshotFromRows({
+    userId,
+    nowMs,
+    errors,
+    leads: rowsOf(leads, "leads"),
+    /* Trimmed to the window by hand. listAllLeadActivity's preview branch hands
+     * back every sample row whatever `sinceDays` says, and a preview branch that
+     * is looser than the query underneath it is the trap that leaked the owner's
+     * notes to a rep yesterday. */
+    activity: rowsOf(activity, "leadActivity").filter((a) => String(a.created_at || "") >= since),
+    reminders: rowsOf(reminders, "reminders"),
+    companies: rowsOf(companies, "companies"),
+    lists: rowsOf(lists, "leadLists"),
+    proposals: rowsOf(proposals, "proposals"),
+    sources: rowsOf(sources, "leadSources"),
+    team: rowsOf(team, "team"),
+  });
+
+  return buildRepPreviewAnswer({ instruction: gate.instruction, snap, nowMs });
+}
+

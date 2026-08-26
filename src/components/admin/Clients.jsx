@@ -6,8 +6,8 @@ import {
 import { apiFetch } from "../../lib/adminApi.js";
 import { isConfigured } from "../../lib/supabase.js";
 import { toast } from "../../lib/toast.js";
-import { SourceBadge, TextInput, Select, EmptyState, Modal, Field, fmtMoney, timeAgo } from "./shared.jsx";
-import { ClientDetail, ClientModal, TaskModal } from "./Operations.jsx";
+import { SourceBadge, TextInput, Select, EmptyState, Modal, Field, FilterTabs, fmtMoney, timeAgo } from "./shared.jsx";
+import { ClientDetail, ClientModal, TaskModal, ImportClientsModal } from "./Operations.jsx";
 
 import { isOverdue } from "./opsTable.jsx";
 import { canSync } from "../../../lib/connectors.js";
@@ -82,11 +82,21 @@ export default function ClientsPage({ member, query = "" }) {
   const [loadError, setLoadError] = useState(null);
 
   const [q, setQ] = useState("");
+  /* What KIND of row: our client, a client who also pays, or a subscriber.
+   * These are the tabs across the top, and they are the three values a row
+   * can actually be, so the three counts add up to the whole list. */
   const [typeFilter, setTypeFilter] = useState("all");
+  /* The two questions the tabs cannot answer, because they cut ACROSS the
+   * kinds instead of splitting them: who is paying right now, and who has
+   * nothing connected. Kept as a dropdown next to the search box (Ryder,
+   * Aug 26 2026) — as tabs they would have looked like more kinds of person,
+   * and the counts would have added up to more than the list. */
+  const [extraFilter, setExtraFilter] = useState("all");
   const [selectedId, setSelectedId] = useState(null);
   const [taskModal, setTaskModal] = useState(null);
   const [makeClientFrom, setMakeClientFrom] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   /* What the address bar says. `id` opens a client; `connect` is how the
    * Google sign-in comes back. Read once per change, never held in state —
@@ -236,20 +246,20 @@ export default function ClientsPage({ member, query = "" }) {
 
   const shown = useMemo(() => {
     let list = rows;
-    if (typeFilter === "clients") list = list.filter((r) => r.client);
-    else if (typeFilter === "subscribers") list = list.filter((r) => r.kind === "subscriber");
-    else if (typeFilter === "paying") list = list.filter((r) => r.stripe?.subscription?.status === "active" || r.stripe?.subscription?.status === "trialing");
+    /* The tab is just the row's own kind, so no clever rule is needed. */
+    if (typeFilter !== "all") list = list.filter((r) => r.kind === typeFilter);
+    if (extraFilter === "paying") list = list.filter((r) => r.stripe?.subscription?.status === "active" || r.stripe?.subscription?.status === "trialing");
     /* Only offered as an answer when the connection list actually loaded in
      * full. Filtering on a truncated read would present clients as having
      * nothing connected when their rows were never fetched. */
-    else if (typeFilter === "unconnected") list = list.filter((r) => r.client && !(connCounts[r.client.id]?.ready));
+    else if (extraFilter === "unconnected") list = list.filter((r) => r.client && !(connCounts[r.client.id]?.ready));
     const needle = q.trim().toLowerCase();
     if (needle) {
       list = list.filter((r) =>
         `${r.name} ${r.email || ""} ${r.client?.domain || ""}`.toLowerCase().includes(needle));
     }
     return list;
-  }, [rows, typeFilter, q, connCounts]);
+  }, [rows, typeFilter, extraFilter, q, connCounts]);
 
   const selected = clients.rows.find((c) => c.id === selectedId) || null;
 
@@ -330,22 +340,37 @@ export default function ClientsPage({ member, query = "" }) {
 
   const clientCount = rows.filter((r) => r.client).length;
   const subCount = rows.filter((r) => r.kind === "subscriber").length;
+
+  /* The tab counts are taken from `rows`, which is everybody before any filter
+   * runs. Counting `shown` instead would make a number change the moment you
+   * clicked it, and a count that moves when you touch it cannot be trusted.
+   * The words are the ones TYPE_TONE puts on the row badges, so the tab and
+   * the badge never use two names for the same thing. */
+  const kindTabs = ["client", "both", "subscriber"].map((k) => ({
+    id: k,
+    label: k === "client" ? "Clients" : k === "both" ? "Client + paying" : "Subscribers",
+    count: rows.filter((r) => r.kind === k).length,
+  }));
   const totalMrr = shown.reduce((s, r) => s + (r.stripe?.subscription?.mrrCents || 0), 0);
 
   return (
     <>
+      <FilterTabs
+        tabs={kindTabs} value={typeFilter} onChange={setTypeFilter}
+        ariaLabel="Who to show" allLabel="Everybody" allCount={rows.length}
+      />
+
       <div className="card" style={{ padding: 18, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 220px" }}>
           <TextInput placeholder="Search a name, an email or a website…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <Select style={{ width: 210 }} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
+        <Select style={{ width: 210 }} value={extraFilter} onChange={(e) => setExtraFilter(e.target.value)}
           options={[
-            ["all", "Everyone"],
-            ["clients", "Clients we work with"],
-            ["subscribers", "Subscribers only"],
+            ["all", "Anyone, paying or not"],
             ["paying", "Paying right now"],
             ["unconnected", "No accounts connected"],
           ]} />
+        <button className="btn" onClick={() => setImportOpen(true)}>Import clients</button>
         <button className="btn btn-accent" onClick={() => setAddOpen(true)}>+ Add a client</button>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ fontSize: 13, color: "var(--ink-2)" }}>
@@ -419,6 +444,21 @@ export default function ClientsPage({ member, query = "" }) {
                         <span style={{ display: "inline-flex", padding: "2px 8px", borderRadius: 99, fontSize: 9.5, fontWeight: 800, fontFamily: "var(--mono)", letterSpacing: "0.06em", color: tone.c, background: tone.bg }}>
                           {tone.label}
                         </span>
+                        {/* The client's status — ACTIVE, HOLDING and so on. The
+                          * Operations client rail used to show this, and that rail
+                          * was deleted on Aug 26 2026, so the only place left to
+                          * read it was inside a client page. Overview counts
+                          * "Active clients" off this very field and its tile now
+                          * lands here, so the number has to be checkable here.
+                          * Same class the old rail used, so it reads the way
+                          * people already know it. A client with no status set
+                          * shows nothing: an empty badge looks like a badge that
+                          * failed to load. */}
+                        {r.client?.status ? (
+                          <span className={`adm-ops-client-status ${r.client.status}`} style={{ marginLeft: 8 }}>
+                            {String(r.client.status).toUpperCase()}
+                          </span>
+                        ) : null}
                         {r.client?.stage ? <div style={{ fontSize: 11.5, color: "var(--ink-dim)", marginTop: 3 }}>{r.client.stage}</div> : null}
                       </td>
                       <td>
@@ -484,12 +524,12 @@ export default function ClientsPage({ member, query = "" }) {
       ) : (
         <EmptyState
           icon="🏢"
-          title={q || typeFilter !== "all" ? "Nobody matches that" : "Nobody here yet"}
-          body={q || typeFilter !== "all"
-            ? "Clear the search box, or set the filter back to Everyone."
+          title={q || typeFilter !== "all" || extraFilter !== "all" ? "Nobody matches that" : "Nobody here yet"}
+          body={q || typeFilter !== "all" || extraFilter !== "all"
+            ? "Clear the search box, or go back to the Everybody tab."
             : "Add the first client, or connect Stripe and everyone who pays for the platform appears here on their own."}
-          action={q || typeFilter !== "all"
-            ? <button className="btn" onClick={() => { setQ(""); setTypeFilter("all"); }}>Clear filters</button>
+          action={q || typeFilter !== "all" || extraFilter !== "all"
+            ? <button className="btn" onClick={() => { setQ(""); setTypeFilter("all"); setExtraFilter("all"); }}>Clear filters</button>
             : <button className="btn btn-accent" onClick={() => setAddOpen(true)}>Add a client</button>}
         />
       )}
@@ -500,6 +540,9 @@ export default function ClientsPage({ member, query = "" }) {
           onClose={() => setMakeClientFrom(null)}
           onMade={async (id) => { setMakeClientFrom(null); await loadCore(); openClient(id); }}
         />
+      )}
+      {importOpen && (
+        <ImportClientsModal member={member} onClose={() => setImportOpen(false)} reload={loadCore} />
       )}
       {addOpen && (
         <ClientModal member={member} client={null} onClose={() => setAddOpen(false)} reload={loadCore} />

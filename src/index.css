@@ -3555,3 +3555,184 @@ kbd {
   }
   .aia-map-warning .aia-map-warning-body { display: none; }
 }
+
+/* ==================================================================== */
+/* PICK AN ACCOUNT — the preview console's front door (Aug 26 2026)      */
+/* ==================================================================== */
+/* Appended, never inserted: several sessions share this file and a rewrite
+   silently eats whatever the other one added. Lives on the dark auth
+   background, so every colour here is a literal rgba on white — the light-mode
+   ink variables would vanish against it. */
+
+/* THE OVERFLOW FIX (Aug 26 2026, Ryder: "make this page fit in the screen and
+   the logo gets cutout on top").
+
+   `.auth-splash` is a fixed, full-screen flex box with `align-items: center`.
+   That centres a short card beautifully and CLIPS a tall one at BOTH ends —
+   and the top overflow of a centred flex item cannot be scrolled to at all, so
+   the logo was not just off-screen, it was unreachable. Adding `overflow-y:
+   auto` does not help; the scrollable area starts below the lost part.
+
+   The fix is `align-items: flex-start` plus `margin: auto` on the child. Auto
+   margins still centre the card when there is room, and collapse to the top
+   when there is not — so nothing is ever cut off, and short screens scroll
+   normally. Anything else tall on this background should use this class too. */
+.adm-pick-screen {
+  align-items: flex-start;
+  overflow-y: auto;
+  /* 8px, not 14. Measured in the page: at 14 the content came to 751px against
+     750px of window — one pixel of scroll, which reads as a bug even though
+     nothing is hidden. Aug 26 2026. */
+  padding: 8px 0;
+}
+/* The two background orbs sit at `bottom: -180px; right: -120px`, deliberately
+   hanging off the edge. On a screen that does not scroll that is invisible and
+   fine. The moment this screen got `overflow-y: auto`, those 180 hanging pixels
+   became REAL SCROLLABLE CONTENT: the page measured 917px tall against a 750px
+   window and grew a scrollbar, while the actual card stack was only 739px and
+   fitted perfectly. The content was never the problem — the decoration was.
+
+   `position: fixed` takes them out of this box's scroll measurement entirely.
+   They land in exactly the same place, because the parent is itself a fixed
+   full-screen box, so the containing block is the same rectangle either way.
+   Aug 26 2026 — found by measuring scrollHeight, not by looking at it. */
+.adm-pick-screen > .auth-splash-orb {
+  position: fixed;
+}
+
+.adm-pick-screen > .auth-splash-inner {
+  margin: auto;
+  /* Tighter than the sign-in card's 22px: this screen has six blocks stacked,
+     and at 22px each the gaps alone were taller than a laptop window. Measured
+     at 1300x845, which is Ryder's window — the whole thing has to land inside
+     about 740px of page once Chrome's own bars are counted. 8, not 10, so there
+     is a little slack: at 10 the page measured EXACTLY the window height — no
+     scrollbar, but one bookmark bar away from one. */
+  gap: 8px;
+}
+
+.adm-pick-head { margin-top: 4px; text-align: center; }
+.adm-pick-kicker {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #fbbf24;
+}
+.adm-pick-head h1 {
+  margin: 8px 0 0;
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 700;
+  color: white;
+}
+.adm-pick-head p {
+  margin: 8px auto 0;
+  /* Wider than 460px on purpose: the same words in fewer, longer lines. At 460
+     the intro ran to six lines and pushed the last card off the screen. */
+  max-width: 540px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.adm-pick-list { margin-top: 14px; display: grid; gap: 8px; width: 100%; }
+
+/* A grid, not a flex row: the "Enter →" has to sit hard right on its own line
+   whatever the blurb wraps to, and the role name has to stay on the same
+   baseline as it. */
+.adm-pick-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  width: 100%;
+  padding: 12px 15px;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+.adm-pick-card:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(167, 139, 250, 0.6);
+  transform: translateY(-1px);
+}
+/* A real ring, not a border tint. These cards are the only thing on the screen
+   you can press, so somebody arriving on Tab has to be able to see where they
+   are — a 1px border going slightly purple is not that. Corrected Aug 26 2026
+   after a checker caught the `outline: none`. */
+.adm-pick-card:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(167, 139, 250, 0.9);
+  transform: translateY(-1px);
+  outline: 2px solid #c4b5fd;
+  outline-offset: 2px;
+}
+.adm-pick-card:active { transform: translateY(0); }
+
+.adm-pick-role {
+  grid-column: 1;
+  font-family: var(--display);
+  font-size: 16px;
+  font-weight: 700;
+  color: white;
+}
+.adm-pick-go {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #a78bfa;
+  white-space: nowrap;
+}
+.adm-pick-name {
+  grid-column: 1;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.5);
+}
+.adm-pick-blurb {
+  grid-column: 1 / -1;
+  margin-top: 5px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.78);
+}
+/* Dimmer on purpose. It answers "why is this page empty" AFTER you have already
+   decided which account you want, so it must not compete with the blurb. */
+.adm-pick-detail {
+  grid-column: 1 / -1;
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  /* Was 0.45, which measured about 4.4:1 on this background — just under the
+     4.5:1 floor for text this size. Still the quietest thing in the card. */
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.adm-pick-foot {
+  margin-top: 12px;
+  max-width: 560px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.62);
+}
+.adm-pick-foot code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+@media (max-width: 520px) {
+  /* The "Enter →" drops under the text rather than squeezing the blurb into a
+     two-word column. */
+  .adm-pick-card { grid-template-columns: minmax(0, 1fr); }
+  .adm-pick-go { grid-column: 1; grid-row: auto; margin-top: 8px; }
+}

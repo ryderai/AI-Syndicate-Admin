@@ -8,7 +8,12 @@ const SECTION_TITLES = {
   invoices: { kicker: "Command", title: "Invoices · billed, paid, owed" },
   clients: { kicker: "Command", title: "Clients · everyone we work with and everyone who pays" },
   sales: { kicker: "Sales", title: "Sales · the pipeline" },
-  operations: { kicker: "Delivery", title: "Operations · clients, tasks & weekly logs" },
+  /* The sales role's two pages, added Aug 26 2026 with the rep split. Without
+   * these the fallback capitalises the page id, so the rep's header read
+   * "Mine" — a word that does not say what is on the screen. */
+  leads: { kicker: "Sales", title: "Leads · the floor, nobody has claimed these" },
+  mine: { kicker: "Sales", title: "My leads · what you have claimed" },
+  operations: { kicker: "Delivery", title: "Operations · the task board" },
   inbox: { kicker: "Comms", title: "Inbox · team Gmail in one place" },
   tickets: { kicker: "Comms", title: "Tickets · customer support desk" },
   notes: { kicker: "Intelligence", title: "Notes · what the system noticed" },

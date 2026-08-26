@@ -2568,3 +2568,686 @@ select.adm-input { cursor: pointer; }
   white-space: pre-wrap;
 }
 .adm-db-popout-text:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent-deep); }
+
+/* ==================================================================== */
+/* THE SALES SHEET — one row per person (Aug 25 2026, append-only)       */
+/* ==================================================================== */
+/* Ryder: "i dont like how the business has a dropdown with the owner below,
+   thats not needed, just make it rows of the people. you can take inspo from
+   the google sheet that there using already."
+   So: CJ's spreadsheet, column for column, flat. Everything here sits on top
+   of the .adm-db-* table the Operations page already uses — a person who has
+   learned one table has learned both. */
+
+/* The sheet's tabs, along the top instead of the bottom of the window. */
+.adm-sh-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 0 2px;
+  margin: 0 0 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.adm-sh-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-bottom: none;
+  background: transparent;
+  color: var(--ink-dim);
+  font-family: var(--body);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 9px 14px;
+  border-radius: 9px 9px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.adm-sh-tabs button:hover { background: var(--bg-1); color: var(--ink); }
+.adm-sh-tabs button.active {
+  background: white;
+  color: var(--ink);
+  border-color: var(--rule);
+  box-shadow: 0 -1px 0 var(--accent-deep) inset;
+  margin-bottom: -1px;
+}
+.adm-sh-tabs button span {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+  background: var(--bg-2);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.adm-sh-tabs button.active span { background: var(--accent-soft); color: var(--accent-deep); }
+.adm-sh-tabnone {
+  align-self: center;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+/* The strip above the table: how many rows, which filters are on, and the
+   two switches (group by, columns). */
+.adm-sh-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-1);
+}
+.adm-sh-count {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.adm-sh-spacer { flex: 1 1 auto; }
+.adm-sh-groupsel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--ink-dim);
+}
+.adm-sh-groupsel select { font-size: 12px; padding: 4px 8px; }
+.adm-sh-chipbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--accent-deep);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.adm-sh-chipbtn:hover { filter: brightness(0.96); }
+
+/* Wider than Operations: this table carries the sheet's own columns. */
+.adm-sh-table { min-width: 1760px; }
+
+/* Your own rows get a quiet left edge. Not a colour wash — a rep scanning for
+   their own work should be able to find it without the table shouting. */
+.adm-sh-row.mine td:first-child { box-shadow: inset 3px 0 0 var(--accent-deep); }
+/* Scored 90+ = not a prospect. Dimmed rather than hidden: the 90+ gate is
+   about who to spend a touch on, not who to delete. */
+.adm-sh-row.skip { opacity: 0.62; }
+.adm-sh-row.skip:hover { opacity: 1; }
+
+/* A cell you can read but not type into. Still a button, because it opens the
+   record — a dead-looking cell reads as a broken cell. */
+.adm-sh-readonly { cursor: pointer; }
+.adm-sh-readonly:hover { background: var(--bg-1); }
+
+.adm-sh-over {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--danger);
+}
+
+.adm-sh-firm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adm-sh-headn {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--ink-dim);
+  background: var(--bg-2);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.adm-sh-warn { flex: 0 0 auto; color: #92400e; font-size: 12px; }
+
+.adm-sh-pop-warn,
+.adm-sh-pop-note {
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  border-bottom: 1px solid var(--rule);
+}
+.adm-sh-pop-warn { background: #fffbeb; color: #78350f; }
+.adm-sh-pop-note { color: var(--ink-dim); }
+
+/* The five cadence touches, as dots. */
+.adm-sh-dots { display: inline-flex; gap: 3px; }
+.adm-sh-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rule-2);
+}
+.adm-sh-dot.on { background: var(--accent-deep); }
+.adm-sh-touchn {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.adm-sh-none {
+  padding: 26px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-dim);
+  border-top: 1px solid var(--rule);
+}
+.adm-sh-none strong { color: var(--ink); display: block; margin-bottom: 4px; }
+
+/* The table already has its own border and radius from .adm-db; inside the
+   page's card that double border reads as a box in a box. */
+.adm-sl-tablewrap .adm-sh { border: none; border-radius: 0; box-shadow: none; }
+
+/* ---------- The lifetime timeline (Aug 25 2026, append-only) ---------- */
+/* One list per person: the chase, the day they started paying, and everything
+   we have done for them since. Every line says which table it came out of. */
+.adm-sl-tl-summary {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+}
+.adm-sl-tl-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.adm-sl-tl-amt {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.adm-sl-tl-src { color: var(--ink-dim); opacity: 0.8; }
+/* The client era sits slightly forward of the chase, so the two halves of the
+   relationship read as two halves without needing a colour. */
+.adm-sl-tl-client { background: var(--bg-1); }
+.adm-sl-tl-divide {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0 12px;
+  color: var(--accent-deep);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.adm-sl-tl-divide::before,
+.adm-sl-tl-divide::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--accent-deep);
+  opacity: 0.35;
+}
+.adm-sl-tl-cap {
+  margin-top: 12px;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: var(--ink-dim);
+  background: var(--bg-2);
+  border-radius: 9px;
+}
+
+/* ---------- "How they started" on a client page (Aug 25 2026) ---------- */
+.adm-cp-saleshist { padding: 18px 20px; }
+.adm-cp-saleshist > strong { display: block; font-size: 14px; margin-bottom: 6px; }
+.adm-cp-saleshist > p { font-size: 13px; line-height: 1.65; color: var(--ink-dim); margin: 0; }
+.adm-cp-saleshist-head { margin-bottom: 14px; }
+.adm-cp-saleshist-head strong { display: block; font-size: 14px; margin-bottom: 4px; }
+.adm-cp-saleshist-head span { font-size: 12.5px; line-height: 1.6; color: var(--ink-dim); }
+.adm-cp-saleshist-warn {
+  padding: 9px 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  background: #fffbeb;
+  color: #78350f;
+  border-radius: 9px;
+}
+.adm-cp-saleshist-list { list-style: none; margin: 0; padding: 0; }
+.adm-cp-saleshist-list li + li { border-top: 1px solid var(--rule); }
+.adm-cp-saleshist-list a {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 11px 8px;
+  text-decoration: none;
+  color: inherit;
+  border-radius: 8px;
+}
+.adm-cp-saleshist-list a:hover { background: var(--bg-1); }
+.adm-cp-sh-name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.adm-cp-sh-star { color: var(--accent-deep); margin-left: 6px; }
+.adm-cp-sh-title,
+.adm-cp-sh-meta { font-size: 12px; color: var(--ink-dim); }
+@media (max-width: 760px) {
+  .adm-cp-saleshist-list a { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* ==================================================================== */
+/* START OVER — imports, and clearing them (Aug 25 2026, append-only)    */
+/* ==================================================================== */
+/* The only screen here that deletes in bulk, so it is deliberately not
+   styled to be quick. */
+
+.adm-so-safe {
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  background: var(--success-soft, #eefaf0);
+  border: 1px solid #b7e2c1;
+}
+.adm-so-safe strong { display: block; font-size: 13.5px; color: #0b5f24; margin-bottom: 4px; }
+.adm-so-safe div { font-size: 12.5px; line-height: 1.6; color: #17512b; }
+
+.adm-so-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.adm-so-head strong { display: block; font-size: 13.5px; margin-bottom: 2px; }
+.adm-so-head span { font-size: 12.5px; color: var(--ink-dim); }
+
+.adm-so-list { border: 1px solid var(--rule); border-radius: 11px; overflow: hidden; }
+.adm-so-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  background: white;
+}
+.adm-so-row + .adm-so-row { border-top: 1px solid var(--rule); }
+.adm-so-row.cleared { background: var(--bg-1); }
+.adm-so-row.cleared .adm-so-t { color: var(--ink-dim); }
+.adm-so-main { min-width: 0; }
+.adm-so-t { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.adm-so-tag {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  background: var(--bg-2);
+  border-radius: 5px;
+  padding: 2px 6px;
+}
+.adm-so-s { font-size: 12px; color: var(--ink-dim); margin-top: 2px; }
+.adm-so-short { font-size: 12px; color: #92400e; margin-top: 4px; }
+.adm-so-done { font-size: 12px; color: var(--ink-dim); flex: 0 0 auto; }
+
+/* the modal */
+.adm-so-count {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.adm-so-count > div {
+  padding: 12px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--ink-dim);
+  text-align: center;
+}
+.adm-so-count b { display: block; font-size: 24px; color: var(--ink); font-family: var(--mono); }
+.adm-so-p { font-size: 12.5px; line-height: 1.65; color: var(--ink-dim); margin: 0 0 14px; }
+
+.adm-so-keep {
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--rule);
+}
+.adm-so-keep strong { display: block; font-size: 13px; margin-bottom: 6px; }
+.adm-so-keep ul { margin: 0; padding-left: 18px; }
+.adm-so-keep li { font-size: 12.5px; line-height: 1.7; }
+.adm-so-keep-n { font-size: 12px; color: var(--ink-dim); margin-top: 6px; }
+
+.adm-so-warn {
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+}
+.adm-so-warn strong { display: block; font-size: 13px; color: #991b1b; margin-bottom: 4px; }
+.adm-so-warn div { font-size: 12.5px; line-height: 1.65; color: #7f1d1d; }
+
+.adm-so-confirm { display: block; }
+.adm-so-confirm span { display: block; font-size: 12.5px; color: var(--ink-dim); margin-bottom: 6px; }
+.adm-so-confirm b { color: var(--ink); font-family: var(--mono); }
+
+.btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: white;
+}
+.btn-danger:hover:not(:disabled) { filter: brightness(0.92); }
+.btn-danger:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ==================================================================== */
+/* THE CLIENT'S WHOLE TIMELINE (Aug 26 2026, append-only)                */
+/* ==================================================================== */
+/* The "How they started" tab became one dated list of everything we hold on a
+   client. Ryder asked for it to read as a story, so the rows are quiet and the
+   three honesty notes — where our records begin, what could not be read, and
+   what has no date — are the only things allowed to stand out. */
+
+.adm-tl-begin {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  background: var(--bg-2);
+  border-left: 2px solid var(--accent-deep);
+  border-radius: 0 9px 9px 0;
+}
+.adm-tl-begin strong { color: var(--ink); }
+
+/* Deliberately the loudest thing on the panel. A section we could not read is
+   the one fact a reader must not miss, because the list below looks complete
+   whether or not it is. */
+.adm-tl-unknown {
+  padding: 11px 13px;
+  margin-bottom: 12px;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent-deep);
+  border-radius: 9px;
+  background: var(--bg-1);
+}
+.adm-tl-unknown > strong { display: block; font-size: 13px; color: var(--ink); margin-bottom: 6px; }
+.adm-tl-unknown ul { list-style: none; margin: 0; padding: 0; }
+.adm-tl-unknown li { font-size: 12px; line-height: 1.6; color: var(--ink-dim); }
+.adm-tl-unknown li b { color: var(--ink); }
+
+.adm-tl-note {
+  padding: 9px 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  background: var(--bg-2);
+  border-radius: 9px;
+}
+
+.adm-tl-list { list-style: none; margin: 0; padding: 0; }
+.adm-tl-row {
+  display: grid;
+  grid-template-columns: 96px 128px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 10px 8px;
+}
+.adm-tl-row + .adm-tl-row { border-top: 1px solid var(--rule); }
+.adm-tl-when { font-size: 12px; color: var(--ink-dim); white-space: nowrap; }
+
+/* The source label. Same shape everywhere it appears, including in the undated
+   list, so "sales call" is recognisable as the same kind of stamp wherever the
+   eye lands on it. */
+.adm-tl-src {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+  white-space: nowrap;
+}
+.adm-tl-what { font-size: 13px; line-height: 1.5; color: var(--ink); }
+
+/* The detail is a second line on purpose. It is usually a caveat about the date
+   or a snippet of somebody's own words, and neither should compete with the
+   thing that happened. */
+.adm-tl-detail { display: block; font-size: 12px; line-height: 1.55; color: var(--ink-dim); margin-top: 2px; }
+
+.adm-tl-undated {
+  margin-top: 16px;
+  padding: 12px 13px;
+  border: 1px dashed var(--rule);
+  border-radius: 9px;
+}
+.adm-tl-undated > strong { display: block; font-size: 13px; color: var(--ink); margin-bottom: 4px; }
+.adm-tl-undated > p { font-size: 12px; line-height: 1.6; color: var(--ink-dim); margin: 0 0 8px; }
+.adm-tl-undated ul { list-style: none; margin: 0; padding: 0; }
+.adm-tl-undated li { font-size: 13px; line-height: 1.5; color: var(--ink); }
+.adm-tl-undated li + li { border-top: 1px solid var(--rule); margin-top: 6px; padding-top: 6px; }
+.adm-tl-undated .adm-tl-src { margin-right: 6px; }
+
+.adm-tl-sub { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--rule); }
+.adm-tl-sub > strong { display: block; font-size: 14px; color: var(--ink); margin-bottom: 4px; }
+.adm-tl-sub > p { font-size: 12.5px; line-height: 1.65; color: var(--ink-dim); margin: 0 0 10px; }
+
+@media (max-width: 760px) {
+  /* One column, and the date and source ride together above the sentence —
+     three narrow columns turned every row into four wrapped lines. */
+  .adm-tl-row { grid-template-columns: auto auto; row-gap: 2px; }
+  .adm-tl-what { grid-column: 1 / -1; }
+}
+
+/* ============================================================================
+   THE REP'S WORK PAGE — the answer box and the pipeline numbers
+   (src/components/admin/repBrief.jsx)
+
+   Aug 26 2026, for CJ giving the sales reps their own logins. Ryder asked for
+   "an overall work page that is like an overview of everything plus ai reports
+   and everything so you can effectively convert leads".
+
+   Written as classes rather than inline styles for one reason: the honesty
+   panels — the draft was thrown away, this was not filed, this read failed —
+   have to look the same every time they appear, and a style repeated inline in
+   five places is five styles that slowly stop matching. Everything positional
+   stays in the JSX with the rest of that file's layout.
+   ========================================================================== */
+
+/* ---- the collapsed strip ---- */
+.rb-strip {
+  width: 100%;
+  padding: 14px 18px;
+  cursor: pointer;
+  text-align: left;
+  border: 1px solid var(--rule);
+  background: white;
+  font-family: var(--body);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.rb-strip-icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+}
+.rb-strip-title { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.rb-strip-hint {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink-dim);
+  margin-top: 3px;
+  line-height: 1.5;
+}
+.rb-strip-open { font-size: 12.5px; font-weight: 700; color: var(--accent-deep); white-space: nowrap; }
+
+/* ---- the expanded panel ---- */
+.rb-panel { padding: 0; overflow: hidden; border: 1px solid var(--accent-deep); }
+.rb-panel-head {
+  padding: 15px 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+}
+.rb-panel-body { padding: 16px 18px; }
+
+.rb-preset {
+  text-align: left;
+  cursor: pointer;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: white;
+  border: 1px solid var(--rule);
+  font-family: var(--body);
+  max-width: 205px;
+}
+.rb-preset.active { background: var(--accent-soft); border: 1.5px solid var(--accent-deep); }
+.rb-preset-l { display: block; font-size: 12.5px; font-weight: 700; color: var(--ink); }
+.rb-preset-h { display: block; font-size: 11px; color: var(--ink-dim); margin-top: 2px; line-height: 1.4; }
+
+.rb-count { font-size: 11px; font-family: var(--mono); text-align: right; margin-top: 4px; }
+.rb-run {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.rb-run-note {
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  line-height: 1.6;
+  flex: 1 1 320px;
+  max-width: 560px;
+}
+
+/* ---- the answer ---- */
+.rb-answer { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.rb-asked { font-size: 11.5px; color: var(--ink-dim); line-height: 1.6; margin-bottom: 12px; }
+.rb-summary {
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: var(--bg-3);
+  margin-bottom: 14px;
+}
+.rb-summary .rb-p:last-child { margin-bottom: 0; }
+.rb-h { font-size: 13px; font-weight: 800; color: var(--ink); margin: 16px 0 6px; letter-spacing: -0.01em; }
+.rb-p { font-size: 13.5px; color: var(--ink-2); line-height: 1.7; margin: 0 0 10px; }
+.rb-ul { margin: 6px 0 10px; padding-left: 20px; }
+.rb-ul li { font-size: 13.5px; color: var(--ink-2); line-height: 1.65; margin-bottom: 3px; }
+
+/* THE HONESTY PANELS. A paragraph, never a chip.
+   A badge saying "numbers unchecked" is not a control, because the person who
+   forwards the answer is not the person who read the badge. So these are full
+   width, above the words, and they carry the reason in plain sentences. */
+.rb-note {
+  padding: 11px 13px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+.rb-note strong { font-weight: 800; }
+.rb-note-warn { background: #fffaeb; color: #b54708; }
+.rb-note-stop { background: #fef3f2; color: #b42318; }
+
+.rb-facts { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule); }
+.rb-fact-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.rb-fact { padding: 10px; border-radius: 8px; background: var(--bg-3); }
+.rb-fact-k { font-size: 10px; font-family: var(--mono); color: var(--ink-dim); letter-spacing: 0.05em; }
+.rb-fact-v { font-size: 17px; font-weight: 700; color: var(--ink); margin-top: 3px; }
+
+/* ---- the numbers ---- */
+.rb-claims {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.rb-claim { padding: 12px 13px; border-radius: 9px; border: 1px solid var(--rule); }
+.rb-claim-n { font-family: var(--display); font-size: 26px; font-weight: 700; line-height: 1.05; }
+.rb-claim-l { font-size: 12.5px; font-weight: 700; color: var(--ink); margin-top: 5px; }
+.rb-claim-w { font-size: 11px; color: var(--ink-dim); margin-top: 2px; line-height: 1.45; }
+.rb-addup { font-size: 11.5px; color: var(--ink-dim); line-height: 1.6; margin-top: 8px; }
+
+.rb-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 14px; }
+.rb-named { padding: 15px 16px; }
+.rb-named-row { padding: 8px 0; }
+.rb-named-row + .rb-named-row { border-top: 1px solid var(--line); }
+.rb-named-l { display: block; font-size: 13px; font-weight: 600; color: var(--ink); }
+.rb-named-w { display: block; font-size: 11.5px; margin-top: 2px; line-height: 1.5; }
+
+.rb-owed { padding: 15px 16px; margin-top: 14px; }
+.rb-owed-head { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.rb-owed-n { font-family: var(--display); font-size: 30px; font-weight: 700; line-height: 1.05; color: var(--ink); }
+.rb-owed-why { display: flex; gap: 8px; flex-wrap: wrap; flex: 1 1 260px; }
+.rb-owed-tag {
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--bg-3);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.rb-owed-foot { font-size: 11.5px; color: var(--ink-dim); line-height: 1.6; margin-top: 10px; }
+
+.rb-stages { padding: 15px 16px; margin-top: 14px; }
+.rb-stage { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+.rb-stage-l { flex: 0 0 140px; font-size: 12.5px; color: var(--ink); }
+.rb-stage-bar { flex: 1 1 auto; height: 8px; border-radius: 4px; background: var(--bg-3); overflow: hidden; }
+.rb-stage-bar > span { display: block; height: 100%; background: var(--accent-deep); }
+.rb-stage-n { flex: 0 0 28px; text-align: right; font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
+
+/* A COUNT NOBODY COULD READ. Never a zero, and it does not look like one:
+   a zero reads as "nothing there", which is a different claim from "the read
+   failed". Italic, dim, and it says so in the tooltip. */
+.rb-unknown { font-size: 12px; font-style: italic; color: var(--ink-dim); }
+
+@media (max-width: 760px) {
+  .rb-stage-l { flex: 0 0 110px; }
+  .rb-owed-n { font-size: 26px; }
+}
+
+/* ------------------------------------------------------------------ */
+/* The rep's Work panel — contrast fixes. Aug 26 2026.                 */
+/*                                                                     */
+/* Measured, not guessed. --ink-dim (#5a7290) on --bg-3 (#ecf2f8) is    */
+/* 4.39:1, and these four are set at 10-11.5px, so they were under the  */
+/* 4.5:1 floor everywhere they appear. The character counter was worse: */
+/* --ink-faint (#9eb1c7) on white is 2.19:1, and it turns red only once */
+/* you are OVER the cap — so the one number that tells you how much     */
+/* room is left was unreadable until it no longer mattered.             */
+/*                                                                     */
+/* Two new tokens rather than a change to --ink-dim, because that token */
+/* is used at larger sizes all over the console and this is the rep     */
+/* panel's problem. Appended as overrides on purpose: another agent is  */
+/* working further up this file today.                                  */
+/*                                                                     */
+/* Both stay the quietest text on the panel — #526985 is 5.01:1 on      */
+/* --bg-3 and #61748c is 4.79:1 on white, against --ink at 14:1 — so    */
+/* the hierarchy is unchanged, they are just legible.                   */
+:root {
+  --rb-quiet: #526985;
+  --rb-quieter: #61748c;
+}
+.rb-claim-w,
+.rb-fact-k,
+.rb-owed-foot,
+.rb-addup { color: var(--rb-quiet); }
+.rb-count { color: var(--rb-quieter); }

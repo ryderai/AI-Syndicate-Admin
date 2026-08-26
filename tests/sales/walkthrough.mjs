@@ -115,8 +115,14 @@ await must("the sidebar says Sales, not Leads", async () =>
   && (await page.locator("nav button", { hasText: /^Leads$/ }).count()) === 0);
 await must("the header names the page", () => has("Sales · the pipeline"));
 await must("the tiles are drawn", () => has("On the floor"));
-await must("the list is grouped by firm", () => has("Harborline Realty Group"));
-await must("a firm with two reps on it is called out", () => has("reps working this firm"));
+/* Rebuilt Aug 25 2026: the firm was a collapsible header row, and is now a
+   column on a flat row per person. Both checks below changed with it — the
+   "2 reps working this firm" banner moved into the Company cell's menu and is
+   covered in tests/sales-sheet/walkthrough.mjs. */
+await must("the sheet lists PEOPLE in rows, not firms with dropdowns", async () =>
+  (await page.locator("tr.adm-sh-row").count()) > 0
+  && (await page.locator(".adm-sl-firmtoggle").count()) === 0);
+await must("the firm is a column on the row", () => has("Harborline Realty Group"));
 
 /* ---- 2. the old address still works ---- */
 await page.goto(`http://localhost:${PORT}/#/dashboard/leads`, { waitUntil: "networkidle" });
@@ -154,9 +160,9 @@ await must("the board draws a column per stage", async () =>
   (await page.locator(".adm-board-col").count()) >= 8);
 
 /* ---- 6. the profile — the thing the sheet cannot be ---- */
-await page.locator(".adm-sl-views button", { hasText: "Lists" }).click();
+await page.locator(".adm-sl-views button", { hasText: "The sheet" }).click();
 await page.waitForTimeout(400);
-await page.locator("tr.adm-sl-row").first().click();
+await page.locator("tr.adm-sh-row").first().click();
 await page.waitForTimeout(600);
 await shot("profile-work");
 await must("the profile opens on Work", () => has("WHAT TO DO NEXT"));
@@ -188,9 +194,9 @@ await must("the cadence days are spelled out", () => has("Breakup email"));
 await page.keyboard.press("Escape");
 await page.locator(".adm-modal-x").first().click().catch(() => {});
 await page.waitForTimeout(400);
-await page.locator(".adm-sl-sel").nth(2).selectOption("floor").catch(() => {});
+await page.locator("[data-filter=\"owner\"]").selectOption("floor").catch(() => {});
 await page.waitForTimeout(500);
-await page.locator("tr.adm-sl-row").first().click();
+await page.locator("tr.adm-sh-row").first().click();
 await page.waitForTimeout(600);
 await shot("profile-unclaimed");
 const claimBtn = page.locator("button", { hasText: /^Claim this contact$/ }).first();
@@ -265,11 +271,11 @@ await must("and it says out loud that they are already here", () =>
   Promise.resolve(/skipped — already here/i.test(second.planText)));
 
 /* Did the import leave a first line on the timeline, as the screen promised? */
-await page.locator(".adm-sl-views button", { hasText: "Lists" }).click();
+await page.locator(".adm-sl-views button", { hasText: "The sheet" }).click();
 await page.waitForTimeout(400);
 await page.locator(".adm-sl-search").fill("Nora Vance");
 await page.waitForTimeout(500);
-await page.locator("tr.adm-sl-row").first().click();
+await page.locator("tr.adm-sh-row").first().click();
 await page.waitForTimeout(500);
 await page.locator(".adm-sl-tabs button", { hasText: "Timeline" }).click();
 await page.waitForTimeout(400);

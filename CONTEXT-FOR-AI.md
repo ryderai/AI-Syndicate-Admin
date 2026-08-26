@@ -4467,3 +4467,356 @@ refuses `rm`, `mv` AND `tar` on them.** The way through:
    `git show <sha>:<changed file> | grep -c "<the removed text>"`.
 
 The locks themselves survive all of this. **Ryder has to remove them in Cursor.**
+
+## §43. THE SHEET: rows of people, and one record from lead to paying client — Aug 25 2026 (append-only section)
+
+Built at Ryder's ask: *"i dont like how the business has a dropdown with the owner below, thats not
+needed, just make it rows of the people. you can take inspo from the google sheet that there using
+already … have everything connected and context saved to all people in our system from the time
+there created as a lead all the way to a paying client and beyond."*
+
+Built, lint clean, `vite build` clean at 145 modules, tested, driven in a real browser. **NOT
+deployed. Migration `0015_sales_lifecycle.sql` has not been run.**
+
+---
+
+### 43.1 What the Sales list looked like before, and why it changed
+
+Every firm was a collapsible header row with its people underneath it. It was built that way in §26
+to make "one firm, one rep" visible, and it did — at the cost of a screen you could not read ten
+people down, could not sort by anything, and had to open a firm to find out whether anybody was
+working it. It also looked nothing like the spreadsheet the sales team actually uses.
+
+It is now one row per person, in CJ's own column order:
+
+**Sales Owner · Contacted? · Sales Cycle Status · Claim · First Contact · Last Touch ·
+Next Steps/Notes · First Name · Last Name · Title · Company · Email · Site Score** — plus Phone,
+City, State, Website, List, Touches and Full Name switchable on from the Columns menu.
+
+The sheet's tabs are along the top (Everybody · Luxury Agents · Medspas · …). Cells edit where they
+sit, exactly like the Operations table. Click a column title to sort (three states: the useful way,
+the other way, off). The ▾ beside it filters and groups. **Grouping is a switch now, not the shape**
+— "Group by → Company" puts the firms back when you want them, and off again when you do not.
+
+### 43.2 The three columns that are deliberately NOT what the sheet has
+
+| Column | Why |
+|---|---|
+| **Contacted?** | In the sheet this is a second dropdown saying the same thing as Sales Cycle Status; reps fill one or the other and neither can be trusted. Here it is **counted** off logged touches and cannot be typed into. Three answers, not two: *Yes* · *Yes, older* (a first-contact date is on record but nothing inside the window) · *No*. |
+| **First Contact / Last Touch** | Read-only. A database trigger writes both from real logged calls and emails (0009), and they are what the 3-business-day and 14-day timers count. **A timer you can type over is a timer that never fires** — which is exactly what happened in the sheet. |
+| **Claim** | Does not exist in the sheet at all. It is the timer state in words: *Claim ran out · Gone cold · First contact due · Going cold · Being worked · On the floor*. |
+
+**The window is said out loud on screen.** `getSalesBoard` reads the last `ACTIVITY_WINDOW_DAYS`
+(90) of activity, so Contacted? and Touches are counted from a window and not from a lifetime. The
+first version said *"Nothing has ever been logged against this person"* from that 90-day count —
+false for anyone worked hard in the spring and quiet since, and contradicting that same person's own
+Timeline tab, which reads their whole history with no window at all.
+
+### 43.3 One firm, one rep — the rule the grouping used to carry
+
+Flattening the table would have deleted the loudest rule on the Rules of Engagement tab, so it moved
+onto the **Company cell**: a firm two reps are both working carries a ⚠, and clicking it names them
+and quotes the rule. It stops nobody — Ryder's call from Aug 21 stands — it just refuses to let it
+be a surprise.
+
+Two things about it that were bugs first:
+
+* It is counted across **every lead the page holds**, not the rows on screen. Filter to your own
+  leads and a contested firm would otherwise stop looking contested at exactly the moment you need
+  telling.
+* It filters on **open stages**. Without that, a firm where one rep's contact is Lost and another's
+  is live showed "2 reps are working this firm" on every row, while the drawer for the same firm —
+  which uses `companyClaimWarning` and does filter — showed no warning at all. Two parts of one page
+  giving opposite answers about the same thing is worse than either answer alone.
+
+### 43.4 WON NOW MEANS WON
+
+`admin_leads.became_customer` and `admin_companies.client_id` have existed since Aug 22 and **nothing
+ever wrote either of them.** Marking a deal Won put a green pill on a row and stopped; the delivery
+side then started a client record from scratch and the whole chase sat on the far side of a gap
+nothing crossed.
+
+`0015_sales_lifecycle.sql` adds **one function**, `admin_lead_to_client(lead, actor, stage)`, and
+every Won button in the console now goes through **one** browser path, `markLeadWon` in
+`src/lib/data.js`. There are four such buttons — the sheet's status cell, the drawer's status
+dropdown, the drawer's green "They signed" button, and setting a proposal to Won — and before the
+review pass, **one** of them created a client and the other three quietly did not. Worse: because the
+working one skipped anything already at stage Won, using any of the other three first made it a
+no-op for that lead **forever**.
+
+What the function does, and the rules it holds:
+
+1. **Locks the lead row (`FOR UPDATE`) and returns early if the work is already done.** Pressing Won
+   twice is an ordinary thing a person does, not an error.
+2. **The early return checks `client_id` AND `became_customer`.** Every contact at a firm is given a
+   `client_id` the moment one of them closes — that is the whole point — so a `client_id`-only check
+   means a firm can record exactly **one** sale, ever, and the rep who closes the second one watches
+   the button do nothing.
+3. **A lead with no firm row is deduped by name.** "+ Add a contact" stores the firm as free text and
+   sets no `company_id`, so two people typed in under one firm name and both marked Won produced
+   **two** clients with the same name, each holding half the history — deterministically, no race
+   needed. There is now an advisory lock on the name key and a name+website search before any insert.
+4. **A missing website does not block that match; two different websites do.** The sheet's Company
+   column carries no website, so one contact at a firm having one and the next not is the ordinary
+   case. Demanding both sides agree produced exactly the duplicate in rule 3.
+5. **It never invents a name.** No firm name and no person name → it raises, rather than filing a
+   client called "Unknown".
+6. **It never overwrites what a person typed.** Linking to a client somebody set up by hand fills in
+   only the blanks.
+7. **Every other contact at the firm is attached to the client**, and each gets a line on their own
+   timeline — but `became_customer` is **not** set on them. Whose deal it was and who works there are
+   different facts, and flattening them counts one sale four times on the rep scoreboard.
+8. **It returns JSONB**, not a bare id: `{client_id, created, already_customer, siblings}`. Returning
+   only an id made the page toast *"they are now a client"* every single time, including the times
+   when nothing at all was created.
+
+### 43.5 One timeline per person, for life
+
+`lib/person-timeline.js` merges the sales activity, proposals, finished tasks, weekly logs, reports,
+invoices, payments and support tickets into **one** append-only list, with a ★ marking the day they
+started paying. Five rules, all of which were defects first:
+
+1. **Nothing is invented.** A row whose date cannot be read is dropped and **counted**, never filed
+   under today. A row with no date at all (a proposal nobody opened) is a non-event and is skipped
+   silently — the two are different and are counted differently.
+2. **Every line carries its source** — the table it came out of, in words: *"from the sales
+   timeline"*, *"from invoices"*.
+3. **Logged / system / theirs never blend.** A proposal THEY opened is marked as theirs, not as
+   "someone" on our team.
+4. **An unread source is not a zero.** `null` means not read, `[]` means read and empty, and the
+   summary names every source in the first group. **The summary prints even when the list is empty**
+   — that is the one place "nothing happened" and "we could not look" are hardest to tell apart.
+5. **Every cap says so**, with its number: the 400-entry timeline cap, and the reader limits on
+   invoices (1000), tickets (500), reports (**25** — about six months of weeklies) and tasks (500).
+
+### 43.6 The client page can see the chase
+
+A new **"How they started"** tab on every client page lists every person we hold at that firm, who
+worked them, when they were first contacted, and a ★ on whoever closed a deal. Each row links
+straight into that person's whole timeline (`#/dashboard/sales?lead=<id>`).
+
+It says *"N people on record at this firm"*, **not** "came through the sales pipeline": the list
+includes contacts added by hand and contacts nobody ever worked, and the pipeline wording counted
+three dead rows as three sales conversations.
+
+### 43.7 A shared bug this uncovered, which was NOT ours
+
+`opsCells.jsx`'s `Popover` closed on any scroll. Clicking a cell that is not fully in view makes the
+browser scroll the table sideways to show it, and that queued scroll arrived after the popover had
+mounted — **closing it in the same instant it opened**. On the Sales sheet, which is wide enough that
+half the columns are off screen, the Company and Status menus could not be opened at all: the cell
+took focus and nothing happened. **Operations has the same table and the same bug**, quieter only
+because its columns are narrower.
+
+The listener is now armed one animation frame plus one tick after mount, so the opening scroll is
+skipped and a real scroll still closes it. Both timers are cancelled on cleanup — the first fix
+cancelled the frame and not the `setTimeout` inside it, which leaked an armed listener that then shut
+the *next* popover, one leak per occurrence. Driven in a browser: 10 open/close cycles on Operations,
+0 failed opens, and a real scroll still closes it.
+
+### 43.8 The files
+
+| Piece | Where |
+|---|---|
+| Columns, sort, filters, grouping, the firm warning, dates | `src/lib/salesSheet.js` (new, pure) |
+| The table itself | `src/components/admin/salesSheet.jsx` (new) |
+| The lifetime timeline | `lib/person-timeline.js` (new, pure) |
+| Won → client, in SQL | `supabase/migrations/0015_sales_lifecycle.sql` (new) |
+| `convertLeadToClient` · `listClientContacts` · `markLeadWon` · `wonMessage` · `ACTIVITY_WINDOW_DAYS` | end of `src/lib/data.js` |
+| The page: handlers, list tabs, `?lead=` deep link | `src/components/admin/SalesPage.jsx` |
+| The drawer's one Won path, the merged Timeline tab | `src/components/admin/salesProfile.jsx` |
+| "How they started" | `src/components/admin/clientPage.jsx` + one tab in `Operations.jsx` |
+| The Popover fix | `src/components/admin/opsCells.jsx` |
+| Tests | `bash tests/sales-sheet/run.sh` · `node tests/sales-sheet/walkthrough.mjs` |
+
+`lib/assistant-tools.js` changed too: its set-stage tool used to write `became_customer = true`
+directly, producing a lead flagged as a customer with no client behind it — a state that then made
+every Won button refuse to act, saying *"already a client"* about a client that did not exist. It
+sets the stage and says out loud that no client record was created.
+
+### 43.9 Proof on record (Aug 25 2026)
+
+`npx eslint .` **0 problems** · `npm run build` clean, **145 modules** · `tests/sales-sheet/test.mjs`
+**137/137 in five timezones** · `tests/sales-sheet/sql.sh` **all checks passed against a real
+Postgres 16**, every migration applied in order and 0015 re-run three times · every other suite
+unchanged: sales 84+20, ops 18, brain 78, inbox 47, finance 53, vault 106+36, overview 44×5tz,
+console-report 46×2tz, connectors 165×5tz, share 48 · `tests/sales-sheet/walkthrough.mjs` drives the
+**built bundle** through 15 screenshots with no console errors · `tests/sales/walkthrough.mjs`
+(§26's) updated and passing · Operations driven separately: 12 rows, cell menus open, real scroll
+still closes them, 10 cycles with 0 failures, no leak.
+
+**Two separate adversarial review agents, then a third run only on the fixes.** The first pair found
+33 defects; the third found 9 more, **five of them introduced by the fixes**, including the
+`became_customer`-only guard, the too-strict domain rule, and the leaked scroll listener. All
+material findings are fixed and covered by a test.
+
+**Three assertions were proved by MUTATION**, because a reviewer showed one of them passed with the
+code it covered deleted: the null-clock ordering branch, the drawer's Won path, and the
+`contestedCompanies` stage filter. Each now fails when its code is broken. A test that keeps passing
+while the feature is broken is worse than no test.
+
+### 43.10 Blocked until
+
+1. **Run `0015_sales_lifecycle.sql`** in the Supabase SQL editor. Until then, marking Won moves the
+   stage and says in plain words that the client link did not happen. (0015 needs 0009; it is
+   independent of 0010–0014 and can go before or after any of them.)
+2. **Deploy.** None of this has run on admin.aisyndicate.com.
+3. Import the real sheet: Sales → Import a sheet.
+
+### 43.11 Known gaps, written down rather than hidden
+
+* **The 90-day window is a window.** Contacted? and Touches say so on screen, and the profile's
+  Timeline reads the whole history — but a rep skimming the table is still reading 90 days.
+* **A guessed name split is not undone.** Where a lead arrived with one `name`, First and Last are
+  split from it (first word, then the rest) and marked as a guess on hover. Editing either half
+  stores both and **leaves `name` alone**, so the original is never destroyed by a bad guess — which
+  means the halves and the full name can disagree until somebody fixes one. The **Full Name** column
+  (Columns menu) and the drawer's Details tab both edit `name` directly.
+* **A same-named firm with no website on either side folds into an existing client.** Deliberate:
+  splitting one client into two records with half the history each is commoner and more damaging
+  than merging two genuinely different firms that share a normalised name and have no website
+  between them. Pinned by a test that says so.
+* **`api/sales-sweep.js` is still not scheduled** (it is not in `vercel.json`'s crons), so nothing
+  actually hands a stale claim back. The health line now says claims are *due* to go back to the
+  floor rather than that they *will*.
+* **Direction is still not stored on activity**, so an inbound email logged by hand counts as a touch
+  exactly as an outbound one does. Unchanged from §26.
+
+## §44. Importing the sheet without touching it, and starting over — Aug 26 2026 (append-only section)
+
+Ryder: *"i want to integrate our current google sheet but i cant have our current sheet broken or
+anything happen to it, and when we migrate over i want to do a fresh list so that nothing is
+hindered."* Then, when asked what "fresh" meant: *"i meant when i import it i cant have the real
+google sheet messed up at all, then when we actually start using the admin then i want to delete all
+that data and import the list fresh again so that everything is up to date."*
+
+Built, tested, driven in a browser. **NOT deployed. Migration `0016` NOT run.**
+
+---
+
+### 44.1 The first half was already true, and is worth saying out loud
+
+**There is no code path from this console to Google Sheets.** The importer reads a file the person
+downloaded; nothing here has ever written a cell back, and nothing here knows how. So the sheet
+cannot be harmed by an import, a bad mapping, or a clear-out. That sentence is now printed on the
+Start-over screen itself, because that is where somebody about to press Delete will read it.
+
+### 44.2 What is actually in CJ's sheet, read Aug 25 2026 (read-only, via Drive)
+
+8 list tabs plus Rules of Engagement. Every tab carries the same six human columns then a different
+Apollo block, exactly as `lib/sales-import.js` already expects. **451 rows in what Drive's export
+returned; 153 carry a Sales Owner and 89 a Sales Cycle Status.** Owners as typed: `Larry Pike` 56 ·
+`Brandon R` 51 · `Brandon Roberts` 31 · `Troy` 7 · `Matt Brown` 6 · `Sawyer` 1 · `Andrew` 1 —
+"Brandon R" and "Brandon Roberts" are one person split across 82 rows.
+
+Two honest limits on those numbers: the export showed the last two tabs empty, which may be a
+truncated export rather than a real total, so **the count to trust is the one the import screen
+reports off the downloaded file**; and the Rules tab now instructs reps to fill a **Date Claimed**
+and a **Site Score** column, **neither of which exists on any tab**.
+
+### 44.3 An import is a thing that happened
+
+`admin_import_batches`, one row per press of Import, plus `import_batch_id` on leads, firms and
+lists. A list is not the same thing as an import run — a list can be imported into twice and added
+to by hand — so "undo that import" needed something of its own to aim at. The batch row is opened
+BEFORE the first write, so a run that dies half way still leaves something clearable, and it is
+**never deleted**, only marked cleared: "we imported 451 rows on Aug 25 and cleared them on Sep 2"
+is worth keeping long after the rows are gone.
+
+**Without 0016 the import still works.** The batch insert fails, `batchId` stays null, and the
+`import_batch_id` spread adds nothing — which matters, because that column reaching `.insert()` on a
+database that lacks it would fail the whole import. The safety of that rests on the table and the
+columns shipping together, and `tests/start-over/sql.sh` pins exactly that.
+
+### 44.4 `admin_clear_import` — the only bulk delete in this console
+
+Scope is exactly ONE of a batch, a list, or everything imported; none or two raises. **What it will
+never delete, whatever it is asked:** a contact linked to a client OR flagged `became_customer`; one
+carrying a proposal past draft; one added by hand; one with any timeline row the import did not write
+itself; a firm that is a client, still has people, or was built by hand; a list that still holds
+somebody. Every refusal is **counted and named in plain words** and shown on the screen — "we kept
+12" and "nothing happened" look identical otherwise.
+
+`p_expect_leads` is the count the person was shown. The real run refuses if the answer has changed
+since the preview.
+
+### 44.5 What the review pass changed, and it was most of it
+
+Three separate adversarial agents ran. The findings that mattered:
+
+1. **A "dry run" could drop a real table in `public`.** `search_path` was `public`, so on the first
+   call in a session `drop table if exists _clear_candidates` resolved to `public._clear_candidates`
+   and dropped it — as the definer, with the NOTICE suppressed — on a file whose header says it is
+   safe to run on the shared project. Five names were exposed. Now schema-qualified to `pg_temp`.
+2. **The "somebody has worked them" guard was close to theatre.** It listed call/email/text/
+   linkedin/note. Claiming a lead writes `claim`; moving it to Meeting writes `status_change`, and
+   the body of that row is where a rep types "booked Thursday 2pm, they want the GEO package".
+   Neither was on the list, so that lead was deleted while the dialog said it was keeping nothing.
+   The rule is now: **anything the import did not write itself.** The import writes exactly one row,
+   of type `import`.
+3. **A confirmed, human-typed memory was destroyed silently.** `admin_brain_memory.lead_id` was
+   `on delete cascade` — and the comment in this file claimed it was `set null` "by design". The two
+   that really were `set null` were the two nobody had checked. 0016 changes the constraint.
+4. **The preview and the delete are two transactions**, so the promise that they cannot disagree was
+   false; a reviewer showed the button saying "Delete 1" while four went. `p_expect_leads` closes it.
+5. **A firm built by hand was deleted** when an import's contacts were cleared out of it — inside the
+   stated guarantee, which was the problem: the guarantee was narrower than the work it destroyed.
+   Only firms carrying a batch id are removed now; the rest are left standing and **counted**, so the
+   screen can say so.
+6. **Preview mode had none of the SQL's refusals.** `clearImport({ dryRun: false })` with no
+   arguments deleted every imported lead in the store, and a rep could run it. Both fixed, and the
+   preview writes its own activity-log line — the property the browser suite demonstrates was
+   missing from the path the browser suite exercises.
+
+### 44.6 Six SQL guards and three JS ones were provably untestable
+
+A reviewer deleted each and watched 44/44 stay green. The fixture now carries a firm that is a
+client while none of its contacts is flagged; a lead with `became_customer` and no `client_id`; a
+firm built by hand; a claimed lead at Meeting stage with the booking on its stage change; and a
+typed memory. **All six SQL mutants and the JS ones are now caught.**
+
+The worst of them was not in the code at all: **the fixture itself was failing half way and nobody
+noticed.** `admin_brain_memory` has a unique dedupe constraint, so the second `seed()` errored on
+the memory insert and — one heredoc, `ON_ERROR_STOP` — everything after it silently never ran.
+Section 4 was asserting against a fixture with no proposals, no activity and no client wiring.
+`seed()` now fails loudly and counts its own rows before any assertion runs.
+
+### 44.7 The files
+
+| Piece | Where |
+|---|---|
+| Batches, the clear function, the guards | `supabase/migrations/0016_import_batches_and_start_over.sql` |
+| `listImportBatches` · `startImportBatch` · `finishImportBatch` · `clearImport` | end of `src/lib/data.js` |
+| The panel and the confirm dialog | `src/components/admin/salesStartOver.jsx` |
+| Opening and stamping the batch | `src/components/admin/salesImport.jsx` |
+| The Start over button | `src/components/admin/SalesPage.jsx` |
+| Tests | `bash tests/start-over/run.sh` · `node tests/start-over/walkthrough.mjs` |
+
+### 44.8 Proof on record (Aug 26 2026)
+
+`npx eslint .` 0 problems · `npm run build` clean · `tests/start-over/sql.sh` **59 checks against a
+real Postgres 16**, every migration in order and 0016 re-run · `tests/start-over/walkthrough.mjs`
+drives the **built bundle** through import → clear → import again, 8 screenshots, no console errors,
+and checks the paying client and the hand-typed contact survived **by counting rows on the page** ·
+every other suite unchanged.
+
+### 44.9 Blocked until, and how to use it
+
+1. **Run `0016`.** Clicks in `SETUP.md` → "Migration 0016". Until then the Start-over screen says in
+   plain words that nothing can be cleared, and imports still work but are not undoable.
+2. **To test the import today with nothing saved anywhere:** open the console in sample mode (the
+   orange SAMPLE badge). The importer writes to memory and forgets it on reload.
+3. **On go-live day:** Sales → Start over → *Clear everything imported*, then download a fresh copy
+   of the sheet and import it again.
+
+### 44.10 Known gaps, written down rather than hidden
+
+* **There is no rep-name mapping screen.** Ryder's call, Aug 26: *"skip building them in there until
+  the admin is live."* Until it exists, the 153 claims in the sheet come in **unclaimed** unless
+  those reps already have console logins — the typed name is kept on every row either way.
+* **Clearing by LIST is not on the screen**, only by batch and everything-imported. The function
+  takes a list and it is tested; nothing calls it yet.
+* **A firm left standing with nobody at it is counted, not offered.** Removing it is a separate act
+  on the Firms view.
+* **The preview mirror in `clearImport` is a second copy of the rules.** It matches today and is
+  tested to match; two copies of a rule is still two copies.

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useAuth } from "../lib/auth.js";
 import { useRoute, stampRoute } from "../lib/router.js";
 import { isConfigured, signInDisabled } from "../lib/supabase.js";
+import { usePreviewAccount, previewMember } from "../lib/previewAccounts.js";
 import Sidebar, { pageIdsForRole } from "./admin/Sidebar.jsx";
 import Header from "./admin/Header.jsx";
 import { Toaster } from "./admin/shared.jsx";
@@ -22,22 +23,32 @@ import VaultPage from "./admin/VaultPage.jsx";
 import TeamPage from "./admin/TeamPage.jsx";
 import SettingsPage from "./admin/SettingsPage.jsx";
 
-const PREVIEW_MEMBER = {
-  user_id: "preview-user",
-  email: "preview@aisyndicate.com",
-  full_name: "Preview Admin",
-  role: "owner",
-};
-
+/* The old hard-coded PREVIEW_MEMBER is gone. Aug 26 2026: preview mode asks
+ * which account you want at the door instead of always making you an owner, so
+ * the sales role can be tested for real.
+ *
+ * There is deliberately NO fallback member. The first version of this used
+ * `previewMember(preview) || {}` and called it crash-proofing; a checker showed
+ * it was the opposite. A member with no role FAILS OPEN in three places:
+ * `sectionsForRole(undefined)` returns no menu but the page still renders,
+ * `getMyWork(null)` treats every task in the system as yours, and SalesPage
+ * reads `role !== "sales"` and hands out the admin controls. So a missing
+ * member renders NOTHING instead. AuthGate never lets that happen anyway — this
+ * is the guard for whoever wires up a second caller later. */
 export default function AdminDashboard({ go }) {
   const { user, membership, configured } = useAuth();
+  const preview = usePreviewAccount();
   const member = configured
     ? { ...membership, user_id: membership?.user_id || user?.id }
-    : PREVIEW_MEMBER;
+    : previewMember(preview);
 
   /* Child pages count too — Finance drops down to Invoices, and a page id that
    * is not in this list behaves exactly like a page that does not exist. */
-  const allowedIds = pageIdsForRole(member.role);
+  /* `member` can only be null on the impossible path described above, and the
+   * guard for it is the early return further down — after every hook, because a
+   * hook that runs on one render and not the next breaks React. Until then, keep
+   * this null-safe: no member means no allowed pages. */
+  const allowedIds = member ? pageIdsForRole(member.role) : [];
 
   /* ---------------------------------------------------------------- */
   /* Which page you are on lives in the ADDRESS, not in memory.        */
@@ -73,8 +84,24 @@ export default function AdminDashboard({ go }) {
    * unknown page id falls back to the landing page — so the link would not
    * break loudly, it would quietly take you somewhere else. */
   const RENAMED = { leads: "sales", customers: "clients" };
+  /* A SPLIT IS NOT A RENAME. Both sides are live pages; which one you get
+   * depends on your job. Aug 26 2026 (Ryder): a rep no longer has the one
+   * Sales page, they have two locked halves of it — `leads`, the floor, and
+   * `mine`. So a link that says `sales` — CJ pasting one, an old bookmark, a
+   * URL typed by hand — has to put a rep on the floor. Without this line it
+   * falls through to the landing page, which is the quiet kind of broken link
+   * the notes above are about.
+   *
+   * Read ONLY when the role cannot open the page that was named, so an owner
+   * never reaches it and their addresses behave exactly as they did before.
+   * That is also what untangles the old `leads` name: the rename above still
+   * sends everybody's `#/dashboard/leads` to Sales, and for a rep the split
+   * then hands it on to the page a rep actually has, which is called `leads`
+   * again. One hop each way, and neither role sees the other's. */
+  const SPLIT_FOR_ROLE = { sales: "leads" };
   const rawPage = urlPath.split("/")[0];
-  const fromUrl = RENAMED[rawPage] || rawPage;
+  const named = RENAMED[rawPage] || rawPage;
+  const fromUrl = allowedIds.includes(named) ? named : (SPLIT_FOR_ROLE[named] || named);
   const query = urlQuery ? `?${urlQuery}` : "";
   // `|| "work"` is the last resort: a role nobody has taught this file about
   // would otherwise leave the page id blank, and a blank page id shows one
@@ -103,6 +130,10 @@ export default function AdminDashboard({ go }) {
     return () => { document.body.style.background = prev; };
   }, []);
 
+  /* No member, nothing rendered. See the note at the top of this component for
+   * why an empty member is more dangerous than none. */
+  if (!member) return null;
+
   const renderSection = () => {
     switch (section) {
       case "work": return <WorkPage member={member} />;
@@ -114,6 +145,14 @@ export default function AdminDashboard({ go }) {
        * swallow both. */
       case "clients": return <ClientsPage member={member} query={query} />;
       case "sales": return <SalesPage member={member} />;
+      /* THE SAME COMPONENT, TWICE, LOCKED TWO DIFFERENT WAYS.
+       * `mode` is the whole difference between a rep's two pages and the
+       * owner's one: floor = the sheet locked to leads nobody has claimed,
+       * mine = the sheet locked to this rep's own. No mode means the page the
+       * owner has always had. A second copy of SalesPage is the one thing
+       * this must never become — see the note at the top of SalesPage.jsx. */
+      case "leads": return <SalesPage member={member} mode="floor" />;
+      case "mine": return <SalesPage member={member} mode="mine" />;
       case "operations": return <Operations member={member} />;
       case "inbox": return <Inbox member={member} />;
       case "tickets": return <Tickets member={member} />;
@@ -131,7 +170,11 @@ export default function AdminDashboard({ go }) {
     <div className="dash">
       <Sidebar section={section} setSection={setSection} member={member} go={go} />
       <main className="dash-main">
-        {signInDisabled() && (
+        {/* Aug 26 2026: gated on !isConfigured(), not on the switch alone. Preview
+            mode also happens when the Supabase keys are simply missing — a fresh
+            clone, or a deploy with no env set — and that state used to get the
+            account picker and then a console with no warning on it at all. */}
+        {!isConfigured() && (
           <div
             role="status"
             style={{
@@ -142,12 +185,17 @@ export default function AdminDashboard({ go }) {
             }}
           >
             <strong style={{ fontFamily: "var(--mono)", fontSize: 10, fontWeight: 800, letterSpacing: "0.12em" }}>
-              SIGN-IN IS OFF
+              {signInDisabled() ? "SIGN-IN IS OFF" : "NO KEYS — SAMPLE DATA"}
             </strong>
             <span>
               Anyone who can open this address can see this console. Everything below is sample
-              data — nothing real is saved. Set <code style={{ fontFamily: "var(--mono)" }}>VITE_NO_SIGNIN=false</code> to
-              put the login back.
+              data — nothing real is saved. You are in as{" "}
+              <strong>{member.full_name || "nobody"}</strong>{" "}
+              ({String(member.role || "no role")}) — use the sign-out arrow at the bottom of the
+              sidebar to come back and pick a different account.{" "}
+              {signInDisabled()
+                ? <>Set <code style={{ fontFamily: "var(--mono)" }}>VITE_NO_SIGNIN=false</code> to put the real login back.</>
+                : <>The Supabase keys are not set, which is why there is no login — SETUP.md wires them up.</>}
             </span>
           </div>
         )}

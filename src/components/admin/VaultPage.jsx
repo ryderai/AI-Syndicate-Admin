@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { SectionHeader, EmptyState, SourceBadge, useHealth } from "./shared.jsx";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { SectionHeader, EmptyState, SourceBadge, FilterTabs, useHealth } from "./shared.jsx";
 import { toast } from "../../lib/toast.js";
 import { isConfigured } from "../../lib/supabase.js";
 import { listClients } from "../../lib/data.js";
@@ -18,6 +18,10 @@ import {
  * question people actually arrive with ("what do we have for Shiner?"), and it
  * is the same order the platform login cards use.
  *
+ * Aug 26 2026 — Ryder asked for a row of tabs above those blocks. He was
+ * scrolling past everybody else's block to reach one client. The tabs pick one
+ * group; the search and the kind buttons still narrow whatever the tab shows.
+ *
  * Sales cannot open this page. That is enforced three times over, and all three
  * matter: the sidebar does not list it (Sidebar.jsx), the dashboard will not
  * route to it (AdminDashboard.jsx reads pageIdsForRole), the database refuses
@@ -33,6 +37,11 @@ function nowYm() {
 export default function VaultPage() {
   const vault = useVaultItems(null);
   const [clients, setClients] = useState([]);
+  /* Did the client list actually come back? A read that failed hands us
+   * { rows: [], error }, which looks exactly like "nobody is on the books".
+   * Without this flag every client tab claimed its client had been deleted when
+   * the truth was that we could not read the roster at all. Aug 26 2026. */
+  const [clientsRead, setClientsRead] = useState(false);
   const [q, setQ] = useState("");
   const [kind, setKind] = useState("all");
   const [who, setWho] = useState("all");        // all | ours | <client id>
@@ -45,13 +54,31 @@ export default function VaultPage() {
 
   useEffect(() => {
     let alive = true;
-    listClients().then((r) => { if (alive) setClients(r.rows || []); });
+    listClients()
+      .then((r) => {
+        if (!alive) return;
+        setClients(r.rows || []);
+        /* Only a read with no error tells us who is on the books. */
+        if (!r.error) setClientsRead(true);
+      })
+      .catch(() => { /* leave clientsRead false — we still do not know. */ });
     return () => { alive = false; };
   }, []);
 
   const clientNameById = useMemo(
     () => Object.fromEntries(clients.map((c) => [c.id, c.name])),
     [clients]
+  );
+
+  /* What to call a group when its client id is not in the roster. Saying "no
+   * longer in the list" is a claim about the roster, so we may only make it
+   * once we have read the roster. Before that — the first paint, or a read that
+   * failed — "A client" is all we honestly know, and it is true either way.
+   * Aug 26 2026. */
+  const nameForClient = useCallback(
+    (id) => clientNameById[id]
+      || (clientsRead ? "A client that is no longer in the list" : "A client"),
+    [clientNameById, clientsRead]
   );
 
   const filtered = useMemo(() => {
@@ -75,13 +102,59 @@ export default function VaultPage() {
       byClient.get(r.client_id).push(r);
     }
     const clientGroups = [...byClient.entries()]
-      .map(([id, rows]) => ({ id, name: clientNameById[id] || "A client that is no longer in the list", rows }))
+      .map(([id, rows]) => ({ id, name: nameForClient(id), rows }))
       .sort((a, b) => a.name.localeCompare(b.name));
     return [
       ...(ours.length ? [{ id: "ours", name: "Ours — AI Syndicate", rows: ours }] : []),
       ...clientGroups,
     ];
-  }, [filtered, clientNameById]);
+  }, [filtered, nameForClient]);
+
+  /* The tabs above the groups. Two rules keep them from misbehaving:
+   *
+   * 1. The list of tabs and their counts are worked out BEFORE the search and
+   *    the kind buttons are applied. So a count never changes when you press
+   *    the tab it is on, and the tab you have selected cannot disappear from
+   *    under your finger while you type in the search box.
+   * 2. A group with nothing in it gets no tab. A tab you can press that leads
+   *    to an empty screen is worse than no tab at all.
+   * 3. ONE exception to rule 2: the group you have selected keeps its tab even
+   *    when its count falls to 0, and shows that 0. Aug 26 2026.
+   *    Why: `who` is the filter on the list below, and it is its own piece of
+   *    state. Tick "Show retired items", pick a client whose only items are
+   *    retired, untick it again — that client's count is now 0. If its tab
+   *    left the row, no tab would look pressed while the list below was still
+   *    showing only that client. The row and the list would be telling you two
+   *    different things. Same story when the last item in a group is deleted.
+   *    The other way to fix it is to snap `who` back to Everybody, but that
+   *    moves the user's choice for them and they have to notice it happened.
+   *    Keeping the tab with a 0 on it explains itself: you can see the group
+   *    is empty, and Everybody is one press away.
+   *
+   * The "Show retired items" tick is the one filter the counts do follow: it
+   * changes what the vault holds rather than searching what it holds, so the
+   * numbers here should agree with it. */
+  const groupTabs = useMemo(() => {
+    const base = showRetired ? vault.rows : vault.rows.filter((r) => r.active !== false);
+    const oursN = base.filter((r) => !r.client_id).length;
+    const byClient = new Map();
+    for (const r of base) {
+      if (!r.client_id) continue;
+      byClient.set(r.client_id, (byClient.get(r.client_id) || 0) + 1);
+    }
+    // Rule 3: hold the selected group's tab open at a count of 0.
+    if (who !== "all" && who !== "ours" && !byClient.has(who)) byClient.set(who, 0);
+    const clientTabs = [...byClient.entries()]
+      .map(([id, count]) => ({ id, label: nameForClient(id), count }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return [
+      ...(oursN || who === "ours" ? [{ id: "ours", label: "Ours", count: oursN }] : []),
+      ...clientTabs,
+    ];
+  }, [vault.rows, showRetired, nameForClient, who]);
+
+  /* "Everybody" counts every item behind the tabs, so the row adds up. */
+  const tabTotal = groupTabs.reduce((n, t) => n + t.count, 0);
 
   const ym = nowYm();
   const stats = useMemo(() => {
@@ -130,6 +203,26 @@ export default function VaultPage() {
    * first press. */
   const keyMissing = health && !health.preview && health.vault === false;
   const keyUnknown = health && !health.preview && Boolean(health.error);
+
+  /* What the page says when it comes up blank. A tab and a search can empty the
+   * screen between them, so the words have to name the tab that is selected —
+   * a blank vault page with no explanation on it reads as "the vault is
+   * broken" rather than "nothing matched". Aug 26 2026, Ryder's ask. */
+  const narrowed = Boolean(q) || kind !== "all" || who !== "all";
+  const selectedTab = who === "all" ? null : groupTabs.find((t) => t.id === who);
+  let emptyBody;
+  if (!narrowed) {
+    emptyBody = "Start with the logins you look up most: the domain registrar, the hosting, the card the subscriptions are on. The name and username stay readable; the password is scrambled and only shows when somebody presses Reveal.";
+  } else if (selectedTab && selectedTab.count === 0) {
+    /* The tab is still in the row — rule 3 on groupTabs — but there is nothing
+     * behind it any more: the last item was deleted, or the retired tick hid
+     * it. Nothing to do with the search, so do not blame the search. */
+    emptyBody = `${selectedTab.label} has nothing left in it. Press Everybody to see the rest of the vault.`;
+  } else if (selectedTab) {
+    emptyBody = `${selectedTab.label} is the tab you have selected. It holds ${selectedTab.count} ${selectedTab.count === 1 ? "item" : "items"}, and none of them match the search or the kind you asked for. Clear those, or press Everybody to look across every group.`;
+  } else {
+    emptyBody = "Clear the search or the filters to see everything.";
+  }
 
   return (
     <div>
@@ -198,18 +291,26 @@ export default function VaultPage() {
             <FilterBtn key={k} on={kind === k} onClick={() => setKind(k)}>{VAULT_KIND_LABELS[k]}</FilterBtn>
           ))}
         </div>
-        <div className="adm-vault-filters">
-          <FilterBtn on={who === "all"} onClick={() => setWho("all")}>Everyone</FilterBtn>
-          <FilterBtn on={who === "ours"} onClick={() => setWho("ours")}>Ours</FilterBtn>
-          {clients.map((c) => (
-            <FilterBtn key={c.id} on={who === c.id} onClick={() => setWho(c.id)}>{c.name}</FilterBtn>
-          ))}
-        </div>
         <label className="adm-inbox-check" style={{ margin: 0 }}>
           <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
           Show retired items
         </label>
       </div>
+
+      {/* ---- pick one group ---- */}
+      {/* Nothing to pick between when the vault is empty, so the row stays away
+        * rather than showing a lone "Everybody 0". */}
+      {groupTabs.length > 0 && (
+        <FilterTabs
+          tabs={groupTabs}
+          value={who}
+          onChange={setWho}
+          ariaLabel="Vault groups"
+          allId="all"
+          allLabel="Everybody"
+          allCount={tabTotal}
+        />
+      )}
 
       {/* ---- the list ---- */}
       {vault.loading ? (
@@ -217,10 +318,8 @@ export default function VaultPage() {
       ) : groups.length === 0 ? (
         <EmptyState
           icon="&#128274;"
-          title={q || kind !== "all" || who !== "all" ? "Nothing matches that" : "The vault is empty"}
-          body={q || kind !== "all" || who !== "all"
-            ? "Clear the search or the filters to see everything."
-            : "Start with the logins you look up most: the domain registrar, the hosting, the card the subscriptions are on. The name and username stay readable; the password is scrambled and only shows when somebody presses Reveal."}
+          title={narrowed ? "Nothing matches that" : "The vault is empty"}
+          body={emptyBody}
           action={<button className="btn btn-accent" onClick={() => setModal({})}>Add the first one</button>}
         />
       ) : (

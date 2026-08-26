@@ -988,3 +988,99 @@ second answer next to the report it produced.
 saves — it just does not record how you asked it to read, and a line on screen says so. That is
 deliberate: a report you cannot generate is a much worse outcome than a report whose shape was not
 written down.
+
+## Migration 0015 — one record, from lead to paying client
+
+**What it is for.** Marking a deal **Won** used to put a green pill on a row and do nothing else.
+This is the file that makes Won create the client record, link the firm, and attach every other
+person we hold at that firm to it — so the calls and emails from the chase stay on the record after
+they start paying.
+
+**Until you run this, marking Won moves the stage and says in plain words that the client link did
+not happen. Nothing is silently lost.**
+
+It needs `0009_sales.sql` to have run first. It does **not** care about 0010–0014; run it before or
+after any of them.
+
+1. Open **supabase.com** and sign in.
+2. Click the AI Syndicate project.
+3. In the left sidebar, click **SQL Editor**.
+4. Click **New query** (top right).
+5. On your computer, open `ai-syndicate-admin/supabase/migrations/0015_sales_lifecycle.sql`.
+6. Select all of it (**Cmd + A**), copy it (**Cmd + C**).
+7. Click into the big empty box in the SQL Editor and paste (**Cmd + V**).
+8. Click the green **Run** button (bottom right).
+9. You should see **Success. No rows returned.** If you see red text, copy it and stop — do not run
+   it twice trying to fix it.
+
+**It is safe to run twice.** Every statement is guarded, and the one function it creates returns the
+same client on a second call instead of making another.
+
+**What it changes to data you already have** (all of it additive, none of it destructive):
+
+- Fills in **First Name** and **Last Name** on every contact by splitting the name we already hold —
+  first word, then the rest. The full name is **left exactly as it was**, so a wrong split is
+  visible and fixable, never destructive.
+- Joins any firm whose **name and website both match** a client you already have, and points that
+  client back at the firm. A firm with no website, or a name that does not match, is left alone for a
+  person to join by hand.
+- Marks every client that existed before today as **typed in by hand**, so the conversion numbers
+  stay honest.
+
+Nothing here sets `became_customer` on anybody. Nobody is credited with a sale the file cannot see.
+
+## Migration 0016 — undoing an import, and starting over
+
+**What it is for.** Import the sheet now to try it, then wipe it all and import fresh when the admin
+goes live. This is the file that makes the wipe possible, and makes it safe.
+
+**Your Google Sheet cannot be harmed by any of this.** The importer reads a copy you downloaded.
+Nothing in this console has ever written a cell back to Google — there is no code here that knows
+how.
+
+It needs `0009` (the sales tables). It does not care about the others.
+
+**Until you run this, imports still work — they just cannot be undone**, and the Start over screen
+says so in plain words rather than failing.
+
+1. Open **supabase.com** and sign in.
+2. Click the AI Syndicate project.
+3. In the left sidebar, click **SQL Editor**.
+4. Click **New query** (top right).
+5. On your computer, open
+   `ai-syndicate-admin/supabase/migrations/0016_import_batches_and_start_over.sql`.
+6. Select all of it (**Cmd + A**), copy it (**Cmd + C**).
+7. Click into the big empty box and paste (**Cmd + V**).
+8. Click the green **Run** button (bottom right).
+9. You should see **Success. No rows returned.** If you see red text, copy it and stop.
+
+**It is safe to run twice.**
+
+### How to import the sheet, start to finish
+
+1. Open the sheet in Google Sheets.
+2. Click **File** → **Download** → **Microsoft Excel (.xlsx)**. This makes a copy on your computer
+   and changes nothing in Google.
+3. In the console, go to **Sales**, then click **Import a sheet**.
+4. Pick the file you just downloaded.
+5. Tick the tabs you want. Leave **Rules of Engagement** unticked — it is instructions, not rows.
+6. Check the columns it matched, then click **See what will happen**.
+7. Read the plan. It tells you how many contacts, how many firms, and anything it is unsure about.
+8. Click **Import**.
+
+### How to wipe it and start fresh on go-live day
+
+1. **Sales** → **Start over**.
+2. Click **Clear everything imported**.
+3. Read what it says it will delete, and what it says it is keeping. **It never deletes a paying
+   client, a contact with a proposal out, a contact you typed in yourself, or a contact anybody has
+   worked in the console** — those are listed for you.
+4. Type **start over** in the box. The Delete button turns on.
+5. Click it.
+6. Download a fresh copy of the sheet and import it again, using the eight steps above.
+
+### To try the import today without saving anything anywhere
+
+Open the console while it still shows the orange **SAMPLE** badge. In that mode the importer writes
+to memory and forgets everything on reload. You can drive the whole thing — import, look, clear,
+import again — and nothing is written to any database at all.

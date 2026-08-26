@@ -571,10 +571,13 @@ export default function Overview({ member, setSection }) {
         title="Where everything stands"
       />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginTop: -6 }}>
+        {/* This tile used to open Operations. Operations is only a task board
+          * now, with no client list on it, so a count of clients led nowhere you
+          * could check it. It goes to the Clients page instead. Aug 26 2026. */}
         <CounterTile
           label="Active clients" value={view.activeClients.length}
           hint={`of ${plural(view.clientTotal, "client", "clients")} on the books`}
-          tone="var(--ink)" broken={dayBroken} onClick={() => go("operations")} title="Open Operations"
+          tone="var(--ink)" broken={dayBroken} onClick={() => go("clients")} title="Open the Clients page"
         />
         <CounterTile
           label="Emails needing a reply" value={view.needsReply.length}
@@ -888,7 +891,11 @@ export default function Overview({ member, setSection }) {
         {[
           ["work", "Your work", "Every task, reminder and note with your name on it."],
           ["sales", "Sales", "Work the pipeline, log calls, import lists."],
-          ["operations", "Operations", "Clients, tasks and weekly logs."],
+          /* This used to promise clients and weekly logs. Both moved off
+             Operations on Aug 26 2026 — the client list lives on the Clients
+             page now — so the card says what the page actually is, in the same
+             words as the page header. Aug 26 2026. */
+          ["operations", "Operations", "The task board."],
           ["inbox", "Inbox", "The shared team mailbox."],
         ].map(([id, title, body]) => (
           <button
