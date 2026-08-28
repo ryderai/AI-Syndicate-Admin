@@ -22,6 +22,15 @@ const Icon = {
    * is the same rows with a name on them, so it is a person with a tick.
    * Ryder, Aug 26 2026. */
   leads: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="9" y1="6" x2="21" y2="6" /><line x1="9" y1="12" x2="21" y2="12" /><line x1="9" y1="18" x2="21" y2="18" /><circle cx="4" cy="6" r="1.4" /><circle cx="4" cy="12" r="1.4" /><circle cx="4" cy="18" r="1.4" /></svg>,
+  /* THE FLOOR — Aug 27 2026. Rows with a target on them: it is the sheet of
+   * every lead in the company, and the thing you do on it is take one. `leads`
+   * and `mine` below are kept only because Icon is looked up by page id and an
+   * old bookmark can still land on one for the instant before AdminDashboard
+   * rewrites the address. */
+  floor: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="9" y1="6" x2="21" y2="6" /><line x1="9" y1="12" x2="17" y2="12" /><line x1="9" y1="18" x2="21" y2="18" /><circle cx="4" cy="6" r="1.4" /><circle cx="4" cy="12" r="1.4" /><circle cx="4" cy="18" r="1.4" /><circle cx="20" cy="12" r="2.4" /></svg>,
+  /* A rep's own mailbox. A plain envelope, so it reads as "your mail" rather
+   * than as the shared team inbox an owner has two groups further down. */
+  gmail: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2" /><polyline points="3 7 12 13 21 7" /></svg>,
   mine: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="7.5" cy="7" r="4" /><polyline points="16 12 18.5 14.5 23 10" /></svg>,
   operations: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a4 4 0 0 1-4-4V5a2 2 0 0 1 2-2h11" /></svg>,
   inbox: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" /></svg>,
@@ -48,10 +57,36 @@ const SECTIONS = [
     ["finance", "Finance", [["invoices", "Invoices"]]],
     ["clients", "Clients"],
   ]},
-  // Work is open to every role. Sales cannot see Command, so sales lands here:
-  // the landing page is the first page a role is allowed to see.
-  { group: "Yours", roles: ["owner", "admin", "sales"], items: [
+  // Work is the owner's and the admin's landing page. It is NOT a rep's any
+  // more — see the note below.
+  { group: "Yours", roles: ["owner", "admin"], items: [
     ["work", "Work"],
+  ]},
+  /* A REP'S WHOLE CONSOLE IS FOUR PAGES — Ryder, Aug 27 2026.
+   *
+   * It was three: Work, Leads (the floor, unclaimed only) and My leads. It is
+   * now Overview, The Floor, Gmail and AI Brain, and the two that went away were
+   * absorbed rather than deleted:
+   *
+   *   Work      -> Overview. The ask-anything box moves to the top of its own
+   *                page and the rep's own numbers sit under it.
+   *   Leads     -> The Floor with the switch on "Available".
+   *   My leads  -> The Floor with the switch on "Mine", which is where it opens.
+   *
+   * That is a SMALLER menu, which is the point: one list of leads with a switch
+   * over it beats two pages a rep has to remember the difference between.
+   *
+   * `overview` and `brain` are the SAME page ids the owner's menu uses, and that
+   * is deliberate. AdminDashboard renders a different component for a rep — one
+   * set of records, three layouts — so an address like #/dashboard/overview
+   * means "your overview" whoever opens it. Giving a rep second ids
+   * (`rep-overview`) would have put the role in the URL, and a URL that has to
+   * agree with who is signed in is a URL that eventually does not. */
+  { group: "Yours", roles: ["sales"], items: [
+    ["overview", "Overview"],
+    ["floor", "The Floor"],
+    ["gmail", "Gmail"],
+    ["brain", "AI Brain"],
   ]},
   /* SALES IS TWO DIFFERENT MENUS — Ryder, Aug 26 2026.
    *
@@ -59,10 +94,11 @@ const SECTIONS = [
    * changed for them, and nothing should: this list is the only place their
    * sidebar comes from, so an edit to their entry is an edit to their console.
    *
-   * A rep gets the same page twice, once locked to the floor and once locked
-   * to their own leads — two ids, ONE component (SalesPage with a mode). The
-   * console spent Aug 25 deleting a second client list that had drifted from
-   * the first, so a copied SalesPage was never on the table.
+   * A rep gets the same page ONCE now, as The Floor in their own group above —
+   * two ids became one on Aug 27 2026. It is still the same component (SalesPage
+   * with a mode); the console spent Aug 25 deleting a second client list that
+   * had drifted from the first, so a copied SalesPage has never been on the
+   * table.
    *
    * Two entries with the same group name rather than one entry with a
    * role-aware item list: sectionsForRole filters BEFORE anything is drawn, so
@@ -70,12 +106,6 @@ const SECTIONS = [
    * appear twice. */
   { group: "Sales", roles: ["owner", "admin"], items: [
     ["sales", "Sales"],
-  ]},
-  { group: "Sales", roles: ["sales"], items: [
-    // Ryder's own words for these two, in his own order: the floor first,
-    // because that is where a rep's day starts.
-    ["leads", "Leads"],
-    ["mine", "My leads"],
   ]},
   { group: "Delivery", roles: ["owner", "admin"], items: [
     ["operations", "Operations"],

@@ -4,11 +4,11 @@
 import { randomBytes } from "node:crypto";
 import { requireMember, getAdminSupabase } from "../lib/supabase-server.js";
 import { buildAuthorizeUrl, hasGoogleClientCredentials } from "../lib/google-oauth.js";
+import { originFromRequest, secureFlag } from "../lib/req-origin.js";
 
 function callbackUrlFromRequest(req) {
   if (process.env.GMAIL_REDIRECT_URI) return process.env.GMAIL_REDIRECT_URI;
-  const proto = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const { proto, host } = originFromRequest(req);
   return `${proto}://${host}/api/gmail-callback`;
 }
 
@@ -38,7 +38,7 @@ export default async function handler(req, res) {
   // against the state param, so a consent link forwarded to someone else
   // can't attach their mailbox to the initiator's account.
   res.setHeader("Set-Cookie",
-    `ais_gmail_oauth=${state}; HttpOnly; Secure; SameSite=Lax; Path=/api/gmail-callback; Max-Age=600`);
+    `ais_gmail_oauth=${state}; HttpOnly;${secureFlag(req)} SameSite=Lax; Path=/api/gmail-callback; Max-Age=600`);
   res.setHeader("Cache-Control", "private, no-store");
   return res.status(200).json({ authUrl: buildAuthorizeUrl({ redirectUri, state }), redirectUri });
 }

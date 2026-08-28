@@ -39,7 +39,7 @@
 
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
 import { converse, isAiConfigured } from "../lib/ai-agent.js";
-import { loadSystemContext, renderContext } from "../lib/brain-context.js";
+import { loadSystemContext, renderContext, teamDate } from "../lib/brain-context.js";
 import {
   assembleConsoleFacts, buildConsoleInstruction, parseConsoleReport, checkConsoleReport,
   deterministicConsoleReport, modeOf, wordsFor, tokensForWords, orderFeedback,
@@ -74,7 +74,13 @@ export default async function handler(req, res) {
   const admin = getAdminSupabase();
   const role = member.membership?.role || "admin";
   const nowMs = Date.now();
-  const todayIso = new Date(nowMs).toISOString().slice(0, 10);
+  /* The TEAM's day, not UTC's. Aug 26 2026: this line was
+   * `new Date(nowMs).toISOString().slice(0, 10)`, so between 7pm and midnight
+   * in Chicago the model was told "Today is <tomorrow>" and the report's title
+   * carried tomorrow's date. Found while fixing the same copied line in
+   * api/rep-report.js. Day maths in this repo goes through the team clock —
+   * three date bugs shipped in one day from raw local-time arithmetic. */
+  const todayIso = teamDate(nowMs);
 
   /* ---- read everything ---- */
   let snap;

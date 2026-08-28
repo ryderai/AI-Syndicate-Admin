@@ -27,7 +27,12 @@
  *   in the sheet.
  */
 
-import { claimState, cadenceState, scoreGate, isOpenStage } from "../../lib/sales-rules.js";
+import { claimState, cadenceState, scoreGate, isOpenStage, daysBetween } from "../../lib/sales-rules.js";
+/* Tags are an EVENT LOG, not a column: a lead's tags right now are the result
+ * of replaying its add and remove events. That reading lives in one place so the
+ * chips on the row, the filter menu, the drawer's dated history and the overnight
+ * sweep cannot come to four different answers about one lead. */
+import { currentTags } from "../../lib/lead-tags.js";
 
 /* ------------------------------------------------------------------ */
 /* The columns, in the sheet's order                                   */
@@ -41,7 +46,21 @@ export const SHEET_COLUMNS = [
   { key: "stage", label: "Sales Cycle Status", width: 168, where: "lead", edit: "select", sortable: true, filterable: true, groupable: true },
   { key: "claim", label: "Claim", width: 148, where: "counted", edit: null, sortable: true, filterable: true, groupable: true },
   { key: "first_contact", label: "First Contact", width: 116, where: "counted", edit: null, sortable: true, filterable: false, groupable: false },
-  { key: "last_touch", label: "Last Touch", width: 116, where: "counted", edit: null, sortable: true, filterable: false, groupable: false },
+  /* Last Touch became FILTERABLE on Aug 27 2026, on a BAND rather than on its
+   * own value — today / within 7 days / over 7 / over 14 / never. A menu of
+   * every distinct timestamp is not a filter, and "who has gone quiet" is the
+   * question a rep actually asks. See touchBandOf at the bottom of this file. */
+  { key: "last_touch", label: "Last Touch", width: 116, where: "counted", edit: null, sortable: true, filterable: true, groupable: true },
+  /* TAGS — Aug 27 2026. The one MULTI-VALUED column: a lead carries several, so
+   * every filter goes through facetValuesOf() rather than facetValue(), and
+   * grouping by it puts a row under each of its tags. Placed here, straight
+   * after the claim clock, because that is the order the Floor reads in: whose
+   * is it, where is it, how long have we got, what kind of thing is it.
+   *
+   * It is NOT before index 6 and next_step is still last — tests/sales-sheet
+   * pins both of those, and they pin them because CJ's own column order is the
+   * thing this table exists to reproduce. */
+  { key: "tags", label: "Tags", width: 232, where: "tags", edit: "tags", sortable: true, filterable: true, groupable: true, multi: true },
   { key: "first_name", label: "First Name", width: 128, where: "lead", edit: "text", sortable: true, filterable: false, groupable: false },
   { key: "last_name", label: "Last Name", width: 134, where: "lead", edit: "text", sortable: true, filterable: false, groupable: false },
   /* The whole name as it was actually given to us. Off by default — the sheet
@@ -56,10 +75,33 @@ export const SHEET_COLUMNS = [
   { key: "company", label: "Company", width: 200, where: "company", edit: null, sortable: true, filterable: true, groupable: true },
   { key: "email", label: "Email", width: 216, where: "lead", edit: "text", sortable: true, filterable: false, groupable: false },
   { key: "phone", label: "Phone", width: 140, where: "lead", edit: "text", sortable: true, filterable: false, groupable: false },
-  { key: "city", label: "City", width: 130, where: "lead", edit: "text", sortable: true, filterable: false, groupable: false },
+  /* City became filterable on the same day, and for the same reason as State
+   * already was: "the medspas in Destin" is a real question and there is no way
+   * to ask it from a search box that also matches an email address. */
+  { key: "city", label: "City", width: 130, where: "lead", edit: "text", sortable: true, filterable: true, groupable: true },
   { key: "state", label: "State", width: 76, where: "lead", edit: "text", sortable: true, filterable: true, groupable: true },
-  { key: "site_score", label: "Site Score", width: 118, where: "company", edit: null, sortable: true, filterable: false, groupable: false },
-  { key: "website", label: "Website", width: 188, where: "company", edit: null, sortable: true, filterable: false, groupable: false },
+  /* TWO COLUMNS THAT HAVE ARRIVED WITH EVERY SHEET IMPORT SINCE AUG 25 AND HAVE
+   * BEEN DISPLAYED NOWHERE. `employees` and `vertical` are real columns on
+   * admin_companies, filled by lib/sales-import.js from the Apollo block, and
+   * until today there was no way to see or filter either one. Both filter on a
+   * BAND or on the value; neither is editable here, because they belong to the
+   * firm and the firm is edited on the firm. */
+  { key: "employees", label: "Company size", width: 128, where: "company", edit: null, sortable: true, filterable: true, groupable: true },
+  { key: "vertical", label: "Type of business", width: 150, where: "company", edit: null, sortable: true, filterable: true, groupable: true },
+  /* The ONE number admin_companies can hold, and the only score that exists
+   * until a platform scan address does. Filterable on a band from Aug 27. */
+  { key: "site_score", label: "Site Score", width: 118, where: "company", edit: null, sortable: true, filterable: true, groupable: true },
+  /* THE THREE SCORES A SCAN RETURNS — AI Access, SEO, and how often the firm
+   * gets named when a buyer asks an AI a question. Read from the newest
+   * admin_company_reports row for the firm (0019), never from a column, so a
+   * re-scan is a new row and last month's number is still on record.
+   *
+   * NOT filterable and NOT groupable, deliberately: the thing anybody filters on
+   * is the band, and `site_score` above already offers exactly that menu.
+   * Two menus that mean nearly the same thing is how a person ends up filtering
+   * on the wrong one and reading a number that does not match. */
+  { key: "scores", label: "Scores", width: 168, where: "report", edit: null, sortable: true, filterable: false, groupable: false },
+  { key: "website", label: "Website", width: 188, where: "company", edit: null, sortable: true, filterable: true, groupable: true },
   { key: "list", label: "List", width: 168, where: "lead", edit: "select", sortable: true, filterable: true, groupable: true },
   { key: "touches", label: "Touches", width: 104, where: "counted", edit: null, sortable: true, filterable: false, groupable: false },
   /* Ryder, Aug 26 2026: Next Steps/Notes goes to the FAR RIGHT of the sheet.
@@ -73,10 +115,14 @@ export const SHEET_COLUMN_KEYS = SHEET_COLUMNS.map((c) => c.key);
 
 /** The columns you always see. The rest are switched on from the ⚙ menu.
  *  Kept short on purpose: the sheet's six human columns plus who the person
- *  is and where they work is what a rep actually reads. */
+ *  is and where they work is what a rep actually reads.
+ *
+ *  Tags and Scores joined the default set on Aug 27 2026 — they are the two the
+ *  Floor is built around, and a column that has to be switched on before the
+ *  page makes sense is a column nobody finds. */
 export const DEFAULT_SHEET_COLUMNS = [
-  "owner", "contacted", "stage", "claim", "first_contact", "last_touch",
-  "first_name", "last_name", "title", "company", "email", "site_score",
+  "owner", "contacted", "stage", "claim", "first_contact", "last_touch", "tags",
+  "first_name", "last_name", "title", "company", "email", "site_score", "scores",
   /* Last here too, or the default view would put the notes back in the middle
    * while SHEET_COLUMNS says they belong at the end. Aug 26 2026. */
   "next_step",
@@ -201,10 +247,19 @@ export const CONTACTED_ORDER = ["no", "older", "yes"];
  * theoretical: the Operations table shipped with `groupTasks` and `sortValue`
  * reading the same missing phase as two different ranks.
  */
-export function sheetRow(lead, { companyById, teamName, touchCounts = {}, listById, now, activityWindowDays = 90 }) {
+export function sheetRow(lead, {
+  companyById, teamName, touchCounts = {}, listById, now, activityWindowDays = 90,
+  /* ---- added Aug 27 2026, all four with a safe default ----
+   * A caller that does not pass them gets a row with no tags, no scan report and
+   * no editability, which is exactly what an older caller meant. Defaults rather
+   * than required arguments because tests/sales-sheet builds rows with the
+   * original context and its 137 assertions must keep passing unchanged. */
+  tagsByLead = null, tagsById = null, reportByCompany = null, member = null,
+}) {
   const company = lead.company_id ? (companyById?.get(lead.company_id) || null) : null;
   const touches = Number(touchCounts[lead.id] || 0);
   const parts = nameParts(lead);
+  const nowIso = typeof now === "string" ? now : (now ? new Date(now).toISOString() : null);
   return {
     lead,
     company,
@@ -226,6 +281,42 @@ export function sheetRow(lead, { companyById, teamName, touchCounts = {}, listBy
     cadence: cadenceState(lead, now, touches),
     listName: lead.list_id ? (listById?.get(lead.list_id)?.name || null) : null,
     gate: scoreGate(company?.site_score),
+
+    /* ---- TAGS, replayed from the event log ----
+     * Never a stored list. A lead's tags are the result of replaying its add and
+     * remove events, which is also the dated history the drawer prints — see
+     * lib/lead-tags.js for why there is no `tags` column and no `current` flag.
+     * An empty array when the events have not been read is deliberate and
+     * harmless: the filter menu offers "No tags" and the cell draws nothing.
+     * Distinguishing "no tags" from "tags not read" is the BOARD's job, not the
+     * row's — getSalesBoard carries the read error, the same way it already does
+     * for leads and activity. */
+    tags: (tagsByLead && tagsById) ? currentTags(tagsByLead.get(lead.id) || [], tagsById) : [],
+
+    /* ---- THE NEWEST SCAN OF THIS FIRM ----
+     * The FIRM's, not the person's: four contacts at one dealership share one
+     * website, so they share one measurement. Null means no scan has been run —
+     * which is a different thing from a scan that came back with nothing, and
+     * readCompanyReport keeps every unmeasured half of a report null rather than
+     * turning it into a zero. */
+    report: (reportByCompany && lead.company_id)
+      ? (readCompanyReport(reportByCompany.get(lead.company_id) || null))
+      : null,
+
+    /* How long since anybody touched them, as the band the filter bar offers.
+     * Computed once here rather than in the filter, so the cell, the filter and
+     * the sort cannot land on three different answers for one row at midnight. */
+    touchBand: nowIso ? touchBandOf(lead.last_touch_at, nowIso) : "__none",
+
+    /* ---- MAY THE PERSON READING THIS CHANGE IT ----
+     * Derived ONCE, here, through the single exported helper. Every control on
+     * the row reads `row.editable` and nothing re-derives it inline — see
+     * canEditLead at the bottom of this file for the three places this rule has
+     * to agree with itself. `member` defaults to null, and canEditLead(x, null)
+     * is false: a page that does not know who is looking at it gets a read-only
+     * row rather than an editable one. */
+    editable: canEditLead(lead, member),
+    heldBy: heldByLabel(lead, member, teamName),
   };
 }
 
@@ -338,8 +429,58 @@ export function sortValue(row, key) {
     case "website": return text(row.domain);
     case "list": return text(row.listName);
     case "touches": return num(row.touches);
+
+    /* ---- the four added on Aug 27 2026 ---- */
+
+    /* A ROW WITH NO TAGS IS BLANK, NOT ZERO TAGS. `blank` is its own field for
+     * exactly this: encoding "missing" as 0 would put every untagged row in the
+     * middle of the order in one direction and at the end in the other, which is
+     * the bug that made the Operations table sort and group disagree.
+     *
+     * Sorted on the FIRST tag's label rather than on how many there are —
+     * "sort by tags" means "put the medspas together", not "put the busiest rows
+     * first". The list is already in the vocabulary's own order (see
+     * currentTags in lib/lead-tags.js), so the first one is stable between two
+     * reads of the same rows. */
+    case "tags": {
+      const first = (row.tags || [])[0];
+      return first ? { blank: false, v: String(first.label || first.slug || "").toLowerCase() } : { blank: true, v: "" };
+    }
+
+    /* AI Access first, because it is the number this agency sells against, then
+     * SEO as the tie-break. A firm with an SEO score and no AI Access score is
+     * NOT blank — it has been measured, just not on the thing we lead with — so
+     * it sorts after every firm that has both and before every firm with
+     * neither. Reached by sorting on -1 only when at least one of the two is a
+     * real number. */
+    case "scores": {
+      const r = row.report;
+      if (!r || (r.aiAccess === null && r.seo === null)) return { blank: true, v: 0 };
+      const ai = r.aiAccess === null ? 1000 : r.aiAccess;
+      const seo = r.seo === null ? 1000 : r.seo;
+      return { blank: false, v: ai * 1000 + seo };
+    }
+
+    case "employees": return num(readCount(row.company?.employees));
+    case "vertical": return text(row.company?.vertical || row.lead.vertical);
+
     default: return null;
   }
+}
+
+/**
+ * A head count, or null.
+ *
+ * The same shape as readScore and for the same reason: `Number("")` is 0 and
+ * `Number(null)` is 0, and a firm with no head count sorting as a one-person
+ * business is a firm a rep pitches wrongly. Anything that is not a whole number
+ * of at least one person is UNKNOWN.
+ */
+export function readCount(v) {
+  if (v === null || v === undefined || String(v).trim() === "") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.floor(n);
 }
 
 /** The table's own order when nothing is sorted.
@@ -409,7 +550,21 @@ export function nextSort(cur, key) {
 /** The value one row carries for a filterable column, as the string the
  *  filter compares. "__none" is a real value here, not an absence: the page
  *  filters on String(x || "__none") and a column holding "" has to travel the
- *  same way or the click sets a filter that matches nothing. */
+ *  same way or the click sets a filter that matches nothing.
+ *
+ *  FOUR COLUMNS FILTER ON A BAND RATHER THAN ON THEIR OWN VALUE — Aug 27 2026.
+ *  Site Score, Company size, Last Touch and Website hold a number, a number, a
+ *  date and a URL, and none of those is a list anybody would pick from: a menu
+ *  of 340 distinct head counts is not a filter. So each one's facet value is the
+ *  band, and the CELL still prints the real value. The banding functions live at
+ *  the bottom of this file next to each other, so the thresholds cannot drift
+ *  apart across four call sites.
+ *
+ *  `tags` is deliberately NOT here — it is the one multi-valued column and it
+ *  goes through facetValuesOf(), which every filter caller uses. A single-value
+ *  entry for it would work on the rows that carry exactly one tag and quietly
+ *  drop the rest.
+ */
 export function facetValue(row, key) {
   switch (key) {
     case "owner": return String(row.lead.owner_id || "__none");
@@ -417,8 +572,18 @@ export function facetValue(row, key) {
     case "stage": return String(row.lead.stage || "__none");
     case "claim": return String(row.claim.state || "__none");
     case "company": return String(row.lead.company_id || "__none");
+    case "city": return String(row.lead.city || "__none");
     case "state": return String(row.lead.state || "__none");
     case "list": return String(row.lead.list_id || "__none");
+    /* The firm's line of business, off the FIRM record where one exists — the
+     * copied-down text on the lead is the fallback only, for the same reason
+     * sheetRow reads the firm's name that way. Two spellings of one vertical is
+     * two entries in the menu. */
+    case "vertical": return String(row.company?.vertical || row.lead.vertical || "__none");
+    case "site_score": return scoreBandOf(row.company?.site_score);
+    case "employees": return sizeBandOf(row.company?.employees);
+    case "website": return row.domain ? "yes" : "no";
+    case "last_touch": return row.touchBand;
     default: return "__none";
   }
 }
@@ -426,12 +591,20 @@ export function facetValue(row, key) {
 /** Every value a column holds across the rows given, commonest first and
  *  "none" last, with a count each.
  *
- *  ALWAYS pass the UNFILTERED rows. Built from what is on screen, one filter
+ *  ALWAYS PASS THE UNFILTERED ROWS. Built from what is on screen, one filter
  *  shrinks every other column's menu to the values that survived it, and a
  *  value outside the current filter cannot be reached from the header at all.
+ *  That was a real bug in the Operations table.
+ *
+ *  Multi-valued columns go through facetValuesMulti() at the bottom of this
+ *  file. This one is left pointing at facetValue on purpose: a caller that
+ *  passes `tags` in here gets the single-value answer, which is wrong, so the
+ *  guard below refuses a column marked `multi` rather than answering wrongly.
  */
 export function facetValues(rows, key) {
   if (!FILTERABLE.has(key)) return [];
+  const col = SHEET_COLUMNS.find((c) => c.key === key);
+  if (col?.multi) return facetValuesMulti(rows, key);
   const counts = new Map();
   for (const r of rows) {
     const v = facetValue(r, key);
@@ -449,21 +622,40 @@ export function facetValues(rows, key) {
  *
  * FLAT IS THE DEFAULT and that is the point of this whole rebuild. Grouping is
  * something you switch on, look at, and switch off again.
+ *
+ * GROUPING BY A MULTI-VALUED COLUMN PUTS A ROW IN EVERY GROUP IT BELONGS TO —
+ * Aug 27 2026, when tags arrived. A lead tagged `medspa` and `quiet` appears
+ * under both, because the alternative is picking one of its tags to be the real
+ * one and there is no honest way to choose.
+ *
+ * The consequence has to be said out loud rather than left for somebody to
+ * notice: the group counts then add up to MORE than the number of rows on
+ * screen. So the returned object carries `overlaps: true` and the table prints
+ * one line saying a lead with several tags is listed under each of them. A set of
+ * counts that quietly does not add up is worse than no counts — a rep adds them
+ * up, comes out over, and stops trusting the page.
  */
 export function groupRows(rows, groupBy, { labelFor }) {
   if (!groupBy || groupBy === "none" || !GROUPABLE.has(groupBy)) {
-    return [{ key: "__all", label: null, rows }];
+    return [{ key: "__all", label: null, rows, overlaps: false }];
   }
+  const col = SHEET_COLUMNS.find((c) => c.key === groupBy);
+  const multi = Boolean(col?.multi);
   const map = new Map();
+  let overlaps = false;
   for (const r of rows) {
-    const k = facetValue(r, groupBy);
-    if (!map.has(k)) map.set(k, []);
-    map.get(k).push(r);
+    const keys = multi ? facetValuesOf(r, groupBy) : [facetValue(r, groupBy)];
+    if (keys.length > 1) overlaps = true;
+    for (const k of keys) {
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(r);
+    }
   }
   const out = [...map.entries()].map(([key, group]) => ({
     key,
     label: labelFor(groupBy, key),
     rows: group,
+    overlaps,
   }));
   out.sort((a, b) => {
     if ((a.key === "__none") !== (b.key === "__none")) return a.key === "__none" ? 1 : -1;
@@ -555,4 +747,455 @@ export function sheetDateLong(iso, tz = "America/Chicago") {
   } catch {
     return null;
   }
+}
+
+/* ================================================================== */
+/* THE LOCK IS ON THE ROW, NOT ON THE PAGE — Aug 27 2026               */
+/* ================================================================== */
+
+/**
+ * May this person change this lead?
+ *
+ * THIS IS THE ONLY EDITABILITY CHECK IN THE CONSOLE. Nothing may re-derive it
+ * inline. One function, every caller — the row's accent edge, every button on
+ * that row, the drawer's buttons, and openLeadById's read-only decision all read
+ * this and nothing else. Four buttons that each worked out for themselves
+ * whether they were allowed is how one of them ended up disagreeing with the
+ * other three.
+ *
+ * WHAT REPLACED WHAT. Until today `scopeLeads` in SalesPage.jsx handed a rep
+ * either the unclaimed rows or their own rows, and the lock was the LIST. The
+ * Floor shows every lead in the company — that is the requirement, because a rep
+ * who cannot see another rep's row cannot be stopped from working the same firm
+ * — so that lock is gone and this one replaces it:
+ *
+ *     visibility: everyone, every row.
+ *     editability: mine, or nobody's, or I am an owner/admin.
+ *
+ * Somebody else's row renders greyed with every control off and a marker saying
+ * who holds it. Opening it gives a READ-ONLY drawer: fields, notes and timeline
+ * visible, no buttons.
+ *
+ * THIS IS THE POLITE HALF OF THE LOCK, NOT THE WORKING HALF. Every file in
+ * `api/` runs on the Supabase service key and ignores row-level security
+ * completely, and a disabled button is a thing a person sees rather than a thing
+ * that stops a request. The same rule therefore lives in three places and all
+ * three must agree:
+ *   1. RLS, in supabase/migrations/0020_rep_scoping.sql — plus 0021 and 0023,
+ *      which put it inside the two `security definer` functions that write past
+ *      RLS by design (admin_lead_claim_text and admin_lead_to_client);
+ *   2. a JavaScript check wherever a lead is written FROM AN ID THE CALLER CHOSE.
+ *      As of Aug 27 2026 that is api/sales-score.js (which scopes the Skip-90
+ *      stage change), api/gmail-send.js and api/gmail-drafts.js (both through
+ *      `leadWeMayWrite()`), and lib/assistant-tools.js — a library rather than an
+ *      endpoint, and named here because api/ai-chat.js writes leads through it.
+ *
+ *      TWO PLACES DELIBERATELY DO NOT HAVE IT, and both are on record:
+ *      api/gmail-threads.js writes a first reply and a bounce, which are things
+ *      that HAPPENED in a mailbox the caller was already granted rather than
+ *      instructions they composed — gating them on the viewer lost the
+ *      observation permanently, because each is a one-shot stamped only while
+ *      somebody has the page open. api/lead-scrape.js sets `owner_id` from a
+ *      saved source's own `assign_to`, which is an owner's configuration rather
+ *      than a rep's request. Neither is a gap by accident.
+ *   3. here.
+ *
+ * THE ONE DELIBERATE EXCEPTION, named so it is not mistaken for a gap:
+ * api/sales-score.js writes a `score` timeline row on EVERY contact at a firm
+ * regardless of who holds them. That is a dated fact about the firm's website
+ * rather than a claim about anybody's conversation, and withholding it would
+ * leave two reps at one dealership holding two different pictures of the same
+ * site — the exact failure one-scan-per-firm exists to prevent. The reasoning is
+ * written out at that write.
+ *
+ * Trap #6 and trap #8 in CONTEXT-FOR-AI.md §8 are both this mistake, already
+ * made twice in this repo before today, and a third and fourth time found today.
+ *
+ * A MISSING MEMBER IS NOT AN OWNER. It returns false. `member` can be null on
+ * exactly one code path (AdminDashboard renders nothing for it) and a fail-open
+ * default here would hand the whole floor to a page that does not know who is
+ * looking at it.
+ */
+export function canEditLead(lead, member) {
+  if (!lead || !member) return false;
+  /* A MEMBER WITH NO ROLE AT ALL IS NOT AN OWNER.
+   *
+   * This line was missing, and `member.role !== "sales"` was therefore true for
+   * `{}` — so a page that had lost track of who was looking at it handed out
+   * edit rights on every lead in the company, including another rep's. Not
+   * reachable today (AuthGate refuses a member with no membership row) but the
+   * comment in AdminDashboard.jsx says in as many words that a member with no
+   * role FAILS OPEN in three places and that this is one of them. Found by
+   * tests/floor-scoping, Aug 27 2026. */
+  if (!member.role) return false;
+  /* Every role that is not `sales` may edit anything. Written as "not sales"
+   * rather than "owner or admin" on purpose: a role nobody has taught this file
+   * about must not silently lose the ability to work, and the roles that exist
+   * are constrained where they are decided — admin_users.role in 0001. */
+  if (member.role !== "sales") return true;
+  return lead.owner_id === member.user_id || lead.owner_id == null;
+}
+
+/** Who is holding this row, in the words the marker on it uses. Null when the
+ *  reader may edit it — a "held by" marker on your own row is noise. */
+export function heldByLabel(lead, member, teamName) {
+  if (canEditLead(lead, member)) return null;
+  const name = teamName ? (teamName(lead.owner_id) || "another rep") : "another rep";
+  return `Held by ${name}`;
+}
+
+/* ================================================================== */
+/* AVAILABILITY — Mine · Available · All                               */
+/* ================================================================== */
+
+/**
+ * The three-state switch at the far left of the filter bar.
+ *
+ * IT IS A FILTER OVER THE FULL BOARD, NOT A NEW FETCH. That is the whole
+ * architecture in one sentence: one read, one row builder, three layouts. A page
+ * that fetches its own leads is a page with its own snapshot, and two snapshots
+ * of one pipeline is how a tile ends up disagreeing with the list under it.
+ *
+ * `mine` is the default on load, because that is where a rep actually works.
+ * Available is one click.
+ */
+export const AVAILABILITY = ["mine", "available", "all"];
+
+export const AVAILABILITY_LABELS = {
+  mine: "Mine",
+  available: "Available",
+  all: "All",
+};
+
+export const AVAILABILITY_HINTS = {
+  mine: "The leads you hold.",
+  available: "Nobody has claimed these. Press Claim to take one.",
+  all: "Every lead in the company. Somebody else's opens read-only.",
+};
+
+/** An unknown value falls back to `all` rather than to `mine`: a typo in a
+ *  stored preference should show a rep too much of their own company's pipeline,
+ *  which is harmless here because visibility is deliberately wide, rather than
+ *  hiding rows they hold and making the page look broken. */
+export function cleanAvailability(v) {
+  return AVAILABILITY.includes(v) ? v : "all";
+}
+
+export function availabilityOf(lead, member) {
+  if (!lead?.owner_id) return "available";
+  return lead.owner_id === member?.user_id ? "mine" : "theirs";
+}
+
+/** Narrow a lead list by the switch. `all` returns the same array, not a copy —
+ *  the caller never mutates it and a copy of two thousand rows on every
+ *  keystroke is a page that feels slow for no reason. */
+export function byAvailability(leads, mode, member) {
+  const m = cleanAvailability(mode);
+  if (m === "all") return leads || [];
+  if (m === "mine") return (leads || []).filter((l) => l.owner_id && l.owner_id === member?.user_id);
+  return (leads || []).filter((l) => !l.owner_id);
+}
+
+/** How many rows each state of the switch would show, counted from the same set
+ *  the switch is about to narrow — so the number on the button and the list
+ *  under it agree by construction. */
+export function availabilityCounts(leads, member) {
+  const rows = leads || [];
+  return {
+    mine: rows.filter((l) => l.owner_id && l.owner_id === member?.user_id).length,
+    available: rows.filter((l) => !l.owner_id).length,
+    all: rows.length,
+  };
+}
+
+/* ================================================================== */
+/* FILTERS THAT STACK, AND HOLD MORE THAN ONE VALUE                    */
+/* ================================================================== */
+
+/**
+ * Until today the table held ONE value per column: `{ owner: "<id>" }`. State
+ * could be FL or AL, never both, and seven columns could be filtered at all.
+ *
+ * The shape is now `{ colKey: Set<value> }` — several columns at once, several
+ * values each, each one a removable chip. `null`/absent means that column is not
+ * filtered.
+ *
+ * WHY A SET AND NOT AN ARRAY: the only two questions ever asked of it are "is
+ * this value on?" and "how many are on?", and an array turns the first into a
+ * scan on every row of every render.
+ */
+
+/** Every value a row carries for a filterable column.
+ *
+ *  ONE COLUMN CAN CARRY SEVERAL — that is what tags are. Single-valued columns
+ *  return a one-item array, so every caller has one shape to handle. A row with
+ *  no tags at all returns ["__none"], which is a real value the filter menu
+ *  offers as "No tags": a rep filtering for untagged rows is filtering for
+ *  something, and returning an empty array would make that row match nothing
+ *  and disappear from every count.
+ */
+export function facetValuesOf(row, key) {
+  if (key === "tags") {
+    const slugs = (row?.tags || []).map((t) => t.slug).filter(Boolean);
+    return slugs.length ? slugs : ["__none"];
+  }
+  return [facetValue(row, key)];
+}
+
+/**
+ * Does this row survive every filter that is on?
+ *
+ * AND across columns, OR inside one column. "State is FL or AL" and "stage is
+ * Contacted" is one question with two clauses, and it is the question a person
+ * means when they click two states and one stage. Written out rather than
+ * folded into a clever reduce, because getting the two the wrong way round makes
+ * the bar quietly show nothing and there is no error to read.
+ */
+export function matchesFacets(row, facets) {
+  if (!facets) return true;
+  for (const key of Object.keys(facets)) {
+    const want = facets[key];
+    if (!want || typeof want.size !== "number" || want.size === 0) continue;
+    const have = facetValuesOf(row, key);
+    if (!have.some((v) => want.has(v))) return false;
+  }
+  return true;
+}
+
+/** Rows that survive the filters. */
+export function applyFacets(rows, facets) {
+  const keys = Object.keys(facets || {}).filter((k) => facets[k]?.size);
+  if (!keys.length) return rows || [];
+  return (rows || []).filter((r) => matchesFacets(r, facets));
+}
+
+/** Add or take away one value. Never mutates: React only re-renders when the
+ *  object identity changes, and a mutated Set is a filter that applies on the
+ *  next unrelated keystroke instead of on the click. */
+export function toggleFacetValue(facets, key, value) {
+  const next = { ...(facets || {}) };
+  const cur = new Set(next[key] || []);
+  if (cur.has(value)) cur.delete(value);
+  else cur.add(value);
+  if (cur.size) next[key] = cur;
+  else delete next[key];
+  return next;
+}
+
+/** Drop one whole column's filter. */
+export function clearFacet(facets, key) {
+  const next = { ...(facets || {}) };
+  delete next[key];
+  return next;
+}
+
+/** Is anything on? What "Clear all" reads to decide whether to draw itself. */
+export function anyFacetOn(facets) {
+  return Object.keys(facets || {}).some((k) => facets[k]?.size);
+}
+
+/** One chip per value that is on, in a stable order, each carrying what to call
+ *  it and what removing it does. Built here rather than in the component so the
+ *  chips and the filtering cannot disagree about what is on. */
+export function facetChips(facets, { labelFor }) {
+  const out = [];
+  for (const key of Object.keys(facets || {})) {
+    const set = facets[key];
+    if (!set?.size) continue;
+    for (const value of [...set].sort()) {
+      out.push({
+        key,
+        value,
+        column: columnLabel(key),
+        label: labelFor ? labelFor(key, value) : String(value),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Every value a MULTI-VALUED column holds across the rows given, commonest
+ * first, with a count each.
+ *
+ * facetValues() above still works and is still what single-valued columns use;
+ * this is the version that counts a row once per tag it carries. ALWAYS PASS THE
+ * UNFILTERED ROWS, for the reason written on facetValues: a menu built from what
+ * is on screen shrinks to the values that survived the current filter, and a
+ * value outside it cannot be reached from the header at all. That was a real
+ * shipped bug on the Operations table.
+ */
+export function facetValuesMulti(rows, key) {
+  const counts = new Map();
+  for (const r of rows || []) {
+    for (const v of facetValuesOf(r, key)) {
+      counts.set(v, (counts.get(v) || 0) + 1);
+    }
+  }
+  return [...counts.entries()].sort((a, b) => {
+    if ((a[0] === "__none") !== (b[0] === "__none")) return a[0] === "__none" ? 1 : -1;
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return a[0].localeCompare(b[0]);
+  });
+}
+
+/* ================================================================== */
+/* THE BANDS THE FILTER BAR OFFERS                                     */
+/* ================================================================== */
+
+/**
+ * A score band, as a filter value.
+ *
+ * The same four thresholds as scoreBandTag() in lib/sales-rules.js and the same
+ * 90 as ROE.SKIP_SCORE_AT_OR_ABOVE. Two places deciding what "80s" means is one
+ * place that eventually stops matching, so this reads the score through
+ * readScore() — the one function that decides what counts as a score at all —
+ * and nothing here re-implements the "empty string is not zero" rule.
+ */
+export const SCORE_BANDS = [
+  ["__none", "No score yet"],
+  ["under60", "Under 60"],
+  ["60s", "60 to 79"],
+  ["80s", "80 to 89"],
+  ["90plus", "90 or above"],
+];
+
+export function scoreBandOf(score) {
+  const n = readScore(score);
+  if (n === null) return "__none";
+  if (n >= 90) return "90plus";
+  if (n >= 80) return "80s";
+  if (n >= 60) return "60s";
+  return "under60";
+}
+
+/** The head-count bands, matching lib/sales-rules.js sizeBandTag() exactly. */
+export const SIZE_BANDS = [
+  ["__none", "No head count"],
+  ["solo", "Solo (1)"],
+  ["small", "Small (2-10)"],
+  ["mid", "Mid (11-50)"],
+  ["large", "Large (51+)"],
+];
+
+export function sizeBandOf(employees) {
+  if (employees === null || employees === undefined || String(employees).trim() === "") return "__none";
+  const n = Number(employees);
+  if (!Number.isFinite(n) || n < 1) return "__none";
+  if (n <= 1) return "solo";
+  if (n <= 10) return "small";
+  if (n <= 50) return "mid";
+  return "large";
+}
+
+/**
+ * How long since the last touch, as a band.
+ *
+ * `now` is passed in — never read from a clock in here. And the days are counted
+ * in the team's own calendar through daysBetween() in lib/sales-rules.js, not
+ * from a subtraction of two timestamps: a touch logged at 8pm Central is 2am UTC
+ * the next day, so a UTC subtraction says a rep who called last night has not
+ * called for a day.
+ */
+export const TOUCH_BANDS = [
+  ["__none", "Never touched"],
+  ["today", "Today"],
+  ["week", "Within 7 days"],
+  ["over7", "Over 7 days"],
+  ["over14", "Over 14 days"],
+];
+
+export function touchBandOf(iso, now) {
+  if (!iso) return "__none";
+  const d = daysBetween(iso, typeof now === "string" ? now : new Date(now).toISOString());
+  /* An unreadable date is not "never touched" and it is not "today". It reads as
+   * unknown, which is what "__none" means on this column's menu — and the cell
+   * itself prints the raw value so the bad date is visible rather than hidden
+   * behind a band. */
+  if (d === null) return "__none";
+  if (d <= 0) return "today";
+  if (d < 7) return "week";
+  if (d < 14) return "over7";
+  return "over14";
+}
+
+export const WEBSITE_BANDS = [
+  ["yes", "Has a website"],
+  ["no", "No website"],
+];
+
+/* ================================================================== */
+/* THE THREE SCORES A SCAN RETURNS                                     */
+/* ================================================================== */
+
+/**
+ * Read one admin_company_reports row into the shape the Scores cell draws.
+ *
+ * EVERY FIELD CAN BE NULL AND NULL NEVER BECOMES ZERO. A firm shown as 0 for AI
+ * Access reads as the worst site we have ever seen, which is the hardest a rep
+ * would ever go in — the single most dangerous wrong number this feature could
+ * produce. readScore() is the one place that decides what a score is, so an
+ * empty string, a 150 and a null all come back as null here.
+ *
+ * The prompt simulation is a HITS-OUT-OF-TOTAL, never a percentage: 2 of 10 and
+ * 20% are the same number and only one of them says how big the sample was, and
+ * 1 of 2 printed as 50% is a claim nobody measured. Both halves or nothing.
+ */
+export function readCompanyReport(row) {
+  if (!row) return null;
+  /* BOTH HALVES PRESENT, OR NEITHER — and "present" is checked before the
+   * conversion, not after.
+   *
+   * `Number(null)` is 0 and `Number.isFinite(0)` is true, so a row with a total
+   * of 10 and a NULL hits count rendered as "named in 0 of 10 buyer questions" —
+   * the exact claim this function's own header says must never be printed. It is
+   * reachable: 0019's two CHECKs are independent, and any member may insert a
+   * report row straight from the browser. A rep would have read "0 of 10" out
+   * loud on a call about a firm nobody had measured. Found by an adversarial
+   * review, Aug 27 2026. */
+  const present = (v) => v !== null && v !== undefined && String(v).trim() !== "";
+  const hits = present(row.prompt_sim_hits) ? Number(row.prompt_sim_hits) : NaN;
+  const total = present(row.prompt_sim_total) ? Number(row.prompt_sim_total) : NaN;
+  const simOk = Number.isFinite(hits) && Number.isFinite(total) && total > 0 && hits >= 0 && hits <= total;
+  return {
+    id: row.id,
+    aiAccess: readScore(row.ai_access_score),
+    seo: readScore(row.seo_score),
+    simHits: simOk ? hits : null,
+    simTotal: simOk ? total : null,
+    findings: Array.isArray(row.findings) ? row.findings : [],
+    pitch: row.pitch || null,
+    pitchGateReason: row.pitch_gate_reason || null,
+    /* The four halves of a measurement, carried together (§42 PART 2 rule 2):
+     * the number, what it was measured against, the day it was read, and who
+     * read it. Anything short of all four is not a measurement. */
+    domain: row.domain || null,
+    measuredAt: row.measured_at || null,
+    measuredBy: row.measured_by || null,
+    kind: row.kind || "baseline",
+  };
+}
+
+/** The newest report per firm, from a flat list. Newest by `measured_at`, and
+ *  ties broken on id so two reads of the same rows cannot disagree about which
+ *  one is current. */
+export function newestReportByCompany(rows) {
+  const out = new Map();
+  for (const r of rows || []) {
+    if (!r?.company_id) continue;
+    const cur = out.get(r.company_id);
+    if (!cur) { out.set(r.company_id, r); continue; }
+    /* PARSED, NOT COMPARED AS TEXT. Two ISO strings for the same instant can be
+     * written differently — a `Z` suffix against a `+00:00` offset, fractional
+     * seconds against none — and `"…:00+00:00" < "…:00.000Z"` as text while being
+     * the same moment in time. PostgREST returns the offset form and every sample
+     * row comes from toISOString(), so a mixed pair is exactly what this sees.
+     * An unreadable date loses to a readable one rather than winning by accident.
+     * Found by an adversarial review, Aug 27 2026. */
+    const ms = (x) => { const t = Date.parse(x?.measured_at); return Number.isNaN(t) ? -Infinity : t; };
+    const a = ms(r);
+    const b = ms(cur);
+    if (a > b || (a === b && String(r.id) > String(cur.id))) out.set(r.company_id, r);
+  }
+  return out;
 }

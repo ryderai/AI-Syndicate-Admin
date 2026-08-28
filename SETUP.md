@@ -1084,3 +1084,166 @@ says so in plain words rather than failing.
 Open the console while it still shows the orange **SAMPLE** badge. In that mode the importer writes
 to memory and forgets everything on reload. You can drive the whole thing — import, look, clear,
 import again — and nothing is written to any database at all.
+
+---
+
+## Migrations 0018 to 0023 — The Floor (the rep console), Aug 27 2026
+
+**Six files. Run them in order, one at a time.** They are what makes the sales rep pages actually
+store anything: the tags, the reason a deal was won or lost, what a site scan found, the rule that
+stops one rep changing another rep's lead, the outreach numbers, and each rep's own AI settings.
+
+**Before you start, three things worth knowing:**
+
+- **They need `0009` and `0015` to have run first** (the sales tables and the lead-to-client
+  function). Everything else is independent.
+- **All six are safe to run twice.** They have been applied, re-applied and attacked against a real
+  Postgres 16.
+- **Nothing on any screen changes until they are run**, and nothing breaks either. The pages work on
+  sample rows today and say so.
+
+### The steps, the same for every one of the six
+
+1. Open **supabase.com** and sign in.
+2. Click the **AI Syndicate** project.
+3. In the left sidebar, click **SQL Editor**.
+4. Click **New query** (top right).
+5. On your computer, open the file named at the top of each section below, inside
+   `ai-syndicate-admin/supabase/migrations/`.
+6. Select all of it (**Cmd + A**), copy it (**Cmd + C**).
+7. Click into the big empty box and paste (**Cmd + V**).
+8. Click the green **Run** button (bottom right).
+9. You should see **Success. No rows returned.** If you see red text, copy it and stop — do not run
+   the next one.
+
+### 1. `0018_lead_tags.sql` — tags, and a dated line for every change
+
+Adds the list of tags a lead can carry, and an **append-only** record of every time one is put on
+or taken off. Nothing can edit or delete one of those records, including an admin.
+
+**After it runs, check it worked.** New query, paste this, Run:
+
+```sql
+select slug, label, tag_group from public.admin_lead_tags order by sort;
+```
+
+You should get **21 rows**. If you get 0, the file did not run.
+
+**One thing this does NOT do:** it does not tag the leads already in the database. Nothing does yet
+— the only thing that runs the tag rules is a button on a single lead. So the tag filters on The
+Floor find nothing until somebody presses that button on those rows. That is a real gap and it is
+written down in the file itself.
+
+### 2. `0019_reasons_and_company_reports.sql` — why a deal closed, and what a scan found
+
+Adds the reason columns for Won and Lost, and a table that holds one row per site scan — three
+scores and the findings behind them, keyed to the firm, never overwritten.
+
+Check:
+
+```sql
+select column_name from information_schema.columns
+ where table_name = 'admin_leads' and column_name like '%reason%';
+```
+
+You should see four: `lost_reason`, `won_reason`, `won_reason_note`, `lost_reason_note`.
+
+### 3. `0020_rep_scoping.sql` — one rep cannot change another rep's lead
+
+**This is the important one.** Right now, any sales rep can change any lead in the company by
+talking to the database directly — not through the website, but the door is open. No button offers
+it, which is why nobody has noticed. This file closes it.
+
+Check:
+
+```sql
+select policyname, cmd from pg_policies
+ where tablename in ('admin_leads','admin_proposals','admin_email_threads')
+ order by tablename, policyname;
+```
+
+You should see a `members update leads` row for `admin_leads` and a
+`reps work their own mailbox threads` row for `admin_email_threads`.
+
+**⚠️ ONE THING TO REMEMBER FOR EVER.** If you ever re-run `0001` or `0009` — for any reason — they
+put the old, wide rules back, and nothing on any screen changes to tell you. **Run `0020` and then
+`0023` again straight afterwards.** If you have someone who can run a terminal, the proof is
+`bash tests/floor-scoping/sql.sh`.
+
+### 4. `0021_outreach_tracking.sql` — what went out and what came back
+
+Adds the columns that count emails and replies, and switches the one-text rule from "they opened
+your email" to "they replied". The old version could never work: nothing has ever recorded an open,
+so the Text button has been dead since it was built and nobody knew.
+
+Also makes room for a scrambled Gmail token instead of a plain one.
+
+**Run this one BEFORE the console goes online if you can.** The code copes without it — it notices
+the column is missing and carries on with the old token — but the console has never been online
+anyway, so there is no reason not to.
+
+Check:
+
+```sql
+select column_name from information_schema.columns
+ where table_name = 'admin_email_threads'
+   and column_name in ('gmail_message_id','first_out_at','first_reply_at','bounced_at');
+```
+
+Four rows.
+
+### 5. `0022_personal_brain.sql` — each rep's own AI settings
+
+One table. Each rep's rules are theirs; an owner or admin can read anybody's (a rule nobody can
+check quietly changes what prospects get told) and cannot change somebody else's.
+
+Check:
+
+```sql
+select count(*) from public.admin_user_brain;
+```
+
+`0` is the right answer on a fresh run.
+
+### 6. `0023_close_the_won_hole.sql` — the Won button, made safe
+
+**Run this even if you skip everything else above it.**
+
+The function that turns a won deal into a client record has been able to do three things it should
+never have been able to do: mark **somebody else's** deal won, create a client record off it, and
+write the dated line saying who closed it **under a name the caller chose**. It needs no special
+access — any signed-in rep could do it from their own browser.
+
+This file replaces that function with the same code plus two checks. Nothing on any screen changes.
+
+Check:
+
+```sql
+select proname from pg_proc where proname in ('admin_lead_to_client','admin_can_work_lead');
+```
+
+Both names should come back.
+
+### One thing to know before any of this helps
+
+**The console is already online** at `https://ai-syndicate-admin.vercel.app` — but that URL is
+running the code from Aug 26, and the server there **cannot see a working Supabase key**. Fetch
+`https://ai-syndicate-admin.vercel.app/api/health` in a browser: if every flag says `false` and
+the note says the Supabase variables are missing, running these six migrations changes nothing on
+the live site, because the live site is not talking to the database at all yet.
+
+Two things to check on Vercel, in this order, before blaming a migration:
+
+1. Click each Supabase variable row and see whether it actually has a value in it. A name can be
+   saved with nothing behind it.
+2. Look at the environment chips on that row. A variable set for **Preview** only does nothing in
+   **Production**. That is the commonest cause of "the key is right there and it is dead".
+
+### When all six have run
+
+Nothing to do. The rep pages start saving for real, and the orange **SAMPLE** badge goes away on
+its own once the Supabase keys are set.
+
+**Still not working after all six:** the site-scan button. That needs the scanner's address on the
+server (`PLATFORM_SCORE_URL`), which nobody has yet. The button stays off and says why. Everything
+else on those pages works.

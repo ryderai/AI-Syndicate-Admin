@@ -256,7 +256,7 @@ function RepAnswer({ report }) {
 /* The box                                                             */
 /* ------------------------------------------------------------------ */
 
-function RepAskBox({ userId, sample }) {
+export function RepAskBox({ userId, sample }) {
   /* SMALL BY DEFAULT, same as the Overview's generator. Ryder, Aug 23 2026, on
    * that one: "put the ai generator as like a small box but when you click open
    * it enlarges the box with the full thing." A rep's Work page is a page you
@@ -498,7 +498,16 @@ function RepNumbers({ overview, stageLabels }) {
         <div className="rb-addup">
           These add up to your {o.owned} open lead{o.owned === 1 ? "" : "s"} — every claim is in
           exactly one of them.
-          {o.neverContacted ? ` ${o.neverContacted} of them have no first contact logged at all.` : ""}
+          {/* "ON THIS CLAIM", because this counts a different column from the
+              Overview tile that uses almost the same words. Here it is
+              `claim_contacted_at` — the current claim's own first touch, cleared
+              every time a lead is claimed, reassigned or handed back. The
+              Overview's "Never touched" tile counts `first_contact_at`, which is
+              the relationship's and is never cleared. Both are right about
+              different questions, and the two phrases were identical, so a rep
+              comparing two screens would have read them as one number that
+              disagreed with itself. Aug 27 2026, after a review. */}
+          {o.neverContacted ? ` ${o.neverContacted} of them have no first contact logged on the current claim.` : ""}
         </div>
       )}
 

@@ -4820,3 +4820,577 @@ every other suite unchanged.
   on the Firms view.
 * **The preview mirror in `clearImport` is a second copy of the rules.** It matches today and is
   tested to match; two copies of a rule is still two copies.
+
+---
+
+## §45. THE FLOOR — the rep console rebuilt as four pages, and the lock moved onto the row — Aug 27 2026 (append-only section)
+
+**Read this for anything a sales rep sees.** It replaces §26.5 and the whole of the Aug 26 rep
+split on WHAT EXISTS; §26.4's eleven rules still stand and §43's sheet is still the sheet.
+
+Status: **built, lint clean, `vite build` clean, tested, driven in a real browser. NOT COMMITTED
+and NOT PUSHED, so none of it is on the deployed site.** Migrations `0018`–`0023` are new and
+unrun, on top of `0007`–`0017` which were already unrun.
+
+**AND THE CONSOLE IS DEPLOYED — every earlier state board in this file that says otherwise is
+wrong.** Measured in Chrome on Aug 27 2026 by another session:
+`https://ai-syndicate-admin.vercel.app` is Ready, last deployed Aug 26 from `main` at commit
+`c5ea811`. What is on that URL is therefore YESTERDAY'S code, not this section's.
+
+It is also running on sample data: `GET /api/health` on the live URL returns 200 with all
+thirteen flags false and `"Supabase env vars are missing on the server"`, so the deployed server
+cannot see a usable service-role key even though ten variable names have been on the Vercel page
+since Aug 18. **A name on that page is not a working key**, and `/api/health` on the deployed URL
+is the one honest answer to "are the keys working" — a 401 from it is good news, because it means
+auth started working. Do not conclude anything about deployment from the absence of a `.vercel`
+folder locally; that only means nobody ran `vercel link`.
+
+Built from `AI-Syndicate/Admin-Sales-Floor-Aug27/BUILD-PROMPT-the-floor.md` and the clickable
+wireframe Ryder approved the same day.
+
+### 45.1 A rep has four pages, not three
+
+| Page id | Name | What it is |
+|---|---|---|
+| `overview` | Overview | The ask-anything box, then this rep's own numbers. Landing page. |
+| `floor` | The Floor | Every lead in the company, with a three-state switch: Mine · Available · All. |
+| `gmail` | Gmail | This rep's own mailbox. |
+| `brain` | AI Brain | This rep's own tone rules. |
+
+`work`, `leads` and `mine` are **gone as page ids**. `SPLIT_FOR_ROLE` in `AdminDashboard.jsx`
+is a map per role now and rewrites all four old addresses; `Header.jsx` gained a `ROLE_TITLES`
+override because `overview` and `brain` are shared ids that mean different things to different
+roles. The role is deliberately NOT in the URL: an address that has to agree with who is signed
+in is an address that eventually does not.
+
+Owner and admin keep their Sales page. It gained the outreach columns and the loss breakdown in
+the Rep numbers modal, and lost nothing.
+
+### 45.2 THE ARCHITECTURE CALL — one set of records, three layouts
+
+Ryder: *"each reps account seperate because they are independant and they all work
+independately, but on the owners side and admin side they all have to come together and
+everything has to flow."*
+
+The only shape where both halves are true:
+
+1. **One read.** `getFloorBoard()` — `getSalesBoard()` plus the tag vocabulary, the current tag
+   state and the scans. A page may not fetch its own leads. `tests/floor-scoping` asserts this
+   structurally, including against an ALIASED second import, which is how a reviewer broke the
+   first version of that assertion.
+2. **One row builder.** `sheetRow()`. Three layouts on top of it.
+3. **No stored aggregates. Anywhere.** Every number is counted from the rows at read time.
+4. **The rep's tile and the owner's cell are the same function** — `outreachFor()` in
+   `lib/outreach.js`, called once per person for the owner's table. There is a browser test that
+   reads both numbers off two real screens and asserts they are equal, and it is
+   mutation-proved: changing the owner's window makes it fail.
+
+### 45.3 THE LOCK IS ON THE ROW, NOT ON THE PAGE
+
+**Visibility: every lead, every role.** **Editability: mine, or nobody's, or I am owner/admin.**
+
+- `canEditLead(lead, member)` in `src/lib/salesSheet.js` is the ONLY editability check. Nothing
+  re-derives it. A missing member and a member with no role both return false.
+- Somebody else's row: dimmed (`.adm-sh-row.theirs`), every control replaced by its value, a
+  `🔒 Held by <name>` marker, and the drawer opens **read-only** — every field, every note, the
+  whole timeline, and not one button. That is the requirement, not a softening of it: a rep has
+  to be able to see that another rep is already in the building.
+- `openLeadById` was kept and repointed. It refuses an id that is not in the rows that were
+  loaded, and read-only is decided once, at the drawer's call site, from `canEditLead`.
+
+**THE HOLE THIS CLOSED, which was already open.** `admin_leads` UPDATE was
+`using (admin_is_member())` with **no `with check`** (0001:403-405). In plain words: any rep could
+already reassign any lead to themselves by talking to the database directly. Nobody noticed
+because no button offered it. `0020_rep_scoping.sql` closes it, and does the same on
+`admin_proposals`, `admin_lead_activity`, `admin_lead_tag_events` and `admin_email_threads`.
+
+**A DEFECT IN THE BUILD PLAN, and the reason the shipped rule is wider than it specified.** The
+plan asked for `with check ( admin_is_admin() or owner_id = auth.uid() )`. That version breaks
+two ordinary things:
+
+* a rep could never hand a lead back to the floor — `releaseLead` writes `owner_id: null` and the
+  resulting row fails that check;
+* **logging a touch on an unclaimed lead would fail.** `admin_lead_activity_touch` (0009) is a
+  plain trigger, not `security definer`, so its UPDATE on `admin_leads` runs as the person who
+  logged the activity and IS subject to this policy. On an unclaimed lead the row still has a
+  null owner afterwards.
+
+So `owner_id is null` is allowed in the WITH CHECK, and the USING clause is what keeps a rep out
+of another rep's row. Written out in full in 0020 section 1 so nobody tightens it back.
+
+**THE SAME RULE IN THREE PLACES**, and 0020's own section 6b says the one way to undo all of it:
+re-running an EARLIER migration after a later one that tightened a policy of the same name
+reverts the tightening. If you ever re-run `0001` or `0009`, run `0020` and `0023` after them and
+then `bash tests/floor-scoping/sql.sh`.
+
+### 45.4 THE SECURITY HOLE THE REVIEWS FOUND — migration 0023
+
+`admin_lead_to_client` (0015, Aug 25) is `security definer`, is granted to `authenticated`, and
+its only guard was `admin_is_member()`. It also took the author's id as a **parameter**. So one
+line in any rep's browser console:
+
+```js
+supabase.rpc('admin_lead_to_client', { p_lead: '<any lead id>', p_actor: '<anybody>' })
+```
+
+marked another rep's live deal Won, created a client record, relinked every contact at that firm,
+and filed the `'converted'` timeline row under whatever user id the caller typed. Trap #6 in §8
+for the fourth time in this repo, and the first time a *forged author* was possible.
+
+`0023_close_the_won_hole.sql` replaces the function with two guards: the row lock (through
+`admin_can_work_lead`, one function for a rule four tables need) and "the author is whoever is
+asking" — a rep may only pass their own id, an owner may name somebody else. The body was
+extracted from 0015 **by a script** rather than retyped.
+
+### 45.5 Tags are an append-only event log
+
+Two tables (0018). `admin_lead_tags` is the vocabulary; `admin_lead_tag_events` is every add and
+every remove, with the day, the person and the reason. **There is no `tags` column and no
+`current` flag, and no update or delete grant on the events at all — not even for an admin.** A
+lead's tags right now are the replay of that log.
+
+Two consequences that fall out for free: the dated history Ryder asked for, and the rule that an
+automatic rule never puts back a tag a person removed by hand — the removal *is* the record, so
+nothing has to remember it. The mirror rule (a rule never removes a tag a person added) was
+missing from the first version and was found by review.
+
+`admin_lead_tags_now` is a **view** — the newest event per lead per tag, computed in one line of
+SQL with `security_invoker` on. Not a stored copy: the board cannot read the whole log for two
+thousand leads, and the log cannot be windowed (an `added` from three months ago falling outside
+a window makes a tag that IS on a lead look like a tag that is off, and a filter built on quietly
+wrong tags looks like it worked).
+
+**Deliberately NOT tags:** the firm's line of business, and where it is. Both are real columns
+that arrive with the sheet, both are their own filter, and both are OPEN sets — a new vertical
+would need a new vocabulary row, which only an admin may write, so an import run by a rep would
+silently fail to tag half its rows.
+
+### 45.6 Won and Lost ask why, in front of the ONE function
+
+A counted reason from a fixed list (`LOST_REASONS` / `WON_REASONS` — two separate lists, because
+"price" is not a reason somebody said yes) **plus** what actually happened in the person's own
+words, at least 15 characters. `checkCloseReason` refuses an empty reason and a note too short to
+read back. **The honest limit, on record: the only test on the note is its length.** One
+fifteen-character word passes.
+
+The box sits in front of `closeLeadWon()` / `markLeadLost()` in `src/lib/data.js`, NOT in front of
+the four buttons that reach them — that is how three get it and one does not, which is exactly
+the defect that made one of those four permanently block the only one that worked (§43.4).
+
+Before today the only button that ever wrote a loss reason wrote the same sentence every time, so
+the loss breakdown would have been one bar tall for ever. A **fifth** path also existed: the
+assistant's `update_lead` tool wrote `stage: 'won'` straight to the row with no reason, no date,
+no note and no tag. It refuses both stages now, and `SETTABLE_STAGES` keeps them out of the
+tool's schema so the model is not offered a value it will be refused.
+
+### 45.7 OUTREACH, AND WHY THERE IS NO OPEN RATE
+
+**Gmail cannot tell anybody whether an email was opened, and neither can anything else.** There is
+no recipient-side open signal in the API. The only way an "open rate" is ever produced is a
+tracking pixel, and Apple Mail Privacy Protection loads it for everybody whether they read the
+mail or not while Gmail proxies images through Google. The "under 3%" figure in the industry is
+measured with that same broken pixel. **Ryder agreed to drop it on Aug 27 2026.** If anyone ever
+adds one it is labelled GUESSED and never mixed with the numbers below.
+
+Measured instead, all of it real: **people emailed · replied · reply rate · time to first reply ·
+bounced**, plus the touches actually logged.
+
+**The unit is a PERSON, not an email.** A rate needs a numerator and a denominator in the same
+unit; emails sent over people who replied is two facts divided by each other. It is also what
+makes the owner's table possible at all: threads are keyed on a mailbox, and
+`admin_gmail_accounts` is readable only by the person who connected it, so nothing in the browser
+can map a mailbox to a rep. Lead columns can.
+
+**A reply is only a reply to something we sent inside the same window**, and a bounce comes out
+of the denominator. Both of those were wrong in the first version and produced a **300% reply
+rate** on a real fixture, printed on screen as "3 of 1 people who could answer".
+
+`0021` also repointed the one-text rule. `admin_leads.email_opened_at` exists and **nothing has
+ever written it** — and it was the hard gate on the one-text rule, in the SQL function AND in
+`textGate()` in the browser. So texting has been switched off permanently since Aug 21 and nobody
+knew. Both copies now gate on `first_reply_at`. A reply is a stronger signal than an open anyway:
+an open can be an image proxy, a reply is a person typing.
+
+### 45.8 A rep's own AI rules — and the mechanical reason they carry no numbers
+
+`admin_user_brain` (0022), one row per rule, RLS `user_id = auth.uid()` plus an admin READ (a rule
+nobody can audit rewrites what prospects get told). **Not** a `user_id` column on `admin_brain`,
+whose admin-only policy is what keeps the company Brain away from a rep (trap #8).
+
+They reach the model through `lib/ai.js buildSystemPrompt()`, placed AFTER the company rules and
+BEFORE the job instruction, in a block that says in words that the company rules win — the same
+shape as the feedback loop in §32/§33: correction above, constraint below, and the constraint
+saying it wins. `api/ai-draft.js` reads them unconditionally for every role, and only ever the
+caller's own. `api/rep-report.js` puts them into `repFactsText` too, **so the model and the
+honesty gate read the same string**.
+
+**And that is exactly why a rule may not contain a number.** These rows enter the pool the gate
+checks a draft's numbers against. Type "our clients see a 40% lift" into your own rules and the
+gate will let the AI write it to a prospect, because as far as the gate can tell we told it that.
+`checkPersonalRule` refuses **any digit** — stricter than it sounds, and deliberate: allow a
+single digit and "if their score is under 6, name it" walks through, and a bare 6 in the pool is a
+number the model may then attach to a firm. Nothing a tone rule needs to say requires a digit.
+**The label goes through the same check** — it was not checked at first, and both prompt renderers
+print it. Known limits, on record: "forty percent" written in words, and non-ASCII digits.
+
+### 45.9 The scan is built and cannot be switched on
+
+`api/sales-score.js` keeps every rule it had — the request may only name WHICH firm, the website
+comes from our own database, an unreadable response saves nothing, no score is ever invented,
+clamped or estimated — and now reads three scores plus findings and writes an
+`admin_company_reports` row per scan. A re-scan **inserts**; nothing is overwritten, so "was 65 in
+September and still 65 in November" stays readable.
+
+`PLATFORM_SCORE_URL` does not exist and the response shape has never been written down. The panel
+reads `/api/health` rather than hard-coding it, so the sentence cannot outlive the thing it
+describes, and the button is off with the reason on it. **A missing half of a scan is a dash, never
+a zero** — a firm shown as 0 for AI Access reads as the worst site anybody has seen, which is the
+hardest a rep would ever go in.
+
+### 45.10 THE ONE RULE THIS SECTION NARROWS — the send button
+
+§42 PART 2 rule 6 says **NOTHING IS EVER SENT FROM THE CONSOLE** and "do not improve this into a
+send button". Read carefully, that rule is about **CLIENT REPORTS**, and it is enforced in
+`clientReports.jsx:546`, where the Gmail button saves a draft and stops. That stays exactly as it
+is, for ever.
+
+**A rep sending their own outreach from their own mailbox, after reading the draft, is a different
+contract and is allowed.** The Inbox has had three human-clicked Send buttons since Aug 18.
+Reason: making a rep switch to Gmail for every email defeats the whole page, and it is their own
+mailbox and their own click. Written here because the next session will otherwise "fix" one into
+the other.
+
+### 45.11 The rules that must not be broken
+
+1. **One source of rows.** No page fetches its own leads. No stored totals, ever.
+2. **`canEditLead()` is the only editability check.** Never re-derived inline.
+3. **Every rule exists in RLS AND in the endpoint AND in the UI** — and inside every
+   `security definer` function, which is the place it was missed twice.
+4. **Records are append-only:** notes, tag events, the timeline, scan reports. A correction is a
+   new row.
+5. **One action, one function** — and it writes the timeline row in the same call.
+6. **Every write asserts the state the screen showed.**
+7. **Dates go through `teamDay.js` / `Intl`; rule functions take `now` as an argument** and never
+   read a clock. A missing clock REFUSES rather than guessing — and it must leave the clock-based
+   tags alone rather than stripping them, which the first attempt at that got backwards.
+8. **An empty answer is null, never zero.** When a read hits its cap, the wording changes.
+9. **A measurement is a number PLUS its window PLUS the day it was read PLUS who read it.**
+   Every tile and every column of the owner's table is stamped.
+10. **Read-by-us and typed-in-by-us never blend.**
+11. **Personal AI rules carry no facts and no numbers** — body and label alike.
+12. **No rankings between people on a rep's own pages.**
+13. **Two numbers on one screen must add up**, or one of them says why it cannot.
+
+### 45.12 Proof on record (Aug 27 2026)
+
+`npx eslint .` clean · `npm run build` clean in the cloud container · **17 pure suites, 0
+failures**, the new ones being `lead-tags` 220, `floor-scoping` 231, `outreach-stats` 177,
+`user-brain` 64 and `company-report` 63, each across five timezones · **7 database suites against
+a real Postgres 16**, migrations `0001`–`0023` in order with `0018`–`0023` re-applied · **two
+mutation proofs** (reinstall the old wide policy, watch the assertions wrongly pass, put it back)
+· **`tests/floor-scoping/walkthrough.mjs` drives the BUILT bundle through 44 assertions and 22
+screenshots with 0 problems**, as a rep and then as the owner, and reads the same number off both
+screens · **three adversarial review passes, the third on the fixes only: 25 defects, then 20
+more, several of the second batch caused by the first batch's fixes.**
+
+### 45.13 Blocked until, and known gaps
+
+Blocked: the scan (no platform address, no documented response) · storage (`0007`–`0023` unrun,
+nobody has database access) · **getting this code onto the live site** — the console IS online, but
+nothing here is committed or pushed, and the deployed server has no working Supabase key, so the
+live URL runs Aug 26's code on sample rows.
+
+Gaps, written down rather than described away:
+
+* **Nothing tags the existing book.** The only caller of the automatic rules is a per-lead button.
+  The sweep and the import are where it belongs and neither calls it, so tag filters return
+  nothing on a fresh database until somebody presses that button.
+* **The three scan scores and the tags are not in the AI's fact sheet.** The outreach numbers now
+  are. The other two are named as absences so the AI says "not in my records" rather than having
+  a whole answer thrown away.
+* **`api/gmail-threads.js` records a reply on a lead without checking its owner** — deliberate: it
+  is an observation in a mailbox the caller was already granted, and each column is a one-shot
+  stamped only while somebody has the page open. The narrower hole (a rep can link their own
+  thread to any lead) belongs to the Inbox's link picker.
+* **`leadWeMayWrite()` is two identical copies**, in `gmail-send.js` and `gmail-drafts.js`.
+* **`personalRulesRead` comes back from `/api/ai-draft` and no screen reads it.**
+* **`getSalesBoard` turns a failed read into `rows: []`**, so `lib/outreach.js`'s null-is-not-zero
+  path is unreachable from the board. A `failed: {...}` map was added and only the AI's fact sheet
+  uses it; the tiles still lean on the warning banner above them.
+* **The tag state read is capped at 12,000 lead-tag pairs** and a lead past it shows fewer chips
+  than it carries. The page says so.
+
+### 45.14 The files
+
+| Piece | Where |
+|---|---|
+| Tags · reasons + scan reports · the row lock · outreach · the personal brain · the Won fix | `supabase/migrations/0018`–`0023` |
+| `canEditLead`, the availability switch, stacking filters, the bands, the scan reader | `src/lib/salesSheet.js` |
+| The automatic tag rules, the close reasons, `checkPersonalRule`, `textGate` | `lib/sales-rules.js` |
+| Reading the tag event log | `lib/lead-tags.js` (new) |
+| Outreach counting for both sides | `lib/outreach.js` (new) |
+| The rep's outreach block in the AI's fact sheet | `lib/rep-report.js` |
+| The Floor, its filter bar, its row buttons, its four modals, the owner's rep numbers | `src/components/admin/SalesPage.jsx`, `salesSheet.jsx` |
+| The read-only drawer and every Won/Lost path | `src/components/admin/salesProfile.jsx` |
+| The rep's Overview and AI Brain | `src/components/admin/repOverview.jsx`, `repBrain.jsx` (both new) |
+| A rep's own Gmail, reply and bounce counting, token encryption | `Inbox.jsx`, `api/gmail-*.js`, `lib/gmail-mailbox.js` |
+| One action, one function | end of `src/lib/data.js` |
+| Tests | `tests/lead-tags` · `tests/floor-scoping` · `tests/outreach-stats` · `tests/user-brain` · `tests/company-report` |
+| The browser proof | `tests/floor-scoping/walkthrough.mjs` and `shots/` |
+
+---
+
+## §46. THE FLOOR VERIFIED, AND TWO TEST FILES THAT WERE PROVING REPLACED RULES — Aug 28 2026 (append-only section)
+
+Follow-on to §45. §45 is still correct about what exists. This section is the final verification pass
+run on the finished code, and the two defects it turned up. Nothing in §45 has been edited.
+
+### 46.1 State, unchanged
+
+Still **not committed and not pushed**. Migrations `0007`–`0023` still never run. The live console
+(`ai-syndicate-admin.vercel.app`) still runs the Aug 26 build, on sample rows, because that server
+has no working Supabase key.
+
+### 46.2 The verification pass, measured Aug 28 2026
+
+The finished source was re-synced off the Mac into a clean container copy and everything run again,
+because the last full green run predated the third review round's fixes.
+
+- `npx eslint .` **exits 1**, and only because of `_to_delete/__gatecheck.jsx` — the deliberately
+  broken two-line file left on Aug 26 to prove the linter catches things. With
+  `--ignore-pattern '_to_delete/**'` it exits 0, no errors, no warnings. Never write "lint clean"
+  without that second sentence.
+- `npm run build` — clean. 154 modules, one pre-existing chunk-size warning.
+- **20 test suites, 0 failures.** §45 said 17. It was undercounting: `client-timeline` and `ops` have
+  only `test.mjs` and no `run.sh`, so a `for d in */run.sh` loop skips them silently, and `share` was
+  simply missed. Counts: floor-scoping 231 · lead-tags 220 · outreach-stats 177 · connectors 165 ·
+  sales-sheet 139 · sales 108 · vault 106 (+36 database) · brain 78 · user-brain 64 ·
+  company-report 63 · rep-brief 57 · rep-report 54 · finance 53 · share 48 · inbox 47 ·
+  console-report 46 · overview 44 · client-timeline 40 · ops 18 · start-over (database only).
+- **8 database suites** against real Postgres 16, all applying `0001`–`0023` in order. Only
+  `tests/floor-scoping/sql.sh` re-applies `0018`–`0022` a second time; `0023` is re-applied inside
+  its own mutation section.
+- **Browser walkthrough: 44 checks, 0 problems, 22 screenshots.** The rep's Overview and the owner's
+  table both read `1` for people emailed and `1` for replies.
+- The 22 screenshots in `tests/floor-scoping/shots/` are now this run's, proved by hashing all 22 on
+  each machine: both give `00ab47330ca71d6b12faafbe3daef480562862cbbfae35445d4846aa0caa5387`.
+
+### 46.3 Two traps in the test harness itself
+
+- **`tests/brain/sql-crosscheck.sh` cannot run as root.** It is an Aug 20 file that calls `initdb`
+  directly instead of dropping to the `postgres` user. As root it dies with
+  `initdb: error: cannot be run as root` and `tests/brain/run.sh` exits 1, which looks like a failing
+  suite and is not. Run it as the `postgres` user and it passes: "JavaScript and SQL agree on all 24
+  cases".
+- **`tests/floor-scoping/sql.sh` exits 0 when it cannot start a database.** Lines 55-56 print
+  `Postgres would not start; SKIPPED.` and `exit 0`, deliberately, so the file runs anywhere. A green
+  run is therefore not proof the database half ran. Read for `all database checks passed`.
+
+### 46.4 DEFECT — `tests/sales/sql.sh` re-ran 0009 after 0021, twice, and reverted the rule both times
+
+`0009_sales.sql` contains `create or replace function public.admin_lead_claim_text(...)`. This file
+applies every migration in order and then re-runs `0009` — once near the top as a deliberate "is this
+safe to run twice" check, and once further down because section 5 tests `0009`'s own backfill. Each
+re-run **silently reverted** the function to 0009's version: the gate went back to
+`email_opened_at is not null`, and 0020's row-lock line vanished from inside it. Nothing errored.
+
+Consequences: two assertions in section 4b were proving the rule this build **replaced** — one of
+them read *"no text is allowed before an email open is recorded"* — and the two lines `0021` actually
+changed were covered by nothing in the file. After the second re-run, the file also simply *ended*
+with the replaced rule in the database, so the next assertion anybody appended would have been wrong
+too.
+
+**The fix, in that file only.** Both re-run points now re-apply `0020` then `0021` straight
+afterwards, and three checks read `pg_get_functiondef` out of the live database:
+
+- *"after 0009 was re-run, 0021's one-text gate is back (first_reply_at)"*
+- *"...and 0020's row lock is back inside the function too"*
+- *"this file ends with 0021's one-text gate in place, not 0009's"*
+
+The stale fixtures now set `first_reply_at` instead of `email_opened_at`, and one label reading
+*"a sales rep can move any lead's stage (no locks between reps)"* — true when written, false since
+`0020` — now reads *"a lead THEY OWN"*, with the reason next to it.
+
+**Mutation-proved:** delete the re-apply loop and the new checks fail with their own messages
+(*"every assertion in 4b would be testing the replaced rule"* and *"the row-lock line is missing from
+admin_lead_claim_text after the re-runs"*); put it back and they pass.
+
+**The general rule.** If a test applies migrations in a loop and then re-applies an older one, every
+`create or replace` in that older file is a time machine. Re-apply the later migrations afterwards,
+and assert the new definition is really in the database before any assertion leans on it. This is the
+same hazard `0018` warns about and `0020` §6b writes an order for — it had simply never been checked
+for inside a test file.
+
+### 46.5 The report, and what two checkers killed in it
+
+Two-layer report written and filed as `WORK-LOG/2026-08-28--internal--the-floor-report-SHORT.md` (the
+one to share) and `...-FULL.md` (filed). Two separate checker agents ran on it, the second on the
+corrections only: **24 findings, then 19 more, four of which the corrections themselves introduced.**
+
+The claims that were wrong are worth carrying, because they are recurring shapes:
+
+- A capability claim the code had already retracted in its own comment: that a punctuation-only close
+  note is refused. `checkCloseReason` tests **length only** — "n/a n/a n/a n/a" is exactly 15
+  characters and passes.
+- Two "can never" claims the schema contradicts. Tag events cannot be edited or deleted, **but**
+  `on delete cascade` on the lead takes the whole history with it, and `on delete set null` on the
+  signer blanks the name. `tests/lead-tags` proves both on purpose.
+- "No stored totals anywhere" — false. `admin_leads.texts_sent` is a stored counter that gates a
+  button, and the three scan scores are stored in `admin_company_reports`.
+- `admin_company_reports` is not "insert-only": there is no UPDATE policy, but DELETE is granted to
+  admins, and `0019`'s own comment says that is worth being uneasy about.
+- The null-is-never-zero promise is true in `lib/outreach.js` and unreachable on the page, because
+  `getFloorBoard` turns a failed read into an empty list.
+- Widening a hole while correcting it: `admin_lead_to_client` checked `admin_is_member()`, so it was
+  shut to an outsider with a login and open to every member of staff. "Any signed-in person" was
+  wrong in the direction of worse.
+
+---
+
+## §47. THE CONSOLE IS RUNNING ON REAL DATA — keys, database, login, Gmail — Fri Aug 28 2026 (append-only section)
+
+Everything here is measured, not assumed. Times are Central.
+
+### 47.1 What is true now that was not true yesterday
+
+- **The database exists.** All **23** migrations ran (0001–0023). Verified by counting
+  afterwards: **46 tables, 23 functions, 115 policies** — the policy count matches the 115
+  distinct policy names in the migration files exactly. Before this, the Supabase dashboard
+  said **"LAST MIGRATION: No migrations"**. Not "some unrun" — none had ever run, and every
+  earlier state board that guessed a number was wrong.
+- **Real sign-in works.** `VITE_NO_SIGNIN=false`. Ryder is an active `owner` row in
+  `admin_users`, user_id `d917adfc-2abf-4417-b8c3-053b00236f43`.
+- **Gmail is connected.** `growth@aisyndicate.com`, LIVE, 25 real threads.
+- **The deployed site is locked** behind Vercel Authentication (Standard Protection).
+
+### 47.2 The Supabase key: the legacy tab is a dead end
+
+The `service_role` JWT from the **"Legacy anon, service_role API keys"** tab returns
+**401** — legacy JWT keys are disabled on this project. The working key is the
+**`sb_secret_`** one from the *Publishable and secret API keys* tab, named
+`prod_service_role`, which Andrew had already created for exactly this.
+
+Test any Supabase key without exposing it — reads the value out of the file, prints only a
+status code:
+
+    cd ~/Documents/AI-Syndicate/ai-syndicate-admin && curl -s -o /dev/null -w "%{http_code}\n" \
+      "$(grep '^VITE_SUPABASE_URL=' .env.local | cut -d= -f2-)/rest/v1/" \
+      -H "apikey: $(grep '^SUPABASE_SERVICE_ROLE_KEY=' .env.local | cut -d= -f2-)"
+
+**200** = works. **401** = get the `sb_secret_` one.
+
+### 47.3 Changing a password when MFA is on
+
+The platform's `/#/reset-password` page answers *"AAL2 session is required to update email
+or password when MFA is enabled."* A reset link only gives an AAL1 session and that page has
+no field for the second factor. The way through is the **Supabase Admin API**, which is an
+admin action and skips the rule:
+
+    PUT {SUPABASE_URL}/auth/v1/admin/users/{user_id}
+    apikey + Authorization: Bearer {service key}, Content-Type: application/json
+    {"password": "..."}   → 200
+
+Signing in afterwards works normally at AAL1. Only *changing* a password needs AAL2.
+
+### 47.4 ⚠️ THE HTTPS ASSUMPTION — it broke every OAuth flow on localhost
+
+Six files did `req.headers["x-forwarded-proto"] || "https"`. Vercel always sets that header
+so production was fine; `npm run dev` sets nothing, so the server believed it was on https
+while the browser was on `http://localhost:5173`. Two failures, **neither of which points at
+the cause**:
+
+1. The OAuth state cookie was written with `Secure`. A `Secure` cookie sent over http is
+   dropped, so the callback found no cookie and redirected with
+   `?gmail=error&reason=browser_mismatch` — which reads like a browser problem.
+2. The redirect home was built as `https://localhost:5173` → **ERR_SSL_PROTOCOL_ERROR**.
+
+Fixed with **`lib/req-origin.js`** — `originFromRequest(req)` and `secureFlag(req)`. A
+forwarded header always wins, so production is unchanged; only a request with no forwarded
+proto **and** a localhost host is treated as http. Applied to `gmail-auth-start`,
+`gmail-callback`, `connect-start`, `connect-callback`.
+
+**This also fixed the client-connections flow** (Search Console / Business Profile /
+Analytics), which carried the identical bug and had never been tried.
+
+### 47.5 ⚠️ A DEAD SESSION RENDERS AS "YOUR KEYS ARE MISSING"
+
+`getHealth()` in `src/lib/adminApi.js` line 41: when the request fails it **fabricates**
+`{supabase:true, stripe:false, gmail:false, ai:false, …}` — the same shape as "no keys are
+set". So a 401 is indistinguishable from missing keys on every page that reads health.
+
+This cost about an hour of chasing Google keys that were correct. The tell: Settings showed
+Google **LIVE** at 1:21 PM and **WAITING ON KEY** at 1:41 PM with nothing changed between.
+
+Diagnose it in thirty seconds, in the app tab's console:
+
+    const v = JSON.parse(localStorage.getItem('sb-xweueatikwvnahegeful-auth-token'));
+    await (await fetch('https://xweueatikwvnahegeful.supabase.co/auth/v1/user',
+      {headers:{apikey:'<the sb_publishable key>', Authorization:'Bearer '+v.access_token}})).json()
+
+It answered **`"Session from session_id claim in JWT does not exist"`** — signed, unexpired,
+session revoked server-side. Almost certainly fallout from changing the password through the
+Admin API earlier the same day. **Fix: sign out, sign back in.**
+
+The fabricated object carries `error`. The Inbox now checks `health?.error` first.
+**The Settings page still has this blind spot.** If every integration goes orange at once,
+suspect the session, not the keys.
+
+### 47.6 Google Cloud: what was built, and the trailing-slash trap
+
+Project **`AI Syndicate Admin`**, in the **aisyndicate.com organization**, owned by
+**growth@aisyndicate.com** (Ryder's call — the whole team can reach it). OAuth client
+`admin-console`. Seven APIs enabled: Gmail, Search Console, Analytics Data, Analytics Admin,
+My Business Account Management, My Business Business Information, Business Profile
+Performance.
+
+**Google saved every redirect URI with a trailing slash** (`.../api/gmail-callback/`). The
+code sends none. Google matches character for character → **Error 400:
+redirect_uri_mismatch**. Remove the trailing slash on every one.
+
+All four must be registered — the localhost pair is **not** optional:
+
+    https://ai-syndicate-admin.vercel.app/api/gmail-callback
+    https://ai-syndicate-admin.vercel.app/api/connect-callback
+    http://localhost:5173/api/gmail-callback
+    http://localhost:5173/api/connect-callback
+
+**SETUP.md § 5 says `admin.aisyndicate.com`. That domain does not exist.** The live address
+is `ai-syndicate-admin.vercel.app`.
+
+### 47.7 The Inbox connect screen, and the end of sample mail
+
+At Ryder's request the connect screen is now a heading, one line and one big centred button.
+The old bordered card — four-step list plus a three-row permission table — is gone. The
+permission detail survives inside a collapsed native `<details>`, because it is a privacy
+promise to whoever attaches their own mailbox; it is not deleted, just out of the way.
+
+**Sample mail is demo-only now.** It used to render whenever Gmail was not connected, which
+made an unconnected mailbox look like a working one and hid the connect button completely.
+Every sample path is now behind `!configured` — no Supabase at all, the role-preview demo.
+With a real console, no mailbox means the connect screen, every time.
+
+### 47.8 The `.env.local` naming rule that stops a leak
+
+`.gitignore` covers `.env`, `.env.local` and `.env.*.local`. It does **not** cover
+`.env.platform`, `VERCEL-PASTE.env.local`, or `.env.local.bak`. A secrets file whose name
+does not end in `.local` **will be committed**. Always end it `.local`, and run
+`git check-ignore -v <file>` before writing anything sensitive into it.
+
+### 47.9 ⚠️ Vercel: what is there, and what must not be deleted
+
+The deployed project still runs on the **fourteen** rows added Aug 18 by another account,
+plus a `CRON_SECRET` added Aug 27 evening by a third. At least one of `VITE_SUPABASE_URL` /
+`SUPABASE_SERVICE_ROLE_KEY` there is **empty** — proven because `/api/health` returned the
+"env vars are missing" branch, which only fires when the value is absent entirely; a wrong
+value would have given a 401 instead.
+
+**Do NOT delete `STRIPE_SECRET_KEY`, `ANTHROPIC_API_KEY` or the two `GOOGLE_OAUTH_*` rows.**
+They are type "Secret" — write-only, so nobody can tell whether Andrew put real values in
+them. Deleting destroys the only copy. Overwrite instead.
+
+Also: a project-level variable **always overrides** a linked Shared Environment Variable with
+the same name, so linking a shared key over a dead project-level row changes nothing.
+
+Ready-to-paste block: **`.env.vercel-paste.local`** — 16 values, per-project overrides
+already applied (`ADMIN_BASE_URL` set to the live address, `VITE_NO_SIGNIN=false`, both
+`*_REDIRECT_URI` deliberately omitted).

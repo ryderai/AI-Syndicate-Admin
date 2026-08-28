@@ -1,21 +1,43 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   LEAD_STAGES, LEAD_STAGE_LABELS,
-  getSalesBoard, upsertLead, claimLead, releaseLead, addLeadActivity, logActivity,
-  markLeadWon, wonMessage,
+  getFloorBoard, upsertLead, claimLead, releaseLead, addLeadActivity, logActivity,
+  wonMessage,
+  /* THE FLOOR, Aug 27 2026. Every one of these is ONE ACTION, ONE FUNCTION, and
+   * each of them writes the dated line on the person's timeline in the same call.
+   * A button never writes. Four buttons that could mark a deal Won had four
+   * behaviours, and one of them permanently blocked the only one that worked. */
+  closeLeadWon, markLeadLost, lostMessage, setLeadTag, syncAutoTags, listLeadTagEvents,
 } from "../../lib/data.js";
 import {
   salesQueue, claimState, scoreGate, repStats, listHealth, isOpenStage, ROE,
+  textGate, LOST_REASONS, WON_REASONS, MIN_REASON_NOTE_CHARS, checkCloseReason,
 } from "../../../lib/sales-rules.js";
-import { sheetRows } from "../../lib/salesSheet.js";
+/* Tags are an append-only event log, so "which tags are on this lead" is a
+ * replay rather than a column read. One place decides it. */
+import { currentTags, tagHistory } from "../../../lib/lead-tags.js";
+/* outreachFor itself is not called here — a rep's own Overview calls it. The
+ * owner's table calls outreachByRep, which is outreachFor once per person with
+ * the same rows, so the two sides cannot drift. */
+import { outreachByRep, lossReasons, OUTREACH_WINDOW_DAYS } from "../../../lib/outreach.js";
+import {
+  sheetRows, canEditLead,
+  AVAILABILITY, AVAILABILITY_LABELS, AVAILABILITY_HINTS,
+  cleanAvailability, byAvailability, availabilityCounts,
+  readCompanyReport, sheetDate, sheetDateLong,
+} from "../../lib/salesSheet.js";
 import { ACTIVITY_WINDOW_DAYS } from "../../lib/data.js";
 import { apiFetch } from "../../lib/adminApi.js";
 import { useScreenContext } from "../../lib/screenContext.js";
 import { useRoute } from "../../lib/router.js";
 import { toast } from "../../lib/toast.js";
-import { SourceBadge, Modal, Field, TextInput, TextArea, Select, timeAgo } from "./shared.jsx";
-import { StagePill, ClaimChip, ScoreChip, LateBox, Tile, MiniBar, SiteLink } from "./salesParts.jsx";
-import SalesProfile from "./salesProfile.jsx";
+import { SourceBadge, Modal, Field, TextInput, TextArea, Select, timeAgo, useHealth } from "./shared.jsx";
+import { StagePill, ClaimChip, ScoreChip, LateBox, Tile, MiniBar, SiteLink, money } from "./salesParts.jsx";
+/* LogModal is exported from the drawer rather than copied here. The Floor's row
+ * can log a touch without opening the record, and a second copy of the one-text
+ * gate would be a second copy that stops matching — the whole reason
+ * claimTextSend lives in the database. */
+import SalesProfile, { LogModal } from "./salesProfile.jsx";
 import SalesSheet from "./salesSheet.jsx";
 import { StartOverPanel } from "./salesStartOver.jsx";
 import { SalesImportModal } from "./salesImport.jsx";
@@ -71,36 +93,55 @@ const VIEWS = [["day", "My Day"], ["lists", "The sheet"], ["pipeline", "Pipeline
  * table already counts what is on screen.
  */
 const MODES = {
+  /* THE FLOOR. One mode where there were two.
+   *
+   * `floor` used to mean "the leads nobody has claimed" and `mine` meant "the
+   * ones I have". Ryder, Aug 27 2026: a rep should see every lead in the
+   * company, because a rep who cannot see another rep's row cannot be stopped
+   * from working the same firm — which is the loudest rule on the Rules of
+   * Engagement tab. So the two pages became one page with a three-state switch
+   * over it, and `mine` is where it opens.
+   *
+   * WHAT A LOCK IS NOW. It is no longer "whose leads this page is about" — the
+   * page is about all of them. The lock moved onto the ROW: see canEditLead in
+   * src/lib/salesSheet.js. Everything below is therefore about WORDS and TILES,
+   * not about narrowing a set.
+   *
+   * `tiles: []` on purpose, and the row of tiles is not drawn at all rather than
+   * drawn dead. Every tile this page could carry either duplicates the
+   * availability switch above the table (which already counts Mine, Available
+   * and All from the same rows the list holds) or belongs on Overview, which is
+   * where a rep's own numbers live now. A tile that filters nothing gets
+   * removed, not left lit and inert — that was the bug "Owed a touch today" had
+   * on the sales role for a day. */
   floor: {
-    owner: "floor",
-    page: "Leads",
-    saying: "On the floor · nobody has claimed these",
+    page: "The Floor",
+    saying: "Every lead we have · you can only change the ones that are yours or unclaimed",
     tiles: [],
-    emptyNote: "Nothing is on the floor right now — every contact loaded has somebody's name on it.",
+    emptyNote: "There are no contacts loaded at all. Somebody with an owner login imports the outreach sheet, and every row on it appears here.",
     /* What a rep is told when a link points at a contact this page does not
-     * hold. Per mode, because the reason differs: off the floor means somebody
-     * claimed it, off My leads means it is not theirs. See openLeadById. */
-    notOnPage: "Leads only opens leads nobody has claimed. Somebody has claimed this one, so it is on their page now and not on the floor.",
-    /* The Claim button now lives in the row itself (salesSheet.jsx, same day),
-     * so this line stopped describing a dropdown and started describing the
-     * button. It still says what claiming COSTS you, which is the part a rep
-     * needs before pressing it rather than after. Aug 26 2026 */
-    hint: `Click a row to read the whole story, or press Claim to take it — first contact is then due within ${ROE.FIRST_CONTACT_BUSINESS_DAYS} business days or it comes back here.`,
-  },
-  mine: {
-    owner: "mine",
-    page: "My leads",
-    saying: "Yours · the leads you have claimed",
-    /* The three that ask something the dropdowns cannot ask, counted from this
-     * rep's own leads: a claim about to lapse, live conversations, won. */
-    tiles: ["atRisk", "meetings", "won"],
-    emptyNote: "You have not claimed anything yet. Open Leads and press Claim on a row.",
-    notOnPage: "My leads only opens the leads you have claimed, and this one is not yours. If it is still on the floor you can claim it from Leads.",
+     * hold. There is only ONE reason left for that now — the contact is not in
+     * the rows that were loaded — because the page holds every lead it read. The
+     * old wording ("somebody has claimed this one") described a lock that no
+     * longer exists. */
+    notOnPage: "The Floor holds the newest contacts we loaded, and this one is not among them. Search their name to find them.",
+    hint: `Press Claim to take a lead — first contact is then due within ${ROE.FIRST_CONTACT_BUSINESS_DAYS} business days or it comes back to the floor. A row somebody else holds is greyed out and opens read-only, so nobody works the same firm twice.`,
   },
 };
 
 export default function SalesPage({ member, mode = null }) {
-  const isAdmin = member.role !== "sales";
+  /* NAMED ROLES, NOT "not sales". This gates the owner-only controls — the
+   * person dropdown, Rep numbers, Import, Start over — and a member with no role
+   * at all satisfied `role !== "sales"`, so a page that had lost track of who was
+   * looking at it drew every one of them over a board where canEditLead() makes
+   * every row read-only. Two guards disagreeing about the same member is worse
+   * than either answer alone.
+   *
+   * canEditLead deliberately keeps "not sales" for the OPPOSITE reason — a role
+   * nobody has taught it about must not lose the ability to work — and it refuses
+   * a member with no role separately. Both fail closed on nothing; they differ on
+   * an unknown role, on purpose. Aug 27 2026, after an adversarial review. */
+  const isAdmin = member.role === "owner" || member.role === "admin";
   /* An unrecognised mode locks to `mine` rather than unlocking the page. A typo
    * in a route must not be the thing that hands a rep the whole pipeline and
    * the admin controls with it — same fail-open the note at the top of
@@ -124,6 +165,34 @@ export default function SalesPage({ member, mode = null }) {
   /* Which lead is mid-claim on My Day, or null. See quickClaim. */
   const [claimingId, setClaimingId] = useState(null);
 
+  /* ---- THE AVAILABILITY SWITCH — Mine · Available · All ----
+   *
+   * Three states, one piece of state, and it is a FILTER OVER THE FULL BOARD
+   * rather than a new fetch. That is the whole architecture in one line: one
+   * read, one row builder, three layouts. A page that fetches its own leads is a
+   * page with its own snapshot, and two snapshots of one pipeline is how a tile
+   * ends up disagreeing with the list underneath it.
+   *
+   * It opens on "Mine", because that is where a rep actually works. Available is
+   * one click.
+   *
+   * DELIBERATELY NOT REMEMBERED BETWEEN VISITS. Columns and grouping are saved
+   * to localStorage; filters are not. A rep who comes back tomorrow to a page
+   * still filtered to one state from last week reads it as an empty pipeline —
+   * and the control that would explain it is the one they have forgotten they
+   * touched. */
+  const [availability, setAvailability] = useState(() => cleanAvailability("mine"));
+
+  /* ---- what the Floor's buttons open ----
+   * One piece of state each, holding the row it is about or null. A single
+   * "openModal" object was tried and thrown away: two of these can be reached
+   * from inside the drawer, and one variable meant closing the reason box also
+   * closed the record behind it. */
+  const [closing, setClosing] = useState(null);      // { row, kind: 'won' | 'lost' }
+  const [tagging, setTagging] = useState(null);      // the row whose tags are open
+  const [scanning, setScanning] = useState(null);    // the row whose scan panel is open
+  const [logging, setLogging] = useState(null);      // { row, kind }
+
   /* THE SIX TILES ARE ONE ROW OF SWITCHES — Ryder, Aug 26 2026.
    *
    * One piece of state, holding at most one tile id, because that is the rule
@@ -146,7 +215,15 @@ export default function SalesPage({ member, mode = null }) {
    * switches a tile off on My leads has to land back on My leads. Aug 26 2026 */
   const tileOff = useMemo(() => ({
     view: lock ? "lists" : member.role === "sales" ? "day" : "lists",
-    owner: lock ? lock.owner : member.role === "sales" ? member.user_id : "all",
+    /* THE OWNER DROPDOWN DOES NOT EXIST ON A LOCKED PAGE and is not read there
+     * either — filterLeads skips it whenever `lock` is set, and the availability
+     * switch is the rep's version of the same question. So "all" is the honest
+     * value rather than a mode's own: it used to be `lock.owner`, which was
+     * "floor" or "mine" back when a mode narrowed the set, and after the Aug 27
+     * rebuild there is no `owner` on a mode at all — that expression was quietly
+     * producing `undefined` and putting it into a filter nothing reads. Found by
+     * the test suite, not by a screen. */
+    owner: lock ? "all" : member.role === "sales" ? member.user_id : "all",
     stage: "open",
     /* The list tabs are a filter like any other, so "back to defaults" has to
      * include them. Leaving the list out meant switching a tile off still left
@@ -195,7 +272,11 @@ export default function SalesPage({ member, mode = null }) {
      * On a locked page the owner filter stays on the lock: all three ask a
      * question about stage or claim state, not about whose lead it is, so none
      * of them has any business widening the page. Aug 26 2026 */
-    setOwnerFilter(lock ? lock.owner : "all");
+    /* "all" either way now. On a locked page the owner dropdown does not exist
+     * and filterLeads does not read it; on the owner's page these three tiles ask
+     * a question about stage or claim state, not about whose lead it is, so none
+     * of them has any business narrowing it. */
+    setOwnerFilter("all");
     setStageFilter(id === "atRisk" ? "open" : "all");
   }, [tileFilter, tileOff, lock]);
 
@@ -214,6 +295,12 @@ export default function SalesPage({ member, mode = null }) {
    * mean two rows on the same screen disagreeing about what day it is at
    * midnight — rare, and impossible to reproduce when somebody reports it. */
   const [now, setNow] = useState(() => new Date().toISOString());
+  /* THE SAME INSTANT AS `now`, AS A NUMBER. Date.parse is pure, so this is safe
+   * to derive during a render where Date.now() is not — and it means the whole
+   * page, the tiles and the owner's rep table all count from ONE clock. Two rows
+   * on one screen disagreeing about what day it is at midnight is a bug nobody
+   * can reproduce. */
+  const nowMs = useMemo(() => Date.parse(now), [now]);
 
   /* DEEP LINK: #/dashboard/sales?lead=<id>
    *
@@ -230,7 +317,11 @@ export default function SalesPage({ member, mode = null }) {
   }, [route]);
 
   const load = useCallback(async () => {
-    const b = await getSalesBoard();
+    /* ONE READ FOR THE WHOLE PAGE, and it is the same one the owner's Sales page
+     * and a rep's Overview both use. getFloorBoard is getSalesBoard plus the tag
+     * vocabulary, the current tag state and the scans — a widening, not a second
+     * board, so nothing that already read the old one changed. */
+    const b = await getFloorBoard();
     setBoard(b);
     setNow(new Date().toISOString());
   }, []);
@@ -290,22 +381,65 @@ export default function SalesPage({ member, mode = null }) {
    * The guard there is `became_customer`, NOT `client_id`: every contact at a
    * firm is given a client_id the moment one of them closes, so a client_id
    * guard would mean a firm could record exactly one sale ever. */
-  const winLead = useCallback(async (lead) => {
-    const res = await markLeadWon(lead, { actor: member.user_id });
-    if (!res.ok) { toast.error("Could not mark it won", res.error); return; }
-    const m = wonMessage(res);
+  /* THE REASON BOX GOES IN FRONT OF THE ONE FUNCTION, NOT IN FRONT OF THE
+   * BUTTONS — Aug 27 2026.
+   *
+   * Four buttons can close a deal (the sheet's status cell, the drawer's status
+   * dropdown, the drawer's green "They signed", and setting a proposal to Won)
+   * and all four were routed through markLeadWon on Aug 25. Putting a reason box
+   * on each of them would have put it on three of them and missed one, which is
+   * exactly how one of those four ended up permanently blocking the only one
+   * that worked.
+   *
+   * So every one of them now opens THIS, and the write happens in
+   * closeLeadWon() / markLeadLost() in src/lib/data.js — one call that does the
+   * stage, the client link, the note in the person's own words and the tag. */
+  const askForReason = useCallback((lead, kind) => {
+    setClosing({ lead, kind });
+  }, []);
+
+  const saveClose = useCallback(async ({ lead, kind, reason, note }) => {
+    if (kind === "won") {
+      const res = await closeLeadWon(lead, {
+        actor: member.user_id, reason, note, tagsBySlug: board?.tagsBySlug || new Map(),
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      const m = wonMessage(res);
+      toast[m.tone](m.title, m.body);
+      /* Anything that failed AFTER the close is named, and the close still
+       * stands. Rolling back a recorded sale because a tag did not save would be
+       * worse than saying which half is missing. */
+      if (res.problems?.length) toast.warn("Saved, with something missing", res.problems.join("; "));
+      await logActivity({ actor: member.user_id, kind: "lead_won", title: `Won: ${lead.name || lead.company}` });
+      await load();
+      return { ok: true };
+    }
+    const res = await markLeadLost(lead, {
+      actor: member.user_id, reason, note, tagsBySlug: board?.tagsBySlug || new Map(),
+    });
+    if (!res.ok) return { ok: false, error: res.error };
+    const m = lostMessage(res);
     toast[m.tone](m.title, m.body);
+    await logActivity({ actor: member.user_id, kind: "lead_lost", title: `Lost: ${lead.name || lead.company}` });
     await load();
-  }, [load, member.user_id]);
+    return { ok: true };
+  }, [board, load, member.user_id]);
+
+
 
   /* What a cell in the sheet actually calls. A Won choice is not an ordinary
    * field edit — it creates a client record — so it goes to winLead and
    * nowhere else. Every other patch goes straight through. */
-  const patchLead = useCallback((lead, patch) => (
-    patch.stage === "won" && lead.stage !== "won"
-      ? winLead(lead)
-      : patchLeadRaw(lead, patch)
-  ), [winLead, patchLeadRaw]);
+  const patchLead = useCallback((lead, patch) => {
+    /* Won and Lost are not ordinary field edits and never were. Won creates a
+     * client record; both of them now require a reason, because "why did we
+     * lose" is the most useful question in sales and this database had no answer
+     * to it. Picking either one from a dropdown opens the box; every other patch
+     * goes straight through. */
+    if (patch.stage === "won" && lead.stage !== "won") return askForReason(lead, "won");
+    if (patch.stage === "lost" && lead.stage !== "lost") return askForReason(lead, "lost");
+    return patchLeadRaw(lead, patch);
+  }, [askForReason, patchLeadRaw]);
 
   /* Put a name in the Sales Owner column. This is a CLAIM, not a text field:
    * it stamps the claim date and starts the cadence, because the sheet's whole
@@ -314,6 +448,24 @@ export default function SalesPage({ member, mode = null }) {
   const assignLead = useCallback(async (row, userId) => {
     const lead = row.lead;
     if (userId === lead.owner_id) return;
+    /* THE THIRD COPY OF THE ROW LOCK — the polite one. Migration 0020 refuses
+     * this at the database and every lead-writing endpoint checks it again; this
+     * is the one a person sees. A rep may take a lead nobody holds and hand their
+     * own back, and may never move a lead to somebody else — so the only id a
+     * rep may ever write here is their own.
+     *
+     * The controls that could do it are not drawn for a rep at all (the Sales
+     * Owner cell becomes a Claim button, and the person dropdown is owner-only),
+     * so this never fires today. It is here because a disabled control is only as
+     * good as the ones somebody remembered to disable. */
+    if (!isAdmin && userId && userId !== member.user_id) {
+      toast.error("That is not yours to move", "A lead can only be handed to somebody else by an owner or an admin. You can take one nobody has claimed.");
+      return;
+    }
+    if (!canEditLead(lead, member)) {
+      toast.error("That lead is somebody else's", `${teamName(lead.owner_id) || "Another rep"} holds it. You can read it, but only they or an owner can change it.`);
+      return;
+    }
     if (!userId) {
       const res = await releaseLead(lead.id, {
         actor: member.user_id,
@@ -350,18 +502,140 @@ export default function SalesPage({ member, mode = null }) {
       `First contact within ${ROE.FIRST_CONTACT_BUSINESS_DAYS} business days, or it goes back to the floor.`,
     );
     await load();
-  }, [load, member, teamName]);
+  }, [load, member, teamName, isAdmin]);
+
+  /* ---- PUT A TAG ON, OR TAKE ONE OFF ----
+   *
+   * One call to setLeadTag, which writes the event AND the dated line on the
+   * person's timeline together. A removal is a NEW event, never the deletion of
+   * the one that added it: "quiet was added on the 24th and taken off on the
+   * 25th because she replied" is the thing a rep needs to read a month later.
+   *
+   * `source: "person"` is what makes the automatic rules leave it alone
+   * afterwards — see removedByHand() in lib/lead-tags.js. Nothing has to
+   * remember the decision, because the decision IS the record. */
+  const toggleTag = useCallback(async (lead, tag, action) => {
+    if (!canEditLead(lead, member)) {
+      toast.error("That lead is somebody else's", "You can read its tags. Only the person holding it, or an owner, can change them.");
+      return;
+    }
+    const res = await setLeadTag({
+      leadId: lead.id, tagId: tag.id, label: tag.label, action,
+      actor: member.user_id, source: "person",
+      why: action === "removed" ? "removed by hand" : "added by hand",
+    });
+    if (!res.ok) { toast.error("That tag was not saved", res.error); return; }
+    if (res.timelineFailed) {
+      toast.warn("Tag saved, timeline line missing", `The tag is on the record. ${res.timelineFailed}.`);
+    }
+    await load();
+  }, [load, member]);
+
+  /* Bring one lead's automatic tags up to date, on demand.
+   *
+   * Nothing runs this on a timer yet and it is deliberately a button rather than
+   * something that happens while a page loads: a page load that writes rows is a
+   * page that cannot be opened twice safely, and the overnight sweep
+   * (api/sales-sweep.js) is where this belongs once it is actually scheduled —
+   * which it is not (§43.11). Said out loud on the button rather than left to be
+   * discovered. */
+  const refreshTags = useCallback(async (lead) => {
+    if (!canEditLead(lead, member)) return;
+    const done = await syncAutoTags(lead, {
+      company: companyById.get(lead.company_id) || null,
+      touchCount: board?.touchCounts?.[lead.id] || 0,
+      now,
+      events: board?.tagsByLead?.get(lead.id) || [],
+      tagsBySlug: board?.tagsBySlug || new Map(),
+      tagsById: board?.tagsById || new Map(),
+      actor: member.user_id,
+    });
+    const moved = done.added.length + done.removed.length;
+    /* THE HISTORY READ IS REPORTED FIRST, because everything under it is only as
+     * good as that read. syncAutoTags computes `historyError` and nothing looked
+     * at it — so when the read failed it fell back to the board's copy, which for
+     * a lead past the tag cap is EMPTY, re-added tags the rep had removed by hand,
+     * and toasted a success. Third review, Aug 27 2026. */
+    if (done.historyError) {
+      toast.warn(
+        "The tag history could not be read",
+        `${done.historyError} Anything below was worked out without it, so a tag you took off by hand may have come back — check the history on this contact.`,
+      );
+    }
+    if (done.failed.length) {
+      toast.error("Some tags did not save", done.failed.map((f) => `${f.slug}: ${f.error}`).join("; "));
+    } else if (done.unknown.length) {
+      /* Named rather than silent: a slug the vocabulary does not hold means
+       * migration 0018's seed has not run, and the rep should be told the rule
+       * could not be applied instead of watching nothing happen. */
+      toast.warn("Some tags do not exist yet", `The tag list is missing: ${done.unknown.join(", ")}. Whoever runs the database migrations has to add them.`);
+    } else if (!moved) {
+      toast.info("Nothing changed", "Every automatic tag on this contact is already right.");
+    } else {
+      toast.success(`${moved} tag${moved === 1 ? "" : "s"} updated`, [
+        done.added.length ? `added ${done.added.join(", ")}` : null,
+        done.removed.length ? `removed ${done.removed.join(", ")}` : null,
+      ].filter(Boolean).join(" · "));
+    }
+    if (moved) await load();
+  }, [board, companyById, load, member, now]);
+
+  /* Hand a lead back to the floor. Own leads only, said out loud rather than
+   * refused silently — the button is not drawn on somebody else's row, and this
+   * is the guard for the path that does not go through the button. */
+  const doRelease = useCallback(async (lead) => {
+    if (!canEditLead(lead, member)) {
+      toast.error("That lead is somebody else's", "Only the person holding it, or an owner, can hand it back.");
+      return;
+    }
+    if (!lead.owner_id) { toast.info("Already on the floor", "Nobody is holding this one."); return; }
+    const res = await releaseLead(lead.id, {
+      actor: member.user_id,
+      why: `Handed back to the floor by ${member.full_name || member.email}.`,
+    });
+    if (!res.ok) { toast.error("Could not hand it back", res.error); return; }
+    toast.success("Back on the floor", "Anybody can claim it now.");
+    await load();
+  }, [load, member]);
 
   /* Score the FIRM, from the row. The Rules of Engagement say score first and
    * skip anyone at 90+; in the sheet that never happened once, because doing it
    * meant leaving the sheet. */
   const runScore = useCallback(async (row) => {
+    /* Called with a sheet ROW from the table, and with `{ lead, company }` from
+     * the scan panel. Both carry `company`, and `lead` is only read for the id
+     * that gets stored on the report — so one function serves both rather than
+     * two that could drift. */
     const co = row.company;
     if (!co?.id) { toast.error("No firm to score", "This contact has no firm attached, and the score belongs to the firm."); return; }
     if (!co.domain) { toast.error("No website on file", `Add a website to ${co.name} first — the scan needs somewhere to look.`); return; }
-    const res = await apiFetch("/api/sales-score", { method: "POST", body: { companyId: co.id, domain: co.domain } });
+    /* `leadId` so the measurement records WHO ran it, which the endpoint checks
+     * really belongs to that firm before it stores it. `domain` is deliberately
+     * still sent and deliberately still ignored by the endpoint: the firm's own
+     * website is what gets scanned, so nobody can score an address typed into a
+     * box. Sending it keeps the request readable in a network log. */
+    const res = await apiFetch("/api/sales-score", {
+      method: "POST",
+      body: { companyId: co.id, domain: co.domain, leadId: row.lead?.id || null },
+    });
     if (!res.ok) { toast.error("The scan did not run", res.error || "No score was written. Nothing was guessed."); return; }
-    toast.success("Scored", `${co.name} scored ${res.score}.`);
+    /* `res.data`, not `res` — apiFetch returns `{ ok, data }`, so this printed
+     * "scored undefined" for as long as it existed. And the score can now
+     * legitimately be null: a scan that returns only the buyer-question half
+     * saves a row with no AI Access number in it, and "scored null" would be
+     * worse than saying which halves came back. Aug 27 2026 */
+    const d = res.data || {};
+    const got = [
+      d.aiAccess === null || d.aiAccess === undefined ? null : `AI Access ${d.aiAccess}`,
+      d.seo === null || d.seo === undefined ? null : `SEO ${d.seo}`,
+      d.simTotal ? `named in ${d.simHits} of ${d.simTotal}` : null,
+    ].filter(Boolean);
+    toast.success(
+      got.length ? "Scanned" : "Scanned, with nothing readable",
+      got.length
+        ? `${co.name}: ${got.join(" · ")}.`
+        : `${co.name} was scanned but no score came back, so nothing was saved and nothing was guessed.`,
+    );
     await load();
   }, [load]);
 
@@ -372,54 +646,57 @@ export default function SalesPage({ member, mode = null }) {
 
   const scoreOf = useCallback((lead) => companyById.get(lead.company_id)?.site_score ?? null, [companyById]);
 
-  /* ---- WHAT THIS PAGE IS ABOUT, before a single filter runs ----
+  /* ---- WHAT THIS PAGE IS ABOUT ----
    *
-   * This is the lock. On the owner's page it is the whole board and nothing
-   * changes. On a rep's page it is the floor, or the rep's own leads, and
-   * everything downstream — the rows, the tiles, the list tabs, the health
-   * card — is counted from here. That is why the missing owner dropdown on a
-   * locked page is only tidiness: even if something set the owner filter, this
-   * set has already been narrowed and no filter can put a row back into it. */
-  const scopeLeads = useMemo(() => {
-    const all = board?.leads || [];
-    if (!lock) return all;
-    if (lock.owner === "floor") return all.filter((l) => !l.owner_id);
-    if (lock.owner === "mine") return all.filter((l) => l.owner_id === member.user_id);
-    return all;
-  }, [board, lock, member.user_id]);
+   * EVERY LEAD, for every role. This used to be the lock — a rep got the
+   * unclaimed rows or their own rows and nothing on the page could widen it —
+   * and on Aug 27 2026 that lock was deleted, because Ryder's requirement is
+   * that a rep sees the whole company's pipeline so two reps never work the same
+   * firm.
+   *
+   * IT WAS REPLACED, NOT REMOVED. The lock is on the ROW now: canEditLead() in
+   * src/lib/salesSheet.js decides whether a person may CHANGE a lead, every
+   * control on the row reads it, migration 0020 enforces it in the database, and
+   * every endpoint that writes a lead checks it again. Visibility is wide on
+   * purpose; editability is not.
+   *
+   * It is kept as its own memo rather than folded into `rows` because three
+   * things count from it and must count from the same set: the availability
+   * switch, the list tabs, and the empty-screen wording. */
+  const scopeLeads = useMemo(() => board?.leads || [], [board]);
 
-  /* The page's own set, by id. Built once so the guard below is a lookup and
-   * not a scan of two thousand rows on every open. */
-  const scopeIds = useMemo(() => new Set(scopeLeads.map((l) => l.id)), [scopeLeads]);
-
-  /* ---- THE ONLY WAY A LEAD GETS INTO THE DRAWER — Ryder, Aug 26 2026 ----
+  /* ---- THE ONLY WAY A LEAD GETS INTO THE DRAWER ----
    *
-   * Found by a checker: `#/dashboard/mine?lead=<another rep's lead>` opened the
-   * drawer on it. The page id is one a rep is allowed, so the query survived,
-   * and the deep-link effect below checked the id against `board.leads` — the
-   * WHOLE board, which getSalesBoard reads for every role — rather than against
-   * this page's set. The rep got the full timeline, every field editable, and
-   * the drawer's own Claim and Release buttons, from a page titled "My leads".
+   * Aug 26 2026, found by a checker: `#/dashboard/mine?lead=<another rep's lead>`
+   * opened the drawer on it with every field editable and the drawer's own Claim
+   * and Release buttons, from a page titled "My leads". The fix was to check the
+   * id against the page's own narrowed set before opening.
    *
-   * So opening is a guarded call now instead of `setOpenId` handed out raw.
-   * Every row on screen came from `rows`, which is inside the lock, so no
-   * in-page click can be refused; the deep link is the one caller that can, and
-   * it is told why rather than left silent. The owner's page has no lock and is
-   * unchanged: it may still open anything on the board, which is a real thing
-   * an owner does from the client page's "what happened before they paid us".
+   * AUG 27 2026: THE SET IS NO LONGER NARROWED, so that check would now pass for
+   * everything and the guard would be theatre. It is not deleted — it is
+   * repointed at the thing that actually decides:
    *
-   * The check is `scopeIds` — the LOCK — and deliberately not `rows`: a link to
-   * your own won lead must still open while the stage box sits on "open only".
-   * `openLead` below is still read from the board, so claiming or releasing from
-   * inside the drawer does not slam it shut the moment the lead leaves the set. */
+   *   an id NOT in the rows we loaded  -> refused, and told why
+   *   an id in the rows, not editable  -> opens READ-ONLY. Fields, notes and the
+   *                                       timeline are visible; there are no
+   *                                       buttons at all.
+   *   an id in the rows, editable      -> opens as it always did
+   *
+   * Read-only rather than refused is the requirement, not a softening of it: a
+   * rep has to be able to see that Brandon is already in this building, and what
+   * was said, or the whole reason for showing every row disappears.
+   *
+   * The read-only decision is NOT made here. It is derived once from
+   * canEditLead() where the drawer is rendered, so the drawer and the row it was
+   * opened from cannot disagree. */
   const openLeadById = useCallback((id) => {
     if (!id) return;
-    if (lock && !scopeIds.has(id)) {
-      toast.error("That contact is not on this page", lock.notOnPage);
+    if (!(board?.leads || []).some((l) => l.id === id)) {
+      toast.error("That contact is not on this page", lock ? lock.notOnPage : "The sheet holds the newest contacts only. Search their name to find them.");
       return;
     }
     setOpenId(id);
-  }, [lock, scopeIds]);
+  }, [board, lock]);
 
   /* ---- ONE FILTER CHAIN, AND EVERY NUMBER ON THE PAGE READS IT ----
    *
@@ -428,8 +705,17 @@ export default function SalesPage({ member, mode = null }) {
    * own — and the only way two numbers on one screen cannot drift is if there
    * is one place that decides what a filtered set holds. `skipList` is the one
    * filter a caller may leave out: the tabs' own. Aug 26 2026 */
-  const filterLeads = useCallback((source, { skipList = false } = {}) => {
+  const filterLeads = useCallback((source, { skipList = false, skipAvailability = false } = {}) => {
     let list = source;
+    /* THE AVAILABILITY SWITCH IS A FILTER LIKE ANY OTHER, and it lives here with
+     * the rest of them so there is one place that decides what the list holds.
+     * It runs FIRST because it is the cheapest and the most selective — on a
+     * two-thousand-row board "Mine" is usually a few dozen.
+     *
+     * Only on a locked page. The owner's Sales page has an owner dropdown that
+     * says the same thing more precisely (it can name a person), and two
+     * controls filtering the same column is how one of them ends up lying. */
+    if (lock && !skipAvailability) list = byAvailability(list, availability, member);
     if (!skipList && listFilter !== "all") list = list.filter((l) => l.list_id === listFilter);
     if (stageFilter === "open") list = list.filter((l) => isOpenStage(l.stage));
     else if (stageFilter === "closed") list = list.filter((l) => !isOpenStage(l.stage));
@@ -463,7 +749,7 @@ export default function SalesPage({ member, mode = null }) {
       });
     }
     return list;
-  }, [lock, listFilter, stageFilter, ownerFilter, tileFilter, now, q, member.user_id, companyById]);
+  }, [lock, availability, member, listFilter, stageFilter, ownerFilter, tileFilter, now, q, companyById]);
 
   /* ---- the filtered set every view draws from ---- */
   const rows = useMemo(() => filterLeads(scopeLeads), [filterLeads, scopeLeads]);
@@ -489,6 +775,21 @@ export default function SalesPage({ member, mode = null }) {
     [lock, filterLeads, scopeLeads],
   );
 
+  /* WHAT THE AVAILABILITY SWITCH COUNTS. Every other filter that is on, minus
+   * its own — so the number on each of the three buttons is exactly what pressing
+   * it would show. Counted from the same rows, so the button and the list under
+   * it agree by construction rather than by luck.
+   *
+   * Passing `skipAvailability` and then counting all three states from that one
+   * set is the only shape that works: counting from `rows` would make "All" show
+   * the size of whichever state is currently on. */
+  const availCounts = useMemo(
+    () => (lock
+      ? availabilityCounts(filterLeads(scopeLeads, { skipAvailability: true }), member)
+      : null),
+    [lock, filterLeads, scopeLeads, member],
+  );
+
   /* Whether "Clear the filters" can change anything. Compared against this
    * page's OWN opening values, so the default stage box — which is a filter a
    * rep never set — does not count as something to clear. A button that
@@ -497,6 +798,11 @@ export default function SalesPage({ member, mode = null }) {
   const canClear = (
     q.trim() !== "" || listFilter !== tileOff.list || stageFilter !== tileOff.stage
     || ownerFilter !== tileOff.owner || tileFilter !== null
+    /* The availability switch counts as a filter a person set — but "Mine" is
+     * where the page OPENS, so it only counts once they have moved off it.
+     * Otherwise Clear would offer to undo something nobody did, and pressing it
+     * would reload the same rows. */
+    || (lock ? availability !== "mine" : false)
   );
 
   const queue = useMemo(() => {
@@ -641,22 +947,31 @@ export default function SalesPage({ member, mode = null }) {
       {/* ---- toolbar ---- */}
       <div className="card adm-sl-bar">
         {lock ? (
-          /* THE LOCK, SAID OUT LOUD, where the view tabs sit on the owner's
-             page. A page with a filter you cannot see or change reads as a page
-             with a filter stuck on it, so it says which leads it holds. Plain
-             text: there is nothing to press. Inline rather than a new class —
-             it is the only new thing on the page, and admin.css was not opened
-             for this change. Aug 26 2026 */
-          <div
-            role="status"
-            style={{
-              display: "inline-flex", alignItems: "center", padding: "8px 12px",
-              borderRadius: 10, background: "var(--bg-2)", border: "1px solid var(--rule)",
-              fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700,
-              letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--ink-dim)",
-            }}
-          >
-            {lock.saying}
+          /* THE AVAILABILITY SWITCH, where the view tabs sit on the owner's
+             page. Three states, exactly one active, and each one carries the
+             number of rows pressing it would show — counted from the same set the
+             list is built from, so the button and the list cannot disagree.
+
+             IT REPLACED A LINE OF PLAIN TEXT that said which leads the page held.
+             That sentence was honest when the page held one slice; the page holds
+             all of them now, and this is the control that says which slice you
+             are looking at. Reusing .adm-sl-views rather than adding a class: it
+             is the segmented control this console already has, and admin.css was
+             not opened for this change. Aug 27 2026 */
+          <div className="adm-sl-views" role="group" aria-label="Which leads to show">
+            {AVAILABILITY.map((a) => (
+              <button
+                key={a}
+                type="button"
+                className={availability === a ? "active" : ""}
+                aria-pressed={availability === a}
+                title={AVAILABILITY_HINTS[a]}
+                onClick={() => { setTileFilter(null); setAvailability(a); }}
+              >
+                {AVAILABILITY_LABELS[a]}
+                {availCounts ? <span style={{ opacity: 0.65 }}> · {availCounts[a]}</span> : null}
+              </button>
+            ))}
           </div>
         ) : (
           <div className="adm-sl-views">
@@ -743,12 +1058,10 @@ export default function SalesPage({ member, mode = null }) {
           onOpen={openLeadById} member={member}
           onPatch={patchLead} onAssign={assignLead} onRunScore={runScore}
           listFilter={listFilter} onListFilter={handList}
-          /* THE LIST TABS COUNT FROM THIS, not from the whole board. A rep on
-              the floor page reading "Everybody 1,847" above 300 rows is the
-              same lie as a tile whose number does not match its list, and the
-              tab counts were the last place still reading past the lock.
-              On a locked page it is also stage- and search-filtered — see
-              tabScope above for why the two pages break the old convention. */
+          /* THE LIST TABS COUNT FROM THIS, not from the whole board. A rep
+              reading "All lists 1,847" above 300 rows is the same lie as a tile
+              whose number does not match its list. On a locked page it is
+              availability-, stage- and search-filtered — see tabScope above. */
           tabScope={tabScope}
           /* The page's whole set, filters and all off. The ONLY thing this
               decides is which empty screen is true: a page with nothing in it,
@@ -757,14 +1070,32 @@ export default function SalesPage({ member, mode = null }) {
           allTabLabel={lock ? "All lists" : "Everybody"}
           emptyNote={lock ? lock.emptyNote : null}
           hint={lock ? lock.hint : null}
-          /* Only on the floor, and only ever with YOUR OWN id: a Claim button
-              that could file a lead under somebody else is not a claim. */
-          claimAs={lock?.owner === "floor" ? member.user_id : null}
-          /* Clear means clear, so it puts the tile row out too — otherwise a tile
-              stayed lit over a list it was no longer filtering. Aug 26 2026.
-              Back to THIS page's opening filters, from tileOff, so clearing on a
-              rep's page cannot reach for the owner's defaults. */
-          onClear={() => { setQ(""); setListFilter(tileOff.list); setStageFilter(tileOff.stage); setOwnerFilter(tileOff.owner); setTileFilter(null); }}
+          /* CLAIMING, and only ever with YOUR OWN id: a Claim button that could
+              file a lead under somebody else is not a claim.
+              It used to be `lock.owner === "floor"` — the page that held only
+              unclaimed rows. The Floor holds every row now, so the Claim button
+              is decided per row by whether anybody holds it, and this just says
+              "this page is a page you claim from". Aug 27 2026 */
+          claimAs={lock ? member.user_id : null}
+          /* Only an owner or an admin may hand a lead to somebody else (0020).
+              So the Sales Owner cell is a dropdown of people on their page and a
+              Claim button on a rep's. */
+          canAssign={isAdmin}
+          /* ---- THE FLOOR'S ROW BUTTONS. One function each, and each of those
+              functions writes the dated line itself — see src/lib/data.js. ---- */
+          onTag={(row) => setTagging(row)}
+          onRefreshTags={(row) => refreshTags(row.lead)}
+          onLog={(row, kind) => setLogging({ row, kind })}
+          onScan={(row) => setScanning(row)}
+          onClose={(row, kind) => askForReason(row.lead, kind)}
+          onRelease={(row) => doRelease(row.lead)}
+          /* Clear means clear, so it puts the tile row and the availability
+              switch back too — otherwise a tile stayed lit over a list it was no
+              longer filtering. Back to THIS page's opening values. */
+          onClear={() => {
+            setQ(""); setListFilter(tileOff.list); setStageFilter(tileOff.stage);
+            setOwnerFilter(tileOff.owner); setTileFilter(null); setAvailability("mine");
+          }}
           /* And whether it is offered at all. See canClear. */
           canClear={canClear}
         />
@@ -779,6 +1110,7 @@ export default function SalesPage({ member, mode = null }) {
       )}
 
       {/* ---- overlays ---- */}
+      {/* ---- overlays ---- */}
       {openLead && (
         <SalesProfile
           lead={openLead}
@@ -786,10 +1118,92 @@ export default function SalesPage({ member, mode = null }) {
           siblings={siblingsOf(openLead)}
           member={member} team={board.team} teamName={teamName} now={now}
           touches={board.touchCounts[openLead.id] || 0}
+          /* ---- THE READ-ONLY DRAWER — Aug 27 2026 ----
+             Derived HERE, once, from the one exported helper, and handed down.
+             The drawer does not work it out again: a drawer that decided for
+             itself whether it was read-only could disagree with the row it was
+             opened from, and the whole point of showing another rep's lead is
+             that what you read is what they see.
+
+             Read-only means read-only: fields, notes and the timeline are all
+             visible, and there is not one button. A rep has to be able to see
+             that Brandon is already in this building and what was said. */
+          readOnly={!canEditLead(openLead, member)}
+          heldByName={teamName(openLead.owner_id) || "another rep"}
+          /* Tags: the vocabulary, this lead's dated history, and the one function
+             that writes either. */
+          tags={board.tagsById ? currentTags(board.tagsByLead.get(openLead.id) || [], board.tagsById) : []}
+          allTags={board.leadTags || []}
+          onTag={(tag, action) => toggleTag(openLead, tag, action)}
+          onRefreshTags={() => refreshTags(openLead)}
+          /* The newest scan of this firm, and the button that opens the panel. */
+          report={board.reportByCompany && openLead.company_id
+            ? readCompanyReport(board.reportByCompany.get(openLead.company_id) || null)
+            : null}
+          onScan={() => setScanning({ lead: openLead, company: companyById.get(openLead.company_id) || null })}
+          /* Won and Lost both go through the reason box, which sits in front of
+             the ONE function rather than in front of the four buttons that call
+             it. See askForReason. */
+          onCloseDeal={(kind) => askForReason(openLead, kind)}
           onClose={() => setOpenId(null)}
           reload={load}
         />
       )}
+
+      {/* ---- WHY DID IT CLOSE. It will not save empty. ---- */}
+      {closing && (
+        <CloseReasonModal
+          lead={closing.lead}
+          kind={closing.kind}
+          onClose={() => setClosing(null)}
+          onSave={async ({ reason, note }) => {
+            const res = await saveClose({ lead: closing.lead, kind: closing.kind, reason, note });
+            if (res.ok) setClosing(null);
+            return res;
+          }}
+        />
+      )}
+
+      {/* ---- TAGS on one lead, with the dated history under them ---- */}
+      {tagging && (
+        <TagModal
+          row={tagging}
+          allTags={board.leadTags || []}
+          tagsById={board.tagsById || new Map()}
+          teamName={teamName}
+          editable={tagging.editable}
+          onToggle={async (tag, action) => { await toggleTag(tagging.lead, tag, action); }}
+          onRefresh={async () => { await refreshTags(tagging.lead); }}
+          onClose={() => setTagging(null)}
+        />
+      )}
+
+      {/* ---- THE SCAN. Built, and it cannot be switched on yet. ---- */}
+      {scanning && (
+        <ScanModal
+          lead={scanning.lead}
+          company={scanning.company || companyById.get(scanning.lead.company_id) || null}
+          report={board.reportByCompany && scanning.lead.company_id
+            ? readCompanyReport(board.reportByCompany.get(scanning.lead.company_id) || null)
+            : null}
+          teamName={teamName}
+          onRun={() => runScore({ lead: scanning.lead, company: scanning.company || companyById.get(scanning.lead.company_id) || null })}
+          onClose={() => setScanning(null)}
+        />
+      )}
+
+      {/* ---- LOG A TOUCH, from the row instead of only from the drawer ---- */}
+      {logging && (
+        <LogModal
+          kind={logging.kind}
+          lead={logging.row.lead}
+          member={member}
+          text={textGate(logging.row.lead)}
+          onClose={() => setLogging(null)}
+          reload={load}
+        />
+      )}
+
       {importOpen && (
         <SalesImportModal member={member} team={board.team} onClose={() => setImportOpen(false)} reload={load} />
       )}
@@ -797,7 +1211,7 @@ export default function SalesPage({ member, mode = null }) {
         <AddContactModal member={member} lists={board.lists} onClose={() => setAddOpen(false)} reload={load} />
       )}
       {statsOpen && (
-        <RepNumbersModal board={board} now={now} onClose={() => setStatsOpen(false)} />
+        <RepNumbersModal board={board} now={now} nowMs={nowMs} onClose={() => setStatsOpen(false)} />
       )}
       {startOverOpen && (
         <Modal
@@ -962,9 +1376,15 @@ function ListsView({
   /* Whether clearing the filters could change what is on screen. False means
      no filter a person set is on, so the Clear button is not drawn at all. */
   canClear = true,
-  /* Who is claiming, or null. Only the floor page sends one — see the note on
+  /* Who is claiming, or null. Only a rep's page sends one — see the note on
      `claimAs` in salesSheet.jsx. */
   claimAs = null,
+  /* ---- added Aug 27 2026 with The Floor ----
+     Every one of these is passed straight through to the table. This component
+     decides layout; it does not decide what a button does, and it deliberately
+     holds no state of its own about any of them. */
+  canAssign = true,
+  onTag, onRefreshTags, onLog, onScan, onClose: onCloseDeal, onRelease,
 }) {
   const health = useMemo(() => listHealth(rows, { now, scoreOf }), [rows, now, scoreOf]);
 
@@ -978,8 +1398,18 @@ function ListsView({
          so the words on the Contacted? cell can never claim a wider period than
          was looked at. */
       activityWindowDays: ACTIVITY_WINDOW_DAYS,
+      /* ---- Aug 27 2026 ----
+         The tags, the newest scan of each firm, and WHO IS LOOKING. `member` is
+         what makes `row.editable` and `row.heldBy` true: the lock is derived once
+         per row, in one place, and every control on that row reads the answer
+         rather than working it out again. */
+      tagsByLead: board.tagsByLead,
+      tagsById: board.tagsById,
+      reportByCompany: board.reportByCompany,
+      member,
     }),
-    [rows, companyById, teamName, board.touchCounts, listById, now],
+    [rows, companyById, teamName, board.touchCounts, board.tagsByLead, board.tagsById,
+      board.reportByCompany, listById, now, member],
   );
 
   /* WHAT AN EMPTY SCREEN SAYS — THREE CASES, NOT TWO. Aug 26 2026.
@@ -1125,6 +1555,13 @@ function ListsView({
               activityWindowDays={ACTIVITY_WINDOW_DAYS}
               onOpen={onOpen}
               claimAs={claimAs}
+              canAssign={canAssign}
+              onTag={onTag}
+              onRefreshTags={onRefreshTags}
+              onLog={onLog}
+              onScan={onScan}
+              onCloseDeal={onCloseDeal}
+              onRelease={onRelease}
             />
           </div>
         </>
@@ -1308,68 +1745,710 @@ function AddContactModal({ member, lists, onClose, reload }) {
   );
 }
 
-function RepNumbersModal({ board, now, onClose }) {
+/**
+ * REP NUMBERS, AND WHERE DEALS DIE — the owner's half.
+ *
+ * Aug 27 2026, Ryder's requirement in his own words: *"each reps account
+ * seperate because they are independant and they all work independately, but on
+ * the owners side and admin side they all have to come together and everything
+ * has to flow."*
+ *
+ * THE ONLY WAY THAT CAN BE TRUE IS ONE SET OF RECORDS. Every figure in the table
+ * below comes from `outreachByRep()` in lib/outreach.js, which is the SAME
+ * function a rep's own Overview calls, with the SAME rows, for one person at a
+ * time. So a cell here and a tile on that rep's page are the same arithmetic on
+ * the same snapshot — they cannot drift, because there is nothing to drift
+ * between. tests/outreach-stats asserts exactly that from one fixture, and it is
+ * the test to run first if anybody ever reports two screens disagreeing.
+ *
+ * NOTHING HERE IS STORED. There is no `total_won` column and no cached reply
+ * count anywhere in this feature. Every number is counted from the rows at read
+ * time, which is the whole reason the two sides can agree.
+ *
+ * The claim-side columns (claimed, open, speed to first contact, close rate, at
+ * risk) still come from repStats(), which was already right and already tested.
+ * Two functions rather than one because they answer different questions from
+ * different columns; both read the same board.
+ */
+function RepNumbersModal({ board, now, nowMs, onClose }) {
   const reps = board.team.filter((t) => t.active);
-  const stats = reps.map((r) => ({ rep: r, s: repStats(board.leads, board.activity, { userId: r.user_id, now }) }))
-    .filter(({ s }) => s.claimed > 0 || s.calls > 0 || s.emails > 0)
+  /* `nowMs` comes DOWN from the page, which took one clock reading when it
+   * loaded. It is not read here: Date.now() during a render is impure — two
+   * renders would count two different windows — and this is exactly where a
+   * reader would otherwise reach for it. */
+
+  /* THE SAME FUNCTION A REP'S OWN PAGE CALLS, once per person. */
+  const outreach = useMemo(() => outreachByRep({
+    team: reps,
+    leads: board.leads,
+    activity: board.activity,
+    proposals: board.proposals,
+    nowMs,
+  }), [reps, board.leads, board.activity, board.proposals, nowMs]);
+  const outreachById = useMemo(
+    () => new Map(outreach.map((o) => [o.member.user_id, o.stats])),
+    [outreach],
+  );
+
+  /* A REP APPEARS ONCE THERE IS ANYTHING TO COUNT — including outreach.
+   *
+   * The filter read repStats alone, so a rep who had emailed forty people and
+   * claimed nothing had no row at all and no explanation for its absence. With
+   * Gmail per rep that stops being a corner case: emailing comes first and
+   * claiming follows. Aug 27 2026, after a review. */
+  const stats = reps.map((r) => ({
+    rep: r,
+    s: repStats(board.leads, board.activity, { userId: r.user_id, now }),
+    o: outreachById.get(r.user_id) || null,
+  }))
+    .filter(({ s, o }) => s.claimed > 0 || s.calls > 0 || s.emails > 0
+      || Boolean(o?.emailed) || Boolean(o?.replied) || Boolean(o?.proposalsOut))
     .sort((a, b) => b.s.won - a.s.won || b.s.meetings - a.s.meetings);
 
+  /* WHERE DEALS DIE, ACROSS EVERYBODY — counted over every lead rather than by
+   * summing the per-rep numbers. A loss on a lead that was released after it was
+   * lost has no owner, so a per-rep sum would silently miss it and the breakdown
+   * would add up to less than the total above it. */
+  const losses = useMemo(() => lossReasons({ leads: board.leads, nowMs }), [board.leads, nowMs]);
+
+  /* One dash function for the whole table. `null` and `0` are different
+   * sentences — "nobody replied" and "we have not measured" are opposite answers
+   * — and printing them the same is the defect this console keeps having to fix. */
+  const n = (v, suffix = "") => (v === null || v === undefined
+    ? <span className="adm-sl-faint">—</span>
+    : <>{v}{suffix}</>);
+
   return (
-    <Modal open onClose={onClose} kicker="COUNTED FROM THE ROWS" title="Rep numbers" width={880}>
+    <Modal onClose={onClose} open kicker="COUNTED FROM THE ROWS" title="Rep numbers" width={1040}>
       {!stats.length ? (
         <div className="adm-sl-empty">
           <strong>Nothing to count yet.</strong>
-          <div>A rep appears here once they have claimed something or logged a touch.</div>
+          {/* IN STEP WITH THE FILTER ABOVE, which now also lets a rep in on
+              outreach alone. The old sentence named two of the five things that
+              put somebody in this table. */}
+          <div>A rep appears here once they have claimed something, logged a touch, emailed
+            somebody, had a reply, or got a proposal out.</div>
         </div>
       ) : (
         <div className="adm-sl-scroll">
           <table className="adm-sl-table">
             <thead>
               <tr>
+                {/* TWO WINDOWS IN ONE TABLE, AND EVERY COLUMN SAYS WHICH.
+                    The outreach half is the last 30 days. The claim half —
+                    Claimed, Open, Speed, Meetings, Won, Lost, Close rate, At
+                    risk — comes from repStats(), which has NO WINDOW AT ALL: it
+                    is everything ever, over the rows that were loaded. So CJ's
+                    "Won" for a rep is their whole career and the rep's own
+                    Overview "Won" is closes inside 30 days. Same word, two
+                    numbers, and the footnote under this table promises the two
+                    screens cannot disagree — which is only true of the columns
+                    that share a function. Labelling every heading is what makes
+                    the footnote honest. Aug 27 2026, after a review. */}
                 <th>Rep</th>
-                <th title="Leads with their name on them">Claimed</th>
-                <th title="Still open">Open</th>
-                <th title="Business days from claiming to the first logged touch">Speed to 1st</th>
-                <th>Calls</th>
-                <th>Emails</th>
-                <th>Meetings</th>
-                <th>Won</th>
-                <th title="Won as a share of leads that were decided either way">Close rate</th>
-                <th title="Claims that have run out or gone cold">At risk</th>
+                <th title="Leads with their name on them, over every row loaded — not a 30-day figure">Claimed<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
+                <th title="Still open, right now">Open<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>now</span></th>
+                <th title="Business days from claiming to the first logged touch, over every row loaded">Speed to 1st<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
+                {/* ---- the outreach half, all of it from the last 30 days ---- */}
+                <th title={`People they emailed in the last ${OUTREACH_WINDOW_DAYS} days. People, not emails.`}>Emailed<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>30 days</span></th>
+                <th title="Of those people, how many wrote back">Replied<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>30 days</span></th>
+                <th title="Replies divided by people emailed, with dead addresses taken out of the bottom half">Reply rate<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>30 days</span></th>
+                <th title="Bad addresses. Taken out of the reply-rate maths.">Bounced<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>30 days</span></th>
+                <th title="Calls logged in the last 30 days">Calls<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>30 days</span></th>
+                <th title="Leads that reached Meeting, Proposal or Won, over every row loaded">Meetings<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
+                <th title="Sent and not yet decided, right now">Proposals<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>now</span></th>
+                <th title="Over every row loaded, not a 30-day figure">Won<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
+                <th title="Over every row loaded, not a 30-day figure">Lost<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
+                <th title="Won as a share of leads that were decided either way, over every row loaded">Close rate<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
+                <th title="Claims that have run out or gone cold, right now">At risk<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>now</span></th>
               </tr>
             </thead>
             <tbody>
-              {stats.map(({ rep, s }) => (
-                <tr key={rep.user_id}>
-                  <td>
-                    <div className="adm-sl-rowname">{rep.full_name || rep.email}</div>
-                    <div className="adm-sl-rowmono">{rep.role.toUpperCase()}</div>
-                  </td>
-                  <td>{s.claimed}</td>
-                  <td>{s.open}</td>
-                  {/* null and 0 are different sentences and must not print the same. */}
-                  <td>{s.speed_days === null
-                    ? <span className="adm-sl-faint">not measured</span>
-                    : <>{s.speed_days}d <span className="adm-sl-faint">({s.speed_sample})</span></>}</td>
-                  <td>{s.calls}</td>
-                  <td>{s.emails}</td>
-                  <td>{s.meetings}</td>
-                  <td style={{ color: s.won ? "#006b1a" : undefined, fontWeight: s.won ? 700 : 400 }}>{s.won}</td>
-                  <td>{s.close_rate === null
-                    ? <span className="adm-sl-faint">nothing decided</span>
-                    : `${s.close_rate}%`}</td>
-                  <td style={{ color: s.at_risk ? "var(--danger)" : undefined }}>{s.at_risk}</td>
-                </tr>
-              ))}
+              {stats.map(({ rep, s }) => {
+                const o = outreachById.get(rep.user_id) || null;
+                return (
+                  <tr key={rep.user_id}>
+                    <td>
+                      <div className="adm-sl-rowname">{rep.full_name || rep.email}</div>
+                      <div className="adm-sl-rowmono">{rep.role.toUpperCase()}</div>
+                    </td>
+                    <td>{s.claimed}</td>
+                    <td>{s.open}</td>
+                    {/* null and 0 are different sentences and must not print the same. */}
+                    <td>{s.speed_days === null
+                      ? <span className="adm-sl-faint">not measured</span>
+                      : <>{s.speed_days}d <span className="adm-sl-faint">({s.speed_sample})</span></>}</td>
+                    <td>{n(o?.emailed)}</td>
+                    <td>{n(o?.replied)}</td>
+                    {/* THREE DIFFERENT REASONS, MORE THAN ONE SENTENCE. This cell
+                        said "nothing sent" for all of them — including the case
+                        where two people WERE emailed and both addresses were dead,
+                        which is a sentence about two sends claiming nothing was
+                        sent. Aug 27 2026, after a review. */}
+                    {/* FOUR REASONS A RATE IS MISSING, four sentences. The
+                        version before this had two, and a FAILED READ got
+                        "nothing sent" — a claim about sends, for a read that
+                        returned nothing. Third review, Aug 27 2026. */}
+                    <td>{o?.replyRate !== null && o?.replyRate !== undefined
+                      ? `${o.replyRate}%`
+                      : <span className="adm-sl-faint">
+                        {o?.emailed === null || o?.emailed === undefined ? "could not read it"
+                          : o.emailed === 0 ? "nothing sent"
+                            : "every address bounced"}
+                      </span>}</td>
+                    <td>{n(o?.bounced)}</td>
+                    <td>{n(o?.logged?.call)}</td>
+                    <td>{s.meetings}</td>
+                    <td>{o?.proposalsOut === null || o?.proposalsOut === undefined
+                      ? <span className="adm-sl-faint">—</span>
+                      /* `!== null`, not truthy. A proposal genuinely priced at
+                         zero is a real figure, and hiding it was the same
+                         null-versus-zero mistake this whole feature is about.
+                         `proposalCents` is already null when NONE of them carries
+                         an amount, which is the case that must print nothing. */
+                      : <>{o.proposalsOut}{o.proposalCents !== null && o.proposalCents !== undefined
+                        ? <span className="adm-sl-faint"> ({money(o.proposalCents)})</span> : null}</>}</td>
+                    <td style={{ color: s.won ? "#006b1a" : undefined, fontWeight: s.won ? 700 : 400 }}>{s.won}</td>
+                    <td>{s.lost}</td>
+                    <td>{s.close_rate === null
+                      ? <span className="adm-sl-faint">nothing decided</span>
+                      : `${s.close_rate}%`}</td>
+                    <td style={{ color: s.at_risk ? "var(--danger)" : undefined }}>{s.at_risk}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
+
+      {/* ---- WHERE DEALS DIE ---- */}
+      <div className="label" style={{ margin: "24px 0 8px" }}>
+        Where deals die — everybody, last {losses.window.days} days
+      </div>
+      {losses.rows === null ? (
+        <div className="adm-sl-warn adm-sl-warn-flat" role="alert">
+          <strong>The leads could not be read</strong>, so this is missing rather than empty.
+        </div>
+      ) : losses.total === 0 ? (
+        <div className="adm-sl-empty">
+          <strong>Nothing was marked Lost in the last {losses.window.days} days.</strong>
+          <div>
+            That is an empty list, not a missing one.
+            {losses.undated > 0
+              ? ` ${losses.undated} lost lead${losses.undated === 1 ? " has" : "s have"} no date on the close, so ${losses.undated === 1 ? "it is" : "they are"} in no window at all — every one of those closed before the reason box existed.`
+              : ""}
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="adm-sl-health-bars">
+            {losses.rows.map((r) => (
+              <MiniBar key={r.code || "none"} label={r.label} n={r.count} total={losses.total} tone="#941f1f" />
+            ))}
+          </div>
+          <div className="adm-sl-health-n">
+            {losses.total} lost in the last {losses.window.days} days.
+            {losses.noReason > 0
+              ? ` ${losses.noReason} of them carr${losses.noReason === 1 ? "ies" : "y"} no reason — every one of those closed before the reason box existed, and nothing has been guessed for them.`
+              : " Every one of them has a reason and a note somebody typed."}
+            {losses.undated > 0
+              ? ` A further ${losses.undated} lost lead${losses.undated === 1 ? "" : "s"} ${losses.undated === 1 ? "has" : "have"} no close date at all, so ${losses.undated === 1 ? "it is" : "they are"} not counted above.`
+              : ""}
+          </div>
+        </>
+      )}
+
       <p className="adm-sl-modalnote">
-        Every figure is counted from real rows over the last 90 days of activity. A call that was not
-        logged is not counted, and a rep with nothing measured says so rather than showing a zero —
-        &ldquo;no meetings yet&rdquo; and &ldquo;we have not measured&rdquo; are different sentences.
+        Every figure here is counted from real rows, and the outreach half covers the
+        last {OUTREACH_WINDOW_DAYS} days. <strong>There is no open rate</strong> — Gmail cannot tell
+        anybody whether an email was opened, and the only thing that can is a tracking image that
+        Apple Mail loads for everybody, so the number would not be a measurement. People emailed and
+        replies are both real. A call that was not logged is not counted, and a rep with nothing
+        measured says so rather than showing a zero.
       </p>
+      <p className="adm-sl-modalnote">
+        Every column marked <strong>30 days</strong> — emailed, replied, reply rate, bounced and
+        calls — plus <strong>proposals</strong> is worked out by the same function that draws that
+        rep&rsquo;s own Overview, from the same rows, so those cannot disagree: if they ever do, one
+        of them is broken rather than out of date, because there is nothing stored in between them.
+        The columns marked <strong>all time</strong> cover every row loaded rather than the last
+        {OUTREACH_WINDOW_DAYS} days, so a rep&rsquo;s own page will show a smaller Won than this
+        table does — that is two different questions, not a disagreement.
+      </p>
+    </Modal>
+  );
+}
+
+/* ================================================================== */
+/* WHY DID IT CLOSE — the box that will not save empty                 */
+/* ================================================================== */
+
+/**
+ * Ryder, Aug 27 2026. Until today no reason was asked for anywhere: `lost_reason`
+ * is a real column and exactly ONE button wrote it, hard-coded to "No reply after
+ * the full cadence." Won recorded nothing at all. So the most useful question in
+ * sales — why are we losing — had no answer in this database.
+ *
+ * A DROPDOWN *AND* FREE TEXT, not one or the other. A dropdown can be counted and
+ * a paragraph cannot; a paragraph carries the thing that is actually useful and a
+ * dropdown never does. Both, or six months from now there are eleven rows saying
+ * "no reply" and nothing that says what the emails looked like.
+ *
+ * TWO SEPARATE LISTS. "Price" is not a reason somebody said yes and "liked the
+ * free mockup" is not a reason they said no. One shared list would produce a loss
+ * breakdown with a Won reason sitting in it.
+ *
+ * THE CHECK IS NOT WRITTEN HERE. checkCloseReason in lib/sales-rules.js is the
+ * one that decides, the button reads it to know whether to light up, and
+ * markLeadLost/closeLeadWon call it again at the door. Three places, one
+ * function: a writer that trusts its caller is a writer that eventually gets
+ * called wrong.
+ */
+function CloseReasonModal({ lead, kind, onClose, onSave }) {
+  const won = kind === "won";
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(null);
+
+  const gate = checkCloseReason({ kind, reason, note });
+  const list = won ? WON_REASONS : LOST_REASONS;
+  const left = Math.max(0, MIN_REASON_NOTE_CHARS - note.trim().length);
+
+  const save = async () => {
+    if (!gate.ok) return;
+    setBusy(true);
+    setFailed(null);
+    const res = await onSave({ reason, note });
+    setBusy(false);
+    /* A FAILED SAVE KEEPS EVERY WORD ON SCREEN and says what went wrong. The
+     * alternative — closing the box and showing a toast — loses the paragraph
+     * somebody just typed, and they do not type it again. */
+    if (!res?.ok) setFailed(res?.error || "It did not save. Nothing was changed.");
+  };
+
+  return (
+    <Modal
+      open onClose={onClose} kicker={won ? "MARK IT WON" : "MARK IT LOST"} width={560}
+      title={won ? "Why did they say yes?" : "Why did we lose it?"}
+      footer={<>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button
+          className="btn btn-accent" onClick={save}
+          disabled={busy || !gate.ok}
+          /* The refusal is the title, so a greyed button always says why. A
+             disabled control with no reason reads as a broken one, and then
+             people stop trusting the page. */
+          title={gate.ok ? undefined : gate.error}
+        >
+          {busy ? "Saving…" : won ? "Mark it won" : "Mark it lost"}
+        </button>
+      </>}
+    >
+      <div className="adm-sl-warn adm-sl-warn-flat" role="status">
+        <strong>This will not save empty.</strong> Six months of these is how we find out what is
+        actually going wrong — and it is the only place that answer will ever come from.
+      </div>
+
+      <Field
+        label="Reason"
+        hint="Pick the closest one. This is the half that gets counted."
+      >
+        <Select
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          options={[["", "— pick one —"], ...list]}
+        />
+      </Field>
+
+      <Field
+        label="What actually happened"
+        hint={left > 0
+          ? `In your own words. ${left} more character${left === 1 ? "" : "s"} needed — this is what somebody reads back later.`
+          : "In your own words. This is what somebody reads back later."}
+      >
+        <TextArea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder={won
+            ? "What tipped it. What she said. What we showed her."
+            : "What they said, and what we would do differently."}
+          autoFocus
+        />
+      </Field>
+
+      {failed && (
+        <div className="adm-sl-warn adm-sl-warn-flat" role="alert">
+          <strong>Not saved.</strong> {failed} Your words are still here — try again, or copy them
+          somewhere before you close this.
+        </div>
+      )}
+
+      <p className="adm-sl-modalnote">
+        Saving does three things at once: it records the reason on
+        {" "}<strong>{lead.name || lead.company || "this contact"}</strong>, writes a dated note in
+        your words that can never be edited away, and tags the lead. The dated note and the tag are
+        part of the same act, so a close with no explanation next to it cannot happen.
+      </p>
+    </Modal>
+  );
+}
+
+/* ================================================================== */
+/* TAGS on one lead, and the dated history under them                  */
+/* ================================================================== */
+
+/**
+ * Every add and every remove is kept, with the day and who did it. Nothing is
+ * overwritten — a lead's tags right now are the result of replaying this list,
+ * which is why there is no `tags` column anywhere and no way to edit one of these
+ * rows (there is no update grant on the table at all, see 0018).
+ *
+ * AN AUTOMATIC TAG CAN BE TAKEN OFF BY HAND AND THE RULE DOES NOT FIGHT BACK.
+ * That is not a flag somebody has to remember to set: the removal IS the record,
+ * and removedByHand() in lib/lead-tags.js reads it.
+ */
+function TagModal({ row, allTags, tagsById, teamName, editable, onToggle, onRefresh, onClose }) {
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  /* THE WHOLE HISTORY IS READ HERE, not carried on the row.
+   *
+   * The board reads `admin_lead_tags_now` — the NEWEST event per tag — because
+   * that is all two thousand rows of chips and filters need. The dated history is
+   * every event ever, which is the right read for one lead and the wrong read for
+   * a board. `null` means not read yet and is deliberately not `[]`: an empty
+   * history and a history we have not looked at are opposite things, and the
+   * panel below says which. */
+  const [events, setEvents] = useState(null);
+  const [historyError, setHistoryError] = useState(null);
+  useEffect(() => {
+    let live = true;
+    listLeadTagEvents(row.lead.id).then((res) => {
+      if (!live) return;
+      setEvents(res.rows || []);
+      setHistoryError(res.error || null);
+    });
+    return () => { live = false; };
+  }, [row.lead.id, busy]);
+
+  const on = row.tags || [];
+  const onIds = new Set(on.map((t) => t.tag_id));
+  const history = useMemo(
+    () => (events ? tagHistory(events, tagsById, { teamName }) : null),
+    [events, tagsById, teamName],
+  );
+
+  const needle = q.trim().toLowerCase();
+  const offer = (allTags || [])
+    .filter((t) => t.active !== false && !onIds.has(t.id))
+    .filter((t) => !needle || `${t.label} ${t.slug}`.toLowerCase().includes(needle))
+    .slice(0, 24);
+
+  const run = async (fn) => { setBusy(true); try { await fn(); } finally { setBusy(false); } };
+
+  return (
+    <Modal
+      open onClose={onClose} kicker="TAGS" width={620}
+      title={`Tags — ${row.lead.name || row.companyName || "this contact"}`}
+      footer={<button className="btn" onClick={onClose}>Close</button>}
+    >
+      {!editable && (
+        <div className="adm-sl-warn adm-sl-warn-flat" role="status">
+          <strong>Read-only.</strong> {row.heldBy ? `${row.heldBy}.` : "Somebody else holds this lead."}{" "}
+          You can read every tag and its whole history. Only the person holding it, or an owner, can
+          change them.
+        </div>
+      )}
+
+      <div className="label" style={{ marginBottom: 8 }}>On this lead now</div>
+      {on.length === 0 ? (
+        <div className="adm-sl-empty">
+          <strong>No tags yet.</strong>
+          <div>
+            Most tags are set automatically — from the website, the head count, the score and the
+            clock. Press <strong>Bring the automatic tags up to date</strong> below to work them out
+            for this contact now.
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+          {on.map((t) => (
+            <button
+              key={t.tag_id}
+              type="button"
+              className="adm-sh-chipbtn"
+              disabled={!editable || busy}
+              title={editable
+                ? `${t.why || "No reason recorded."} Click to take it off.`
+                : (t.why || "No reason recorded.")}
+              onClick={() => run(() => onToggle({ id: t.tag_id, label: t.label }, "removed"))}
+            >
+              {t.label}{editable ? <span aria-hidden="true"> ✕</span> : null}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {editable && (
+        <>
+          <Field label="Add one" hint="Only tags on the company's list. A brand new tag name is an owner's decision — three spellings of one tag is a filter nobody can use.">
+            <TextInput value={q} onChange={(e) => setQ(e.target.value)} placeholder="Type to search tags…" />
+          </Field>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+            {offer.length === 0 ? (
+              <span className="adm-sl-faint">
+                {needle ? "No tag on the list matches that." : "Every tag on the list is already on this contact."}
+              </span>
+            ) : offer.map((t) => (
+              <button
+                key={t.id} type="button" className="btn btn-sm" disabled={busy}
+                onClick={() => run(() => onToggle(t, "added"))}
+              >
+                + {t.label}
+              </button>
+            ))}
+          </div>
+          <button className="btn" disabled={busy} onClick={() => run(onRefresh)}>
+            {busy ? "Working…" : "Bring the automatic tags up to date"}
+          </button>
+          <div style={{ fontSize: 12.5, color: "var(--ink-dim)", marginTop: 6, lineHeight: 1.5 }}>
+            Works out the website, size, score, quiet and claim tags from what is on the record right
+            now. A tag you took off by hand is never put back.
+          </div>
+        </>
+      )}
+
+      <div className="label" style={{ margin: "22px 0 8px" }}>Tag history</div>
+      {historyError ? (
+        <div className="adm-sl-warn adm-sl-warn-flat" role="alert">
+          <strong>The history could not be read.</strong> {historyError} The tags above are what the
+          board loaded; this list is missing, not empty.
+        </div>
+      ) : history === null ? (
+        <div className="adm-sl-faint">Reading the history…</div>
+      ) : history.length === 0 ? (
+        <div className="adm-sl-faint">Nothing has been tagged on this contact yet.</div>
+      ) : history.map((h) => (
+        <div key={h.id} style={{ display: "flex", gap: 10, padding: "7px 0", borderBottom: "1px solid var(--rule)", fontSize: 13 }}>
+          {/* "COULD NOT READ IT", not "no date". Every one of these rows has a
+              date — `at` is `not null default now()` — so a blank here means the
+              value would not parse, which is a different thing from an absent one
+              and is the distinction this console enforces everywhere else. */}
+          <span className="mono adm-sl-faint" style={{ width: 74, flexShrink: 0 }}>
+            {sheetDate(h.at) || (h.at ? "bad date" : "no date")}
+          </span>
+          <span style={{ width: 14, flexShrink: 0, fontWeight: 700, color: h.action === "added" ? "#006b1a" : "var(--danger)" }}>
+            {h.action === "added" ? "+" : "−"}
+          </span>
+          <span title={sheetDateLong(h.at) || undefined}>{h.line}</span>
+        </div>
+      ))}
+      <p className="adm-sl-modalnote">
+        Every add and every remove is kept, with the date and who did it. Nothing here is ever
+        overwritten and nothing can be deleted — a correction is a new line. The tags on this
+        contact right now are just this list, replayed.
+      </p>
+    </Modal>
+  );
+}
+
+/* ================================================================== */
+/* THE SCAN — built, and it cannot be switched on yet                  */
+/* ================================================================== */
+
+/**
+ * THIS IS THE HONEST VERSION OF A FEATURE THAT CANNOT RUN.
+ *
+ * `api/sales-score.js` is careful and already written: it takes a firm id, looks
+ * the website up in OUR OWN database and ignores any address sent from the
+ * browser, so nobody can score a random URL against a firm. What it cannot do is
+ * run — `PLATFORM_SCORE_URL` does not exist, and the field names the code reads
+ * are a guess at a contract nobody has written down.
+ *
+ * So the panel says so, in plain words, in the place somebody would press the
+ * button. The alternative — a button that looks live and returns an error — is
+ * how a rep learns to distrust the whole page. Everything around it is real: the
+ * three scores, the findings and the pitch all have somewhere to live
+ * (admin_company_reports, 0019) and a scan that has already run is shown here
+ * with the day it was measured.
+ */
+function ScanModal({ lead, company, report, teamName, onRun, onClose }) {
+  const [busy, setBusy] = useState(false);
+  const noWebsite = !company?.domain && !lead?.domain;
+  const domain = company?.domain || lead?.domain || null;
+  /* IS IT ACTUALLY SWITCHED ON — ASKED, NOT ASSUMED.
+   *
+   * This panel used to say "the address of our own scanner is not set on the
+   * server" as static text, with the Scan button enabled next to it. Two problems
+   * at once: the day PLATFORM_SCORE_URL is set the sentence becomes a lie, and
+   * until then the button looks live and fails — which is precisely what this
+   * component's own header condemns.
+   *
+   * /api/health already answers this (`platformScore`), and useHealth() is the
+   * hook every other page in the console reads it with. `null` means we have not
+   * heard back yet, which is its own third state and says so rather than guessing
+   * either way. Aug 27 2026, after a review. */
+  const health = useHealth();
+  /* THREE STATES, AND THEY HAVE TO BE THREE.
+   *
+   * `Boolean(health.platformScore)` folded two different things into "not
+   * switched on": preview mode and a failed /api/health both come back as an
+   * object with no `platformScore` key at all, so the panel told somebody the
+   * server was missing a setting when nobody had been able to ask. Asking whether
+   * the KEY IS THERE separates "we know it is off" from "we could not find out".
+   * Third review, Aug 27 2026. */
+  const scanReady = (health && Object.prototype.hasOwnProperty.call(health, "platformScore"))
+    ? Boolean(health.platformScore)
+    : null;
+  const scanUnknownWhy = health?.preview
+    ? "This is preview mode, so there is no server to ask. Nothing can be scanned here and nothing is saved."
+    : "We could not reach the console's own health check, so whether scanning is switched on is unknown right now — not off.";
+
+  const run = async () => { setBusy(true); try { await onRun(); } finally { setBusy(false); } };
+
+  return (
+    <Modal
+      open onClose={onClose} kicker={noWebsite ? "NO WEBSITE" : "SCAN THEIR SITE"} width={620}
+      title={noWebsite ? "Build a mockup pitch" : `Scan ${domain}`}
+      footer={<>
+        <button className="btn" onClick={onClose}>Close</button>
+        {!noWebsite && (
+          <button
+            className="btn btn-accent" onClick={run}
+            /* DISABLED WITH ITS REASON ON IT, rather than enabled and failing.
+               A button that looks live and returns an error is how a rep learns
+               to distrust the whole page. */
+            disabled={busy || scanReady === false || scanReady === null}
+            title={scanReady === false
+              ? "Scanning is not switched on yet — the address of our own scanner is not set on the server, so there is nothing to ask."
+              : scanReady === null
+                ? scanUnknownWhy
+                : "Run a scan now. Nothing is saved unless a real score comes back."}
+          >
+            {busy ? "Asking…"
+              : scanReady === false ? "Scan now — not available yet"
+                : scanReady === null ? "Scan now — cannot tell yet"
+                  : "Scan now"}
+          </button>
+        )}
+      </>}
+    >
+      {noWebsite ? (
+        /* NO WEBSITE IS A DIFFERENT PITCH, AUTOMATICALLY. There is nothing to
+         * scan, so the button and the words change rather than a scan running and
+         * failing. This falls straight out of the `no-website` tag. */
+        <>
+          <div className="adm-sl-warn adm-sl-warn-flat" role="status">
+            <strong>There is no website on file for this firm.</strong> Nothing can be scanned, so
+            this is the other conversation: we build them one, and we show them a free mockup first.
+          </div>
+          <p style={{ fontSize: 13.5, lineHeight: 1.6 }}>
+            What to say, in order: they cannot be found by an AI search engine because there is
+            nothing for it to read; a mockup costs them nothing and takes days, not months; ask for
+            fifteen minutes rather than for the job.
+          </p>
+          <p className="adm-sl-modalnote">
+            If they do have a website and we simply have not recorded it, add it on the firm first —
+            open the record, Details, Website. The scan will only ever read a website we already hold
+            for a firm, so nobody can point it at an address somebody typed into a box.
+          </p>
+        </>
+      ) : (
+        <>
+          {/* READ FROM THE SERVER, so this sentence cannot outlive the thing it
+              describes. Three states, three sentences: not switched on, switched
+              on, and we have not heard back yet. */}
+          {scanReady === false && (
+            <div className="adm-sl-warn adm-sl-warn-flat" role="status">
+              <strong>Scanning is not switched on yet.</strong> The address of our own scanner is not
+              set on the server, and nobody has written down what it sends back, so the button below
+              is off. Nothing is guessed while it is off — <strong>no score is ever invented</strong>,
+              because a rep would quote it to a prospect.
+            </div>
+          )}
+          {scanReady === null && (
+            <div className="adm-sl-warn adm-sl-warn-flat" role="status">
+              <strong>Nobody could tell whether scanning is switched on.</strong> {scanUnknownWhy}
+              {" "}The button is off rather than offered — a button that looks live and fails is how
+              a page stops being trusted.
+            </div>
+          )}
+
+          {report ? (
+            <>
+              <div className="label" style={{ margin: "16px 0 8px" }}>The last scan of this site</div>
+              <div className="adm-sl-tiles">
+                <Tile
+                  label="AI Access"
+                  value={report.aiAccess === null ? "—" : report.aiAccess}
+                  hint={report.aiAccess === null ? "this half did not come back" : "can AI search read and quote them"}
+                />
+                <Tile
+                  label="SEO"
+                  value={report.seo === null ? "—" : report.seo}
+                  hint={report.seo === null ? "this half did not come back" : "ordinary Google search"}
+                />
+                <Tile
+                  label="Named by an AI"
+                  value={report.simTotal ? `${report.simHits} of ${report.simTotal}` : "—"}
+                  hint={report.simTotal ? "buyer questions we asked" : "this half did not come back"}
+                />
+              </div>
+              {/* THE FOUR HALVES OF A MEASUREMENT: the number, what it was
+                  measured against, the day it was read, and who read it.
+                  Anything short of all four is not a measurement and must not be
+                  printed as one. */}
+              <div style={{ fontSize: 12.5, color: "var(--ink-dim)", marginTop: 8, lineHeight: 1.6 }}>
+                Measured on <strong>{report.domain || domain}</strong>, read
+                {" "}<strong>{sheetDate(report.measuredAt) || "date unreadable"}</strong>
+                {report.measuredBy ? <> by {teamName(report.measuredBy) || "somebody on the team"}</> : null}.
+                {" "}A dash means that half of the scan did not come back — it is missing, not zero.
+              </div>
+
+              {report.findings.length > 0 && (
+                <>
+                  <div className="label" style={{ margin: "18px 0 8px" }}>What is wrong, in their words</div>
+                  {report.findings.map((f, i) => (
+                    <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid var(--rule)" }}>
+                      <div style={{ fontWeight: 600, fontSize: 13.5 }}>{f.title}</div>
+                      <div style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55 }}>{f.detail}</div>
+                    </div>
+                  ))}
+                </>
+              )}
+
+              <div className="label" style={{ margin: "18px 0 8px" }}>The pitch</div>
+              {report.pitch ? (
+                <p style={{ fontSize: 13.5, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{report.pitch}</p>
+              ) : (
+                <div className="adm-sl-faint" style={{ fontSize: 13 }}>
+                  Nothing was written.{report.pitchGateReason ? ` ${report.pitchGateReason}` : ""} The
+                  scores and the findings above are what the scan returned; the words are a separate
+                  thing and they are missing, not empty.
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="adm-sl-empty" style={{ marginTop: 14 }}>
+              <strong>This site has never been scanned.</strong>
+              <div>
+                That is not the same as a bad score — nobody has measured it. When scanning is
+                switched on, the first scan is kept for life and a later one is added next to it
+                rather than on top of it, so &ldquo;still the same in November&rdquo; stays readable.
+              </div>
+            </div>
+          )}
+
+          <p className="adm-sl-modalnote">
+            Rules that stay, whatever happens to the scanner: a scan only ever reads a website we
+            already hold for that firm, so nobody can score an address typed into a box. A re-scan
+            never wipes the old one — both are kept, with their dates. If the scan fails, nothing is
+            saved. And a firm scoring {ROE.SKIP_SCORE_AT_OR_ABOVE} or above is parked as
+            &ldquo;not a prospect&rdquo; rather than worked.
+          </p>
+        </>
+      )}
     </Modal>
   );
 }

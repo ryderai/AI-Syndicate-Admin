@@ -8,11 +8,13 @@ const SECTION_TITLES = {
   invoices: { kicker: "Command", title: "Invoices · billed, paid, owed" },
   clients: { kicker: "Command", title: "Clients · everyone we work with and everyone who pays" },
   sales: { kicker: "Sales", title: "Sales · the pipeline" },
-  /* The sales role's two pages, added Aug 26 2026 with the rep split. Without
-   * these the fallback capitalises the page id, so the rep's header read
-   * "Mine" — a word that does not say what is on the screen. */
-  leads: { kicker: "Sales", title: "Leads · the floor, nobody has claimed these" },
-  mine: { kicker: "Sales", title: "My leads · what you have claimed" },
+  /* THE REP'S OWN PAGES — Aug 27 2026. `leads` and `mine` are gone as page ids
+   * (AdminDashboard turns both into `floor`), and The Floor and Gmail arrived.
+   * Without an entry the fallback capitalises the page id, so the header would
+   * read "Floor" and "Gmail" — the first says less than the page does and the
+   * second reads like a brand rather than like whose mail it is. */
+  floor: { kicker: "Sales", title: "The Floor · every lead, claimed or not" },
+  gmail: { kicker: "Comms", title: "Gmail · your own mailbox" },
   operations: { kicker: "Delivery", title: "Operations · the task board" },
   inbox: { kicker: "Comms", title: "Inbox · team Gmail in one place" },
   tickets: { kicker: "Comms", title: "Tickets · customer support desk" },
@@ -29,12 +31,30 @@ export function requestRefresh() {
   window.dispatchEvent(new CustomEvent("adm-refresh"));
 }
 
-export default function Header({ section, preview }) {
+/* TWO PAGE IDS MEAN DIFFERENT THINGS TO DIFFERENT ROLES — Aug 27 2026.
+ *
+ * `overview` and `brain` are shared ids on purpose: an owner's Overview is the
+ * whole agency and a rep's is their own book, and the address is the same either
+ * way (see the note on SPLIT_FOR_ROLE in AdminDashboard.jsx for why the role is
+ * deliberately not in the URL). The consequence is that the TITLE cannot be read
+ * off the page id alone — a rep landing on "Overview · your day and the whole
+ * agency" would be reading a promise their page does not keep.
+ *
+ * So: an override per role, checked first, and the map above stays the answer for
+ * everybody else. A role with no override falls through to it unchanged. */
+const ROLE_TITLES = {
+  sales: {
+    overview: { kicker: "Yours", title: "Overview · your own book, and the AI that reads it" },
+    brain: { kicker: "Yours", title: "AI Brain · how the AI writes for you" },
+  },
+};
+
+export default function Header({ section, role = null, preview }) {
   /* A page that is not in the map above gets its own name, NOT the Overview's.
    * Falling back to Overview showed the Overview title over
    * the Notes page for its first hour of life — a header that lies about which
    * page you are on is worse than a plain one. Caught by a screenshot, Aug 20 2026. */
-  const t = SECTION_TITLES[section] || {
+  const t = (role && ROLE_TITLES[role]?.[section]) || SECTION_TITLES[section] || {
     kicker: "Console",
     title: section ? section.charAt(0).toUpperCase() + section.slice(1) : "Console",
   };

@@ -19,11 +19,11 @@ import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-serve
 import { buildAuthorizeUrl, hasGoogleClientCredentials } from "../lib/google-oauth.js";
 import { isVaultConfigured } from "../lib/vault-crypto.js";
 import { isGoogleProvider, scopesFor, PROVIDER_LABELS } from "../lib/connectors.js";
+import { originFromRequest, secureFlag } from "../lib/req-origin.js";
 
 function callbackUrlFromRequest(req) {
   if (process.env.CONNECT_REDIRECT_URI) return process.env.CONNECT_REDIRECT_URI;
-  const proto = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const { proto, host } = originFromRequest(req);
   return `${proto}://${host}/api/connect-callback`;
 }
 
@@ -106,7 +106,7 @@ export default async function handler(req, res) {
   // the state, so a consent link forwarded to someone else cannot attach
   // their account to our client's record.
   res.setHeader("Set-Cookie",
-    `ais_connect_oauth=${state}; HttpOnly; Secure; SameSite=Lax; Path=/api/connect-callback; Max-Age=600`);
+    `ais_connect_oauth=${state}; HttpOnly;${secureFlag(req)} SameSite=Lax; Path=/api/connect-callback; Max-Age=600`);
   res.setHeader("Cache-Control", "private, no-store");
 
   return res.status(200).json({

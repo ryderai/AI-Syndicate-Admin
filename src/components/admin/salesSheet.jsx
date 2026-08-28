@@ -6,8 +6,19 @@ import {
   columnLabel, facetValue, facetValues, groupRows,
   nameParts, joinName, splitName, nextSort, sortRowsBy,
   contestedCompanies, companyHeadcount, sheetDate, sheetDateLong,
+  /* ---- Aug 27 2026, The Floor ----
+   * The filters hold SEVERAL VALUES PER COLUMN now, so every one of these takes
+   * a `{ colKey: Set<value> }` rather than a `{ colKey: value }`. They live in
+   * the pure module because the rules about what a filter means have tests and a
+   * component cannot be given any. */
+  applyFacets, toggleFacetValue, clearFacet, facetChips,
+  SCORE_BANDS, SIZE_BANDS, TOUCH_BANDS, WEBSITE_BANDS,
+  readCount,
 } from "../../lib/salesSheet.js";
 import { LEAD_STAGES, LEAD_STAGE_LABELS } from "../../lib/data.js";
+/* The one-text gate, read rather than re-implemented: the row, the drawer and the
+ * database function admin_lead_claim_text all have to agree about it. */
+import { textGate } from "../../../lib/sales-rules.js";
 import {
   Chip, Avatar, Popover, PersonCell, SelectCell, TextCell, PopoutCell,
 } from "./opsCells.jsx";
@@ -33,6 +44,15 @@ import { ScoreChip, SiteLink } from "./salesParts.jsx";
  *
  * And grouping is still one click away. It is a switch now, not the shape.
  */
+
+/* The four columns whose FILTER is a band rather than their own value. Kept at
+ * module level rather than inside the component: a new object every render is a
+ * new dependency every render, and useCallback then rebuilds labelFor on every
+ * keystroke — which rebuilds every header menu under it. */
+const BANDS = {
+  site_score: SCORE_BANDS, employees: SIZE_BANDS,
+  last_touch: TOUCH_BANDS, website: WEBSITE_BANDS,
+};
 
 const PREFS_KEY = "ais.sales.sheet.v1";
 
@@ -63,6 +83,17 @@ function cleanGroupBy(v) {
 export default function SalesSheet({
   rows, allLeads, member, team, lists,
   onPatch, onAssign, onOpen, onRunScore, teamName, activityWindowDays = 90,
+  /* ---- added Aug 27 2026 with The Floor ----
+   * WHETHER THE SALES OWNER CELL IS A DROPDOWN OF PEOPLE OR A CLAIM BUTTON.
+   * Only an owner or an admin may hand a lead to somebody else — that is
+   * enforced in the database (migration 0020) and again in the page's
+   * assignLead. This is the third copy, the one a person sees. */
+  canAssign = true,
+  /* One function per action, and every one of them writes the dated line itself.
+   * A button in here never writes: it calls one of these and nothing else. See
+   * the note at the top of the SALES section of src/lib/data.js for the defect
+   * that rule exists to prevent. */
+  onTag, onRefreshTags, onLog, onScan, onCloseDeal, onRelease,
   /* WHO IS CLAIMING. A user id turns the Sales Owner cell of an UNCLAIMED row
    * into a one-press Claim button. Aug 26 2026, Ryder: the rep's Leads page is
    * the floor, and "put your name in the Sales Owner column" is not a claim
@@ -76,6 +107,17 @@ export default function SalesSheet({
   /* A sort is something you do for a minute, so unlike columns and grouping it
    * is deliberately NOT remembered between visits. */
   const [sort, setSort] = useState(null);
+  /* `{ colKey: Set<value> }` — several columns at once, several values each.
+   *
+   * It was `{ colKey: value }`: one value per column, so State could be FL or AL
+   * and never both, and seven columns could be filtered at all. Ryder, Aug 27
+   * 2026, on the Floor: the filters have to stack, and a filter has to hold more
+   * than one value.
+   *
+   * DELIBERATELY NOT SAVED TO localStorage, unlike the columns and the grouping.
+   * A rep who comes back tomorrow to a page still filtered to one state from
+   * last week reads it as an empty pipeline, and the control that would explain
+   * it is the one they have forgotten they touched. */
   const [facets, setFacets] = useState({});
   const [collapsed, setCollapsed] = useState(() => new Set());
   const [colsOpen, setColsOpen] = useState(null);
@@ -100,18 +142,33 @@ export default function SalesSheet({
    * filter shrinks every other column's menu to the values that survived it,
    * and a value outside the current filter cannot be reached from a header at
    * all. That was a real bug in the Operations table. */
-  const shown = useMemo(() => {
-    const keys = Object.keys(facets);
-    if (!keys.length) return rows;
-    return rows.filter((r) => keys.every((k) => facetValue(r, k) === facets[k]));
-  }, [rows, facets]);
+  const shown = useMemo(() => applyFacets(rows, facets), [rows, facets]);
 
+  /* ---- the words for a filter value, per column ----
+   * The banded columns are checked FIRST, before the "__none" branch: on those
+   * four, "__none" is a real band with its own name ("No score yet", "Never
+   * touched") rather than an absence, and falling through would have printed
+   * "No site score" where the menu means "nobody has scanned this". */
   const labelFor = useCallback((key, value) => {
+    if (BANDS[key]) {
+      const hit = BANDS[key].find(([v]) => v === value);
+      return hit ? hit[1] : String(value);
+    }
+    /* A tag's words come from the vocabulary, so a slug never reaches a screen.
+     * `tags` is the one multi-valued column; "__none" on it means the lead has
+     * no tags at all, which is a thing a rep filters FOR. */
+    if (key === "tags") {
+      if (value === "__none") return "No tags";
+      const hit = (rows || []).flatMap((r) => r.tags || []).find((t) => t.slug === value);
+      return hit?.label || String(value);
+    }
     if (value === "__none" || value === null || value === undefined || value === "") {
       return key === "owner" ? "On the floor"
         : key === "company" ? "No firm on file"
           : key === "list" ? "In no list"
-            : `No ${columnLabel(key).toLowerCase()}`;
+            : key === "vertical" ? "No line of business on file"
+              : key === "city" ? "No city on file"
+                : `No ${columnLabel(key).toLowerCase()}`;
     }
     if (key === "owner") return teamName(value) || "Former member";
     if (key === "stage") return LEAD_STAGE_LABELS[value] || value;
@@ -155,16 +212,16 @@ export default function SalesSheet({
     ? SHEET_COLUMN_KEYS.filter((k) => columns.includes(k) || k === pinned)
     : columns;
   const visible = SHEET_COLUMNS.filter((c) => shownKeys.includes(c.key));
+  /* +1 for the Do column at the end, which is never switchable: a table of leads
+   * with no way to act on one is a spreadsheet, which is the thing this replaced. */
   const span = visible.length + 1;
 
-  const toggleFacet = (key, value) => {
-    setFacets((cur) => {
-      const next = { ...cur };
-      if (next[key] === value) delete next[key];
-      else next[key] = value;
-      return next;
-    });
-  };
+  /* AND across columns, OR inside one column — decided in matchesFacets() in the
+   * pure module, not here, so the same answer is what the tests read. This just
+   * flips one value on or off. */
+  const toggleFacet = (key, value) => setFacets((cur) => toggleFacetValue(cur, key, value));
+  const dropFacet = (key) => setFacets((cur) => clearFacet(cur, key));
+  const clearAllFacets = () => setFacets({});
 
   const toggleGroup = (key) => setCollapsed((cur) => {
     const n = new Set(cur);
@@ -195,11 +252,35 @@ export default function SalesSheet({
     return {
       label: labelFor(key, v),
       column: columnLabel(key),
-      active: facets[key] === v,
+      /* `.has`, not `===`. A column holds a SET of values now, and comparing a
+       * Set to a string is quietly false for every row — the tick would simply
+       * never appear on a filter that is on. */
+      active: Boolean(facets[key]?.has(v)),
       onOnly: FILTERABLE.has(key) ? () => toggleFacet(key, v) : null,
       onGroup: GROUPABLE.has(key) ? () => setGroupBy((cur) => (cur === key ? "none" : key)) : null,
     };
   };
+
+  /* ---- WHAT A ROW MAY DO ----
+   * Read off `row.editable`, which sheetRow() derived ONCE from canEditLead().
+   * Nothing in this file works it out again: a cell that decided for itself
+   * whether it was editable could disagree with the row it sits in, and the
+   * greyed row would still have one live control on it. */
+  const locked = (row) => !row.editable;
+
+  /* A read-only cell. Same shape as the three cells that were ALWAYS read-only
+   * (Contacted?, First Contact, Last Touch) so a locked row looks like a row and
+   * not like a broken one: the value is still there, still readable, and the
+   * click opens the record instead of editing it. */
+  const readOnlyCell = (row, content, why) => (
+    <button
+      type="button" className="adm-db-btn adm-sh-readonly"
+      title={why}
+      onClick={(e) => { e.stopPropagation(); onOpen(row.lead.id); }}
+    >
+      {content}
+    </button>
+  );
 
   const runScore = async (row) => {
     if (!onRunScore) return;
@@ -207,9 +288,59 @@ export default function SalesSheet({
     try { await onRunScore(row); } finally { setScoring(null); }
   };
 
+  /* The value a LOCKED row shows for a column that would otherwise be editable.
+   * Plain text, no control. Kept in one place so a greyed row cannot end up with
+   * one column that still looks clickable. */
+  const plainValue = (row, key) => {
+    const l = row.lead;
+    const parts = nameParts(l);
+    switch (key) {
+      case "owner": return row.ownerName || "On the floor";
+      case "stage": return LEAD_STAGE_LABELS[l.stage] || l.stage;
+      case "list": return row.listName || "In no list";
+      case "next_step": return l.next_step || "—";
+      case "first_name": return parts.first || "—";
+      case "last_name": return parts.last || "—";
+      case "full_name": return l.name || "—";
+      case "title": return l.title || "—";
+      case "email": return l.email || "—";
+      case "phone": return l.phone || "—";
+      case "city": return l.city || "—";
+      case "state": return l.state || "—";
+      default: return "—";
+    }
+  };
+
   /* ---- one cell ---- */
   const cell = (row, key) => {
     const l = row.lead;
+
+    /* ---- THE ROW LOCK, applied to every editable column at once ----
+     *
+     * A rep may change a lead they hold or a lead nobody holds. Somebody else's
+     * row is readable and not editable, and that is the whole architecture of
+     * the Floor: visibility wide on purpose, editability not.
+     *
+     * IT IS ONE BRANCH RATHER THAN A CHECK IN EVERY CASE BELOW, deliberately.
+     * Twelve columns each remembering to check would be twelve places for the
+     * next column somebody adds to forget, and the forgotten one is a live
+     * control on a greyed row — which reads as a page that lets you do something
+     * and then refuses. The three columns that were already read-only for
+     * everybody (Contacted?, First Contact, Last Touch) fall through untouched,
+     * and so do the ones that are read-only by nature (Tags is handled in its own
+     * case, Scores, Website, Company, Touches, Company size, Type of business).
+     *
+     * This is the POLITE half of the lock. The half that works is migration 0020
+     * and the check inside every endpoint that writes a lead. */
+    const col = SHEET_COLUMNS.find((c) => c.key === key);
+    if (col?.edit && key !== "tags" && locked(row)) {
+      return readOnlyCell(
+        row,
+        <span className={plainValue(row, key) === "—" ? "adm-db-empty" : undefined}>{plainValue(row, key)}</span>,
+        `${row.heldBy || "Somebody else holds this lead"} — you can read it, not change it. Click to open the record.`,
+      );
+    }
+
     switch (key) {
       case "owner":
         /* One press, and it goes through the SAME onAssign path the dropdown
@@ -236,6 +367,22 @@ export default function SalesSheet({
             >
               {busy ? "Claiming…" : "Claim"}
             </button>
+          );
+        }
+        /* THE DROPDOWN IS AN OWNER'S CONTROL. Moving a lead to another person is
+         * something only an owner or an admin may do (migration 0020 refuses it
+         * in the database), so a rep gets the name and not the picker. A control
+         * that is drawn and then refused teaches people to stop reading the
+         * refusals. Aug 27 2026 */
+        if (!canAssign) {
+          return readOnlyCell(
+            row,
+            l.owner_id
+              ? <span>{row.ownerName || "someone"}</span>
+              : <span className="adm-db-empty">On the floor</span>,
+            l.owner_id
+              ? "Only an owner or an admin can move a lead to somebody else. You can hand your own back from the Do menu."
+              : "Nobody has claimed this. Press Claim to take it.",
           );
         }
         return (
@@ -420,6 +567,105 @@ export default function SalesSheet({
           />
         );
 
+      /* ---- TAGS. The one multi-valued cell. ----
+       * Chips, read from the event log (replayed in sheetRow, never a column),
+       * and the whole panel behind them is one click away. Locked rows show the
+       * same chips and open the same panel read-only — a rep has to be able to
+       * see that a firm is tagged `hot` before they email into it. */
+      case "tags": {
+        const on = row.tags || [];
+        return (
+          <button
+            type="button" className="adm-db-btn"
+            title={on.length
+              ? `${on.map((t) => t.label).join(" · ")}. Click to see the whole history.`
+              : "No tags yet. Click to add one, or to work out the automatic ones."}
+            onClick={(e) => { e.stopPropagation(); onTag?.(row); }}
+          >
+            {on.length === 0
+              ? <span className="adm-db-empty">{locked(row) ? "—" : "+ tag"}</span>
+              : (
+                <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+                  {on.slice(0, 3).map((t) => <Chip key={t.tag_id} label={t.label} color={t.color} />)}
+                  {/* SAID, not hidden. Three chips is what fits; a cell that
+                      quietly stops at three reads as a lead with three tags. */}
+                  {on.length > 3 ? <span className="adm-sh-headn">+{on.length - 3}</span> : null}
+                </span>
+              )}
+          </button>
+        );
+      }
+
+      /* ---- THE THREE SCORES A SCAN RETURNS ----
+       * AI Access, ordinary search, and how often an AI names the firm when a
+       * buyer asks. Read from the newest admin_company_reports row for the FIRM.
+       *
+       * A MISSING HALF PRINTS AS A DASH, NEVER AS A ZERO. A firm shown as 0 for
+       * AI Access reads as the worst site anybody has ever seen, which is the
+       * hardest a rep would ever go in — the single most dangerous wrong number
+       * this table could hold. */
+      case "scores": {
+        const r = row.report;
+        if (!r) {
+          return (
+            <button
+              type="button" className="adm-db-btn"
+              title={row.domain
+                ? "Nobody has scanned this site. That is not a bad score — it is no score."
+                : "No website on file for this firm, so there is nothing to scan."}
+              onClick={(e) => { e.stopPropagation(); onScan?.({ lead: l, company: row.company }); }}
+            >
+              <span className="adm-db-empty">{row.domain ? "Scan site" : "no site"}</span>
+            </button>
+          );
+        }
+        const bit = (label, v) => (
+          <span className="mono" style={{ fontSize: 11.5 }}>
+            {label} {v === null ? <span className="adm-db-empty">—</span> : v}
+          </span>
+        );
+        return (
+          <button
+            type="button" className="adm-db-btn"
+            title={`Measured ${sheetDateLong(r.measuredAt) || "on an unreadable date"} on ${r.domain || row.domain || "an unrecorded website"}. A dash means that half of the scan did not come back — missing, not zero. Click for the findings.`}
+            onClick={(e) => { e.stopPropagation(); onScan?.({ lead: l, company: row.company }); }}
+          >
+            <span style={{ display: "inline-flex", gap: 8 }}>
+              {bit("AI", r.aiAccess)}
+              {bit("SEO", r.seo)}
+              {r.simTotal ? bit("named", `${r.simHits}/${r.simTotal}`) : null}
+            </span>
+          </button>
+        );
+      }
+
+      /* Two columns that have arrived with every sheet import since Aug 25 and
+       * were displayed nowhere. Read-only here, because they belong to the firm
+       * and the firm is edited on the firm. */
+      case "employees": {
+        const n = readCount(row.company?.employees);
+        return readOnlyCell(
+          row,
+          n === null
+            ? <span className="adm-db-empty">—</span>
+            : <span className="mono">{n}</span>,
+          n === null
+            ? "No head count on file for this firm. That is unknown, not one person."
+            : `${n} people at this firm, from the sheet import.`,
+        );
+      }
+
+      case "vertical": {
+        const v = row.company?.vertical || l.vertical || null;
+        return readOnlyCell(
+          row,
+          v ? <span>{v}</span> : <span className="adm-db-empty">—</span>,
+          v
+            ? "The firm's line of business, from the sheet import. Filter on it from the header."
+            : "No line of business on file for this firm.",
+        );
+      }
+
       case "touches": {
         const c = row.cadence;
         return (
@@ -447,7 +693,8 @@ export default function SalesSheet({
     }
   };
 
-  const activeFacets = Object.keys(facets);
+  const activeFacets = Object.keys(facets).filter((k) => facets[k]?.size);
+  const chips = useMemo(() => facetChips(facets, { labelFor }), [facets, labelFor]);
 
   return (
     <div className="adm-db adm-sh">
@@ -468,17 +715,45 @@ export default function SalesSheet({
           Contacted? and Touches count the last {activityWindowDays} days
         </span>
 
-        {activeFacets.map((k) => (
+        {/* ---- EVERY FILTER THAT IS ON, AS A REMOVABLE CHIP — Aug 27 2026 ----
+            One chip per VALUE, not per column, because a column can hold several
+            now: "State: FL" and "State: AL" are two chips and taking one off
+            leaves the other. Built by facetChips() in the pure module so the
+            chips and the filtering cannot disagree about what is on. */}
+        {chips.map((c) => (
           <button
-            key={k} type="button" className="adm-sh-chipbtn"
-            onClick={() => toggleFacet(k, facets[k])}
-            title="Click to take this filter off"
+            key={`${c.key}:${c.value}`} type="button" className="adm-sh-chipbtn"
+            onClick={() => toggleFacet(c.key, c.value)}
+            title={`Take this filter off. ${c.column} can hold more than one value at a time.`}
           >
-            {columnLabel(k)}: {labelFor(k, facets[k])} <span aria-hidden="true">✕</span>
+            {c.column}: {c.label} <span aria-hidden="true">✕</span>
           </button>
         ))}
+        {/* Offered only when there is more than one thing to clear. With exactly
+            one chip on screen, "Clear all" and pressing that chip are the same
+            act, and two controls for one act is one of them being ignored. */}
+        {chips.length > 1 ? (
+          <button type="button" className="adm-db-link" onClick={clearAllFacets}>
+            Clear all
+          </button>
+        ) : null}
 
         <span className="adm-sh-spacer" />
+
+        {/* ---- FILTER BY A COLUMN THAT IS NOT ON SCREEN ----
+            Every filterable column, whether or not its header is showing. The
+            header's own caret does the same job for a visible column; this row
+            exists because the columns are switchable, and a filter you can only
+            reach from a header is a filter you lose the moment somebody hides
+            that column. Tags and the score bands are exactly the two a rep would
+            hide and still want to filter on. */}
+        <FilterMenuBar
+          rows={rows}
+          facets={facets}
+          labelFor={labelFor}
+          onFacet={toggleFacet}
+          onClearColumn={dropFacet}
+        />
 
         <label className="adm-sh-groupsel">
           Group by
@@ -577,7 +852,10 @@ export default function SalesSheet({
                   />
                 </th>
               ))}
-              <th><span className="adm-db-sr">Open</span></th>
+              {/* "Do" rather than a blank header. The column holds the row's
+                  buttons now, not just the open arrow, and a column of controls
+                  with no name is a column people do not look in. */}
+              <th style={{ width: 210 }}>Do</th>
             </tr>
           </thead>
 
@@ -608,15 +886,37 @@ export default function SalesSheet({
                 {!shut && ordered.map((row) => (
                   <tr
                     key={row.id}
-                    className={`adm-db-row adm-sh-row${row.lead.owner_id === member.user_id ? " mine" : ""}${row.gate.skip ? " skip" : ""}`}
+                    /* THREE STATES, READABLE AT A GLANCE. `mine` is an accent
+                       edge, `theirs` is dimmed with every control off, and
+                       neither means nobody has claimed it. Read off
+                       `row.editable`, which sheetRow derived once from
+                       canEditLead — not re-derived here. */
+                    className={[
+                      "adm-db-row", "adm-sh-row",
+                      row.lead.owner_id === member.user_id ? "mine" : "",
+                      locked(row) ? "theirs" : "",
+                      row.gate.skip ? "skip" : "",
+                    ].filter(Boolean).join(" ")}
                   >
                     {visible.map((c) => <td key={c.key} className="adm-db-cell">{cell(row, c.key)}</td>)}
                     <td className="adm-db-cell">
-                      <button
-                        type="button" className="adm-db-open"
-                        title="Open this person's whole record"
-                        onClick={() => onOpen(row.id)}
-                      >⤢</button>
+                      <RowActions
+                        row={row}
+                        claimAs={claimAs}
+                        claiming={claiming === row.id}
+                        onClaim={async () => {
+                          if (claiming === row.id) return;
+                          setClaiming(row.id);
+                          try { await onAssign(row, claimAs); } finally { setClaiming(null); }
+                        }}
+                        onOpen={() => onOpen(row.id)}
+                        onTag={() => onTag?.(row)}
+                        onRefreshTags={() => onRefreshTags?.(row)}
+                        onLog={(kind) => onLog?.(row, kind)}
+                        onScan={() => onScan?.({ lead: row.lead, company: row.company })}
+                        onCloseDeal={(kind) => onCloseDeal?.(row, kind)}
+                        onRelease={() => onRelease?.(row)}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -815,4 +1115,278 @@ const STAGE_COLOR = {
 function allRowFor(allLeads, companyId) {
   const l = (allLeads || []).find((x) => x.company_id === companyId);
   return l ? { companyName: l.company || null, company: l.company || null } : null;
+}
+
+/* ------------------------------------------------------------------ */
+
+/**
+ * ONE PILL PER FILTERABLE COLUMN, whether or not that column is on screen.
+ *
+ * The header's own caret already filters a VISIBLE column. This row exists
+ * because the columns are switchable: hide Tags and, without this, the tag
+ * filter goes with it — and Tags and the score bands are exactly the two
+ * somebody would hide to make room and still want to filter on.
+ *
+ * A pill lights up when its column has anything on, and carries how many values
+ * that is, so "State · 2" is readable without opening it.
+ *
+ * THE MENU IS BUILT FROM THE UNFILTERED ROWS, like every other menu in this
+ * table. Built from what is on screen, one filter shrinks every other column's
+ * options to the values that survived it and a value outside the current filter
+ * cannot be reached at all. That was a real shipped bug on the Operations table,
+ * and facetValues() carries the same warning.
+ */
+function FilterMenuBar({ rows, facets, labelFor, onFacet, onClearColumn }) {
+  const [open, setOpen] = useState(null);   // { key, anchor }
+  const cols = SHEET_COLUMNS.filter((c) => c.filterable);
+
+  return (
+    <>
+      {cols.map((c) => {
+        const on = facets[c.key]?.size || 0;
+        return (
+          <button
+            key={c.key}
+            type="button"
+            className={on ? "adm-sh-chipbtn" : "btn btn-sm"}
+            aria-haspopup="menu"
+            title={on
+              ? `${c.label}: ${on} value${on === 1 ? "" : "s"} on. Click to change.`
+              : `Filter by ${c.label}. More than one value at a time is allowed.`}
+            onClick={(e) => setOpen({ key: c.key, anchor: e.currentTarget.getBoundingClientRect() })}
+          >
+            {c.label}{on ? ` · ${on}` : ""} <span aria-hidden="true">▾</span>
+          </button>
+        );
+      })}
+
+      {open && (
+        <Popover anchor={open.anchor} width={266} onClose={() => setOpen(null)}>
+          <div className="adm-db-pop-filter">
+            <div style={{ padding: "6px 10px", fontSize: 12, color: "var(--ink-dim)", lineHeight: 1.45 }}>
+              Tick as many as you like. Inside one column they are
+              {" "}<strong>or</strong>; across columns they are <strong>and</strong>.
+            </div>
+            {facets[open.key]?.size ? (
+              <button
+                type="button" className="adm-db-pop-item plain"
+                onClick={() => { onClearColumn(open.key); setOpen(null); }}
+              >
+                Clear this column
+              </button>
+            ) : null}
+          </div>
+          <div className="adm-db-pop-list" role="menu">
+            {(() => {
+              const values = facetValues(rows, open.key);
+              if (!values.length) return <div className="adm-db-pop-none">No rows to filter.</div>;
+              /* Capped, and the cap SAYS SO. A city column on the real sheet has
+               * hundreds of values, and a menu that quietly stops at forty reads
+               * as a list of every city we hold. */
+              const CAP = 40;
+              const shown = values.slice(0, CAP);
+              return (
+                <>
+                  {shown.map(([v, n]) => {
+                    const ticked = Boolean(facets[open.key]?.has(v));
+                    return (
+                      <button
+                        key={v} type="button" role="menuitemcheckbox" aria-checked={ticked}
+                        className={`adm-db-pop-item${ticked ? " on" : ""}`}
+                        /* The menu STAYS OPEN, unlike the header's single-value
+                         * one. Picking three states means three clicks, and
+                         * closing after each would mean re-opening twice. */
+                        onClick={() => onFacet(open.key, v)}
+                      >
+                        <span>{ticked ? "✓ " : ""}{labelFor(open.key, v)}</span>
+                        <span className="adm-db-count">{n}</span>
+                      </button>
+                    );
+                  })}
+                  {values.length > CAP ? (
+                    <div className="adm-db-pop-none">
+                      Showing the {CAP} commonest of {values.length}. Search above the table to reach
+                      the rest.
+                    </div>
+                  ) : null}
+                </>
+              );
+            })()}
+          </div>
+        </Popover>
+      )}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+/**
+ * THE ROW'S BUTTONS. Small, one line, always in the same order.
+ *
+ * ONE PRIMARY BUTTON AND A MENU, rather than eleven buttons in a cell. Eleven
+ * would either shrink the row to nothing or wrap onto three lines on the one
+ * column a rep reads while somebody is on the phone. So the primary is whatever
+ * this row most obviously needs next — Claim on a free row, Email on your own —
+ * and the rest are behind "⋯", in the order the build spec lists them:
+ *
+ *   Claim · Email · Call · Text · Scan site (or Build mockup pitch) ·
+ *   Log a touch · Note · Tag · Stage · Release · Open
+ *
+ * A BUTTON THAT DOES NOT APPLY IS NOT DRAWN, rather than drawn dead — with one
+ * exception, Text, which is drawn disabled WITH ITS REASON on it, because the
+ * one-text rule is a rule a rep needs to be told rather than a button that
+ * quietly is not there. A greyed control with no reason reads as a broken
+ * control, and then people stop trusting the whole page.
+ *
+ * NOTHING IN HERE WRITES. Every entry calls one function that the page passed
+ * down, and each of those functions does the write, the timeline line and the tag
+ * event together. Four buttons that each did their own version of one act had
+ * four behaviours, and one of them permanently blocked the only one that worked.
+ */
+function RowActions({
+  row, claimAs, claiming,
+  onClaim, onOpen, onTag, onRefreshTags, onLog, onScan, onCloseDeal, onRelease,
+}) {
+  const [anchor, setAnchor] = useState(null);
+  const l = row.lead;
+  const editable = row.editable;
+  const free = !l.owner_id;
+  const noWebsite = !row.domain;
+  /* The one-text rule, read from the one function that decides it. Not
+   * re-implemented here: textGate lives in lib/sales-rules.js because the page,
+   * the drawer and the database function all have to agree about it. */
+  const text = textGate(l);
+
+  const item = (label, fn, { title, disabled } = {}) => (
+    <button
+      key={label}
+      type="button"
+      className="adm-db-pop-item plain"
+      disabled={Boolean(disabled)}
+      title={title}
+      onClick={() => { setAnchor(null); fn(); }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <span className="adm-sh-do">
+      {/* ---- the lock, said out loud on the row itself ---- */}
+      {!editable && (
+        <span className="adm-sh-held" title="You can read this record. Only the person holding it, or an owner, can change it.">
+          🔒 {row.heldBy}
+        </span>
+      )}
+
+      {/* ---- the primary ---- */}
+      {editable && free && claimAs ? (
+        <button
+          type="button" className="btn btn-sm btn-accent"
+          disabled={claiming} aria-busy={claiming}
+          title="Take this lead. First contact is then on the clock."
+          onClick={(e) => { e.stopPropagation(); onClaim(); }}
+        >
+          {claiming ? "Claiming…" : "Claim"}
+        </button>
+      ) : editable ? (
+        <button
+          type="button" className="btn btn-sm"
+          title={l.email ? "Log the email you send, so the timers and the cadence move." : "No email address on this contact."}
+          disabled={!l.email}
+          onClick={(e) => { e.stopPropagation(); onLog("email"); }}
+        >
+          Email
+        </button>
+      ) : null}
+
+      {/* ---- everything else ---- */}
+      <button
+        type="button" className="btn btn-sm"
+        aria-haspopup="menu" aria-label="What you can do with this contact"
+        title="Everything you can do with this contact"
+        onClick={(e) => { e.stopPropagation(); setAnchor(e.currentTarget.getBoundingClientRect()); }}
+      >
+        ⋯
+      </button>
+
+      <button
+        type="button" className="adm-db-open"
+        title="Open this person's whole record"
+        onClick={(e) => { e.stopPropagation(); onOpen(); }}
+      >⤢</button>
+
+      {anchor && (
+        <Popover anchor={anchor} width={252} onClose={() => setAnchor(null)}>
+          <div className="adm-db-pop-filter">
+            {!editable ? (
+              <div style={{ padding: "8px 10px", fontSize: 12.5, color: "var(--ink-dim)", lineHeight: 1.5 }}>
+                <strong>{row.heldBy}.</strong> You can open this record and read everything on it —
+                the notes, the timeline, the scan. Nothing here can change it.
+              </div>
+            ) : null}
+
+            {editable && free && claimAs ? item("Claim", onClaim, { title: "Take this lead." }) : null}
+
+            {editable ? item("Log an email", () => onLog("email"), {
+              disabled: !l.email,
+              title: l.email ? "Log the email you sent." : "No email address on this contact.",
+            }) : null}
+
+            {editable ? item("Log a call", () => onLog("call"), {
+              disabled: !l.phone,
+              title: l.phone ? `Call ${l.phone} and log how it went.` : "No phone number on this contact.",
+            }) : null}
+
+            {/* DRAWN DISABLED WITH THE REASON, on purpose — see the note above
+                this component. One text per lead, and only after they reply. */}
+            {editable ? item("Log a text", () => onLog("text"), {
+              disabled: !text.allowed,
+              title: text.reason,
+            }) : null}
+
+            {editable ? item(noWebsite ? "Build a mockup pitch" : "Scan their site", onScan, {
+              title: noWebsite
+                ? "No website on file, so there is nothing to scan — this is the other pitch."
+                : "Read the last scan, or run a new one.",
+            }) : null}
+
+            {editable ? item("Log a LinkedIn touch", () => onLog("linkedin"), {
+              disabled: !l.linkedin_url,
+              title: l.linkedin_url ? "Log the connection or the message." : "No LinkedIn on this contact.",
+            }) : null}
+
+            {editable ? item("Add a note", () => onLog("note"), {
+              title: "Dated, signed, and it can never be edited away.",
+            }) : null}
+
+            {item(editable ? "Tags" : "See the tags", onTag, {
+              title: editable ? "Add or remove a tag. Every change is dated." : "Read the tags and their history.",
+            })}
+
+            {editable ? item("Bring the automatic tags up to date", onRefreshTags, {
+              title: "Works out the website, size, score, quiet and claim tags from the record as it stands now.",
+            }) : null}
+
+            {editable ? item("Mark it won", () => onCloseDeal("won"), {
+              title: "You will be asked why. It will not save empty.",
+            }) : null}
+
+            {editable ? item("Mark it lost", () => onCloseDeal("lost"), {
+              title: "You will be asked why. It will not save empty.",
+            }) : null}
+
+            {editable && !free ? item("Hand it back to the floor", onRelease, {
+              title: "Anybody can claim it after that. A dated line says you handed it back.",
+            }) : null}
+
+            {item("Open the whole record", onOpen, {
+              title: "Timeline, notes, the firm, the proposals and the scan.",
+            })}
+          </div>
+        </Popover>
+      )}
+    </span>
+  );
 }

@@ -3251,3 +3251,43 @@ select.adm-input { cursor: pointer; }
 .rb-owed-foot,
 .rb-addup { color: var(--rb-quiet); }
 .rb-count { color: var(--rb-quieter); }
+
+/* ==================================================================
+   THE FLOOR — Aug 27 2026 (appended, nothing above was changed)
+   ================================================================== */
+
+/* WHOSE ROW IS IT. Three states, and they have to be readable at a glance
+   because the Floor shows every lead in the company on one screen:
+
+     .mine    an accent edge down the left  (already existed above)
+     .theirs  dimmed, and every control on it is off
+     neither  unclaimed, and free to take
+
+   Dimmed rather than hidden. A rep has to be able to SEE that somebody else is
+   already in this building — that is the whole reason for showing every row —
+   they just cannot change it. Hover lifts the dimming so it stays readable. */
+.adm-sh-row.theirs { opacity: 0.66; }
+.adm-sh-row.theirs:hover { opacity: 1; }
+.adm-sh-row.theirs td:first-child { box-shadow: inset 3px 0 0 var(--rule); }
+
+/* The lock marker in the Do column of somebody else's row. Mono and small: it is
+   a fact about the row, not a thing to press. */
+.adm-sh-held {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+
+/* The row's buttons. One line, always in the same order, and the ones that do
+   not apply are not drawn rather than drawn dead — a greyed button with no
+   reason on it reads as a broken button. */
+.adm-sh-do {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.adm-sh-do .btn { padding: 3px 8px; font-size: 11.5px; }

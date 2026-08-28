@@ -5,7 +5,6 @@ import {
   listLeadActivity, addLeadActivity, listProposals, upsertProposal, deleteProposal,
   claimLead, releaseLead, upsertLead, upsertCompany, claimTextSend, logActivity,
   listTasks, listWeekly, listClientReports, listTickets,
-  markLeadWon, wonMessage,
 } from "../../lib/data.js";
 import { listInvoices } from "../../lib/finance.js";
 import { buildPersonTimeline, timelineSummary } from "../../../lib/person-timeline.js";
@@ -17,6 +16,9 @@ import { apiFetch } from "../../lib/adminApi.js";
 import { toast } from "../../lib/toast.js";
 import { Modal, Field, TextInput, TextArea, Select, timeAgo } from "./shared.jsx";
 import { StagePill, ClaimChip, ScoreChip, FirmWarning, money, SiteLink } from "./salesParts.jsx";
+/* One place decides how a date is written for a person to read, and it counts
+ * days in the team's own calendar rather than the browser's. */
+import { sheetDateLong } from "../../lib/salesSheet.js";
 
 /* THE PROFILE — one person, everything about them, in one place.
  *
@@ -47,6 +49,25 @@ const TABS = [
 export default function SalesProfile({
   lead, company, siblings, member, team, teamName, now,
   touches, onClose, reload,
+  /* ---- added Aug 27 2026 with The Floor ----
+   *
+   * `readOnly` is the row lock, DERIVED BY THE PAGE and handed down rather than
+   * worked out here. The Floor shows every lead in the company, so this drawer
+   * now opens on leads the reader may not change — and a drawer that decided for
+   * itself whether it was read-only could disagree with the row it was opened
+   * from. One derivation, in SalesPage, from canEditLead().
+   *
+   * Read-only means READ-ONLY, not hidden: every field, every note and the whole
+   * timeline are visible, and there is not one button. A rep has to be able to
+   * see that somebody else is already in this building and what was said — that
+   * is the entire reason for showing them the row. */
+  readOnly = false,
+  heldByName = "another rep",
+  /* Tags, the newest scan, and the four things a button in here can now ask the
+   * page to do. Every one of them is ONE function that also writes the dated
+   * line; nothing in this file writes a tag or closes a deal itself. */
+  tags = [], allTags = [], onTag = null, onRefreshTags = null,
+  report = null, onScan = null, onCloseDeal = null,
 }) {
   const [tab, setTab] = useState("work");
   const [activity, setActivity] = useState(null);
@@ -182,20 +203,33 @@ export default function SalesProfile({
    * anything already at Won, using any of them first made the working path a
    * no-op for that lead FOREVER. All three call this now. See markLeadWon in
    * src/lib/data.js for the rules it holds. */
-  const doWin = async (extraPatch = {}) => {
-    setBusy(true);
-    const res = await markLeadWon(lead, { actor: member.user_id, extraPatch });
-    setBusy(false);
-    if (!res.ok) { toast.error("Could not mark it won", res.error); return false; }
-    await logActivity({ actor: member.user_id, kind: "lead_won", title: `Won: ${lead.name || lead.company}` });
-    const m = wonMessage(res);
-    toast[m.tone](m.title, m.body);
-    await load();
-    await reload();
-    return true;
+  /* WON AND LOST BOTH GO THROUGH THE REASON BOX NOW — Aug 27 2026.
+   *
+   * This function used to write. It asks instead: the box is owned by SalesPage
+   * and it sits in front of ONE function (closeLeadWon / markLeadLost in
+   * src/lib/data.js), not in front of the four buttons that reach it. That is the
+   * lesson from Won itself — four buttons each holding their own version of one
+   * act had four behaviours, and one of them permanently blocked the only one
+   * that worked. Putting a reason box on each of them would have put it on three
+   * and missed one.
+   *
+   * markLeadWon is still the function underneath. It is just no longer reachable
+   * without a reason.
+   *
+   * The fallback keeps the drawer usable if it is ever mounted without the
+   * handler: it says plainly that the reason box is not wired up rather than
+   * silently doing nothing, which is the failure mode of a button that used to
+   * work. */
+  const doClose = (kind) => {
+    if (!onCloseDeal) {
+      toast.error("The reason box is not open on this screen", "Close and mark it from the list instead — a deal is not recorded without a reason.");
+      return;
+    }
+    onCloseDeal(kind);
   };
 
-  const flipToClient = () => doWin();
+  const doWin = () => doClose("won");
+  const flipToClient = () => doClose("won");
 
   return createPortal(
     <>
@@ -217,13 +251,108 @@ export default function SalesProfile({
           <div className="adm-sl-chips">
             <StagePill stage={lead.stage} />
             <ClaimChip lead={lead} now={now} />
-            <ScoreChip score={company?.site_score} onRun={runScore} busy={scoring} />
+            <ScoreChip score={company?.site_score} onRun={readOnly ? undefined : runScore} busy={scoring} />
+            {/* THE THREE SCORES, next to the one. `site_score` is the single
+                number admin_companies can hold and it is what the 90+ gate reads;
+                the scan report holds AI Access, ordinary search, and how often an
+                AI names the firm. Both are shown because they are different
+                measurements taken at different times — folding them into one chip
+                would mean picking which date to print.
+                A dash is a half of the scan that did not come back. It is missing,
+                not zero: a firm shown as 0 for AI Access reads as the worst site
+                anybody has seen, and that is the hardest a rep would ever go in. */}
+            {onScan && (
+              <button
+                type="button"
+                className="adm-sl-pill adm-sl-pill-btn"
+                title={report
+                  ? `Measured ${report.measuredAt ? sheetDateLong(report.measuredAt) : "on an unreadable date"} on ${report.domain || "an unrecorded website"}. Click for the findings.`
+                  : "Nobody has scanned this site. That is no score, not a bad one."}
+                onClick={onScan}
+              >
+                {report
+                  ? `AI ${report.aiAccess === null ? "—" : report.aiAccess} · SEO ${report.seo === null ? "—" : report.seo}${report.simTotal ? ` · named ${report.simHits}/${report.simTotal}` : ""}`
+                  : "NO SCAN"}
+              </button>
+            )}
             {lead.owner_id && (
               <span className="adm-sl-owner">
                 {lead.owner_id === member.user_id ? "Yours" : `Claimed by ${teamName(lead.owner_id)}`}
               </span>
             )}
           </div>
+
+          {/* ---- TAGS, on the record itself ----
+              Chips read off the event log (replayed by the page, never a
+              column), and the whole dated history is one click away. Shown on a
+              read-only record too: a rep about to email a firm has to be able to
+              see that it is already tagged `hot`. */}
+          {(tags.length > 0 || (!readOnly && onTag)) && (
+            <div className="adm-sl-chips" style={{ marginTop: 6 }}>
+              {tags.map((t) => (
+                <button
+                  key={t.tag_id}
+                  type="button"
+                  className="adm-sl-pill adm-sl-pill-btn"
+                  disabled={readOnly}
+                  title={readOnly
+                    ? (t.why || "No reason recorded.")
+                    : `${t.why || "No reason recorded."} Click to take it off.`}
+                  onClick={() => onTag?.({ id: t.tag_id, label: t.label }, "removed")}
+                >
+                  {t.label}
+                </button>
+              ))}
+              {/* ADDING A TAG FROM THE RECORD ITSELF. Without this a rep working
+                  inside a record had to close it, find the row again and use the
+                  Floor's tag panel — and a control that only exists one screen
+                  away is a control nobody uses.
+                  Only tags on the company's list: naming a brand new tag is an
+                  owner's decision (0018), because three spellings of one tag is
+                  a filter menu nobody can use. */}
+              {!readOnly && onTag && allTags.length > 0 && (
+                <select
+                  className="adm-input"
+                  style={{ width: 168 }}
+                  value=""
+                  aria-label="Add a tag"
+                  onChange={(e) => {
+                    const tag = allTags.find((t) => t.id === e.target.value);
+                    if (tag) onTag(tag, "added");
+                  }}
+                >
+                  <option value="">+ add a tag…</option>
+                  {allTags
+                    .filter((t) => t.active !== false && !tags.some((x) => x.tag_id === t.id))
+                    .map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                </select>
+              )}
+              {!readOnly && onRefreshTags && (
+                <button
+                  className="btn btn-sm"
+                  title="Works out the website, size, score, quiet and claim tags from the record as it stands now. A tag you took off by hand is never put back."
+                  onClick={onRefreshTags}
+                >
+                  Update the automatic tags
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* ---- THE ROW LOCK, said out loud where somebody would look for a
+              button ----
+              Before this the drawer had no idea whose lead it was on, because a
+              rep could only ever open their own or an unclaimed one. The Floor
+              shows every lead in the company, so this is now the ordinary case
+              rather than the odd one. Aug 27 2026 */}
+          {readOnly && (
+            <div className="adm-sl-warn adm-sl-warn-flat" role="status">
+              <strong>Read-only — {heldByName} holds this one.</strong> You can see everything on
+              this record: the fields, the notes, the whole timeline and the scan. That is on purpose,
+              so two of us never land in the same inbox on the same day. Nothing here can change it —
+              only {heldByName} or an owner can.
+            </div>
+          )}
 
           <FirmWarning warning={warning} />
 
@@ -264,19 +393,21 @@ export default function SalesProfile({
               busy={busy} onClaim={doClaim} onRelease={doRelease}
               siblings={siblings} onLog={setLogOpen} onPatch={patch}
               onFlip={flipToClient} onWin={doWin} teamName={teamName}
+              onCloseDeal={doClose} readOnly={readOnly}
             />
           )}
 
           {tab === "timeline" && <TimelineTab activity={activity} proposals={proposals} after={after} lead={lead} teamName={teamName} />}
 
           {tab === "details" && (
-            <DetailsTab lead={lead} company={company} onPatch={patch} reload={reload} />
+            <DetailsTab lead={lead} company={company} onPatch={patch} reload={reload} readOnly={readOnly} />
           )}
 
           {tab === "proposals" && (
             <ProposalsTab
               proposals={proposals} lead={lead} member={member}
-              onAdd={() => setProposalOpen(true)} reload={load} onPatch={patch} onWin={doWin}
+              onAdd={() => setProposalOpen(true)} reload={load} onWin={doWin}
+              onCloseDeal={doClose} readOnly={readOnly}
             />
           )}
 
@@ -310,9 +441,68 @@ export default function SalesProfile({
 function WorkTab({
   lead, member, team, claim, cadence, text, gate, busy,
   onClaim, onRelease, siblings, onLog, onPatch, onFlip, onWin, teamName,
+  /* Both closes ask for a reason first — see doClose in the parent. Passed down
+   * rather than reached for, so this component still has no idea how a deal is
+   * recorded, which is what stops it growing a fourth way of doing it. */
+  onCloseDeal, readOnly = false,
 }) {
   const unclaimedSiblings = siblings.filter((s) => !s.owner_id && s.id !== lead.id);
   const mine = lead.owner_id === member.user_id;
+
+  /* ---- SOMEBODY ELSE'S LEAD: EVERY FACT, NO BUTTONS ----
+   *
+   * An early return rather than `disabled` on twenty controls. Two reasons, and
+   * the second is the one that matters: a screen of dead controls reads as a
+   * broken screen, and the next control somebody adds to this tab would arrive
+   * live on a locked record because nobody remembered to disable it. There is
+   * nothing to forget here.
+   *
+   * Everything a rep needs in order not to double up on the firm is on screen:
+   * where the claim stands, how many touches have been logged, what the person
+   * holding it says they are doing next. The notes and the whole timeline are on
+   * the next tab, and they are not hidden either. */
+  if (readOnly) {
+    return (
+      <>
+        <div className="adm-sl-next">
+          <div className="adm-sl-next-k">WHERE THIS STANDS</div>
+          <div className="adm-sl-next-t">{claim.state === "closed" ? "Nobody is chasing this any more" : "Somebody else is working this"}</div>
+          <div className="adm-sl-next-b">{claim.why}</div>
+        </div>
+
+        <div className="adm-sl-two">
+          <div className="adm-sl-fieldwrap">
+            <div className="label">Stage</div>
+            <div style={{ fontSize: 14 }}>{LEAD_STAGE_LABELS[lead.stage] || lead.stage}</div>
+            <div className="adm-sl-help">{LEAD_STAGE_HELP[lead.stage]}</div>
+          </div>
+          <div className="adm-sl-fieldwrap">
+            <div className="label">Whose is it</div>
+            <div style={{ fontSize: 14 }}>{teamName(lead.owner_id) || "nobody"}</div>
+            <div className="adm-sl-help">
+              Only they, or an owner, can change this record. You can read all of it.
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 18 }}>
+          <div className="label" style={{ marginBottom: 6 }}>What they say they do next</div>
+          <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
+            {lead.next_step || <span className="adm-sl-faint">Nothing written down.</span>}
+          </div>
+        </div>
+
+        <div className="adm-sl-actions" style={{ marginTop: 18 }}>
+          <div className="label" style={{ marginBottom: 8 }}>Touches logged</div>
+          <div style={{ fontSize: 13.5 }}>
+            {cadence.done} of {CADENCE.length} on the cadence.
+            {" "}Counted from real calls and emails on the timeline — nothing here is a number
+            somebody typed.
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -353,8 +543,14 @@ function WorkTab({
               The breakup email has gone. The rules say set the status and move on rather than keep poking.
             </div>
             <div className="adm-sl-next-a">
-              <button className="btn" onClick={() => onPatch({ stage: "lost", lost_reason: "No reply after the full cadence.", closed_at: new Date().toISOString() }, "Lost — no reply after all five touches.")}>
-                Mark lost — no reply
+              {/* THE HARD-CODED REASON IS GONE. This was the only button in the
+                  console that ever wrote `lost_reason`, and it wrote the same
+                  sentence every time — so the loss breakdown would have been one
+                  bar tall for ever. It opens the reason box like every other
+                  close now, with "No reply at all" one click away in the
+                  dropdown. Aug 27 2026 */}
+              <button className="btn" onClick={() => onCloseDeal("lost")}>
+                Mark it lost
               </button>
               <button className="btn" onClick={() => onPatch({ stage: "follow_up" }, "Kept for a later follow-up.")}>
                 Keep for later
@@ -432,8 +628,12 @@ function WorkTab({
           <select className="adm-input" value={lead.stage} onChange={(e) => {
             /* Won goes through the one Won path, so choosing it from this
                dropdown creates the client exactly like the green button does.
-               Before this it silently did not, and then blocked the button. */
+               Before this it silently did not, and then blocked the button.
+               Lost joined it on Aug 27 2026: both of them now open the reason box
+               first, because a close with no reason next to it is the thing this
+               whole feature exists to stop. */
             if (e.target.value === "won") { if (!busy) onWin(); return; }
+            if (e.target.value === "lost") { if (!busy) onCloseDeal("lost"); return; }
             onPatch(
               { stage: e.target.value, ...(["lost", "skip_90", "bad_contact"].includes(e.target.value) ? { closed_at: new Date().toISOString() } : { closed_at: null }) },
               `${LEAD_STAGE_LABELS[lead.stage]} → ${LEAD_STAGE_LABELS[e.target.value]}`
@@ -478,7 +678,7 @@ function WorkTab({
           wrote to yourself last Tuesday. */}
       <div style={{ marginTop: 18 }}>
         <div className="label" style={{ marginBottom: 6 }}>Next step</div>
-        <NextStep lead={lead} onPatch={onPatch} />
+        <NextStep lead={lead} onPatch={onPatch} readOnly={readOnly} />
       </div>
 
       {/* disabled while busy, like every other action in this panel. Without it
@@ -611,7 +811,7 @@ function TimelineTab({ activity, proposals, after, lead, teamName }) {
   );
 }
 
-function DetailsTab({ lead, company, onPatch, reload }) {
+function DetailsTab({ lead, company, onPatch, reload, readOnly = false }) {
   const [c, setC] = useState(company || null);
   const [cDirty, setCDirty] = useState(false);
   /* Keyed on the firm's ID, not the object.
@@ -645,14 +845,14 @@ function DetailsTab({ lead, company, onPatch, reload }) {
     <>
       <div className="label" style={{ marginBottom: 8 }}>The person</div>
       <div className="adm-sl-grid2">
-        <LeadField lead={lead} k="name" label="Name" onPatch={onPatch} />
-        <LeadField lead={lead} k="title" label="Job title" onPatch={onPatch} />
-        <LeadField lead={lead} k="email" label="Email" onPatch={onPatch} />
-        <LeadField lead={lead} k="phone" label="Phone" onPatch={onPatch} />
-        <LeadField lead={lead} k="seniority" label="Seniority" onPatch={onPatch} />
-        <LeadField lead={lead} k="department" label="Department" onPatch={onPatch} />
-        <LeadField lead={lead} k="linkedin_url" label="LinkedIn" onPatch={onPatch} />
-        <LeadField lead={lead} k="city" label="City" onPatch={onPatch} />
+        <LeadField lead={lead} k="name" label="Name" onPatch={onPatch} readOnly={readOnly} />
+        <LeadField lead={lead} k="title" label="Job title" onPatch={onPatch} readOnly={readOnly} />
+        <LeadField lead={lead} k="email" label="Email" onPatch={onPatch} readOnly={readOnly} />
+        <LeadField lead={lead} k="phone" label="Phone" onPatch={onPatch} readOnly={readOnly} />
+        <LeadField lead={lead} k="seniority" label="Seniority" onPatch={onPatch} readOnly={readOnly} />
+        <LeadField lead={lead} k="department" label="Department" onPatch={onPatch} readOnly={readOnly} />
+        <LeadField lead={lead} k="linkedin_url" label="LinkedIn" onPatch={onPatch} readOnly={readOnly} />
+        <LeadField lead={lead} k="city" label="City" onPatch={onPatch} readOnly={readOnly} />
       </div>
 
       <div className="label" style={{ margin: "22px 0 8px" }}>
@@ -669,13 +869,33 @@ function DetailsTab({ lead, company, onPatch, reload }) {
           <div className="adm-sl-grid2">
             {[["name", "Company"], ["domain", "Website"], ["phone", "Phone"], ["vertical", "Industry"],
               ["city", "City"], ["state", "State"], ["employees", "Employees"], ["annual_revenue", "Annual revenue"]].map(([k, label]) => (
+              /* The FIRM is shown read-only on a locked record too, and that is
+                 a slightly different judgement from the person's fields: a firm
+                 belongs to everybody, so an argument could be made for letting
+                 anybody correct its website. It is locked anyway, because the
+                 database locks it (0020 scopes the lead, and the firm's own
+                 policy is member-wide) and a form that saves where the row it
+                 was opened from does not is a screen disagreeing with itself.
+                 An owner or an admin can edit any firm from any record. */
               <Field key={k} label={label}>
-                <TextInput value={c[k] ?? ""} onChange={(e) => { setC({ ...c, [k]: e.target.value }); setCDirty(true); }} />
+                {readOnly ? (
+                  <div style={{ fontSize: 14, padding: "8px 0", minHeight: 20 }}>
+                    {c[k] || <span className="adm-sl-faint">Empty</span>}
+                  </div>
+                ) : (
+                  <TextInput value={c[k] ?? ""} onChange={(e) => { setC({ ...c, [k]: e.target.value }); setCDirty(true); }} />
+                )}
               </Field>
             ))}
           </div>
           <Field label="Notes about the firm">
-            <TextArea value={c.notes ?? ""} onChange={(e) => { setC({ ...c, notes: e.target.value }); setCDirty(true); }} />
+            {readOnly ? (
+              <div style={{ fontSize: 13.5, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                {c.notes || <span className="adm-sl-faint">Empty</span>}
+              </div>
+            ) : (
+              <TextArea value={c.notes ?? ""} onChange={(e) => { setC({ ...c, notes: e.target.value }); setCDirty(true); }} />
+            )}
           </Field>
           {c.site_score !== null && c.site_score !== undefined && (
             <div className="adm-sl-scored">
@@ -684,7 +904,7 @@ function DetailsTab({ lead, company, onPatch, reload }) {
               {c.site_score_note ? ` ${c.site_score_note}` : ""}
             </div>
           )}
-          {cDirty && <button className="btn btn-accent" onClick={saveCompany}>Save the firm</button>}
+          {cDirty && !readOnly && <button className="btn btn-accent" onClick={saveCompany}>Save the firm</button>}
         </>
       )}
 
@@ -699,7 +919,7 @@ function DetailsTab({ lead, company, onPatch, reload }) {
   );
 }
 
-function LeadField({ lead, k, label, onPatch }) {
+function LeadField({ lead, k, label, onPatch, readOnly = false }) {
   const [v, setV] = useState(lead[k] ?? "");
   const [dirty, setDirty] = useState(false);
   /* Same reason as DetailsTab: `lead` is a new object on every refresh, so
@@ -709,6 +929,18 @@ function LeadField({ lead, k, label, onPatch }) {
     setV((cur) => (dirty ? cur : lead[k] ?? ""));
   }, [lead.id, lead[k], k]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setDirty(false); }, [lead.id, k]);
+  /* A LOCKED RECORD SHOWS THE VALUE, NOT A BOX. An input somebody can type into
+   * and cannot save is worse than plain text: they type, they tab away, and
+   * nothing happens with no explanation. Aug 27 2026 */
+  if (readOnly) {
+    return (
+      <Field label={label}>
+        <div style={{ fontSize: 14, padding: "8px 0", minHeight: 20 }}>
+          {lead[k] || <span className="adm-sl-faint">Empty</span>}
+        </div>
+      </Field>
+    );
+  }
   return (
     <Field label={label}>
       <TextInput
@@ -732,12 +964,12 @@ const PROPOSAL_STATUS = [
   ["won", "Won"], ["lost", "Lost"], ["withdrawn", "Withdrawn"],
 ];
 
-function ProposalsTab({ proposals, lead, member, onAdd, reload, onPatch, onWin }) {
+function ProposalsTab({ proposals, lead, member, onAdd, reload, onWin, onCloseDeal, readOnly = false }) {
   return (
     <>
       <div className="adm-sl-rowbetween">
         <div className="label">Proposals</div>
-        <button className="btn btn-accent" onClick={onAdd}>+ New proposal</button>
+        {!readOnly && <button className="btn btn-accent" onClick={onAdd}>+ New proposal</button>}
       </div>
 
       {!proposals.length ? (
@@ -759,7 +991,7 @@ function ProposalsTab({ proposals, lead, member, onAdd, reload, onPatch, onWin }
             <div className="adm-sl-prop-amt">{money(p.amount_cents)}</div>
           </div>
           <div className="adm-sl-prop-foot">
-            <select className="adm-input" style={{ width: 170 }} value={p.status} onChange={async (e) => {
+            <select className="adm-input" style={{ width: 170 }} value={p.status} disabled={readOnly} onChange={async (e) => {
               const status = e.target.value;
               const now = new Date().toISOString();
               const res = await upsertProposal({
@@ -772,19 +1004,24 @@ function ProposalsTab({ proposals, lead, member, onAdd, reload, onPatch, onWin }
               await addLeadActivity({ leadId: lead.id, actor: member.user_id, type: "proposal", body: `Proposal "${p.title}" → ${status}.` });
               /* Same one path. This used to write stage/became_customer by hand
                  and make no client — and then block the button that would. */
-              if (status === "won") { await onWin(); }
-              if (status === "lost") await onPatch({ stage: "lost", closed_at: now }, "Proposal lost.");
+              /* Same one path for both. Setting a proposal to Won or Lost is a
+                 close, so it asks for the reason exactly like the other three
+                 buttons do — and the proposal's own status is already saved above
+                 whatever the person then does with the box, which is right: the
+                 proposal really was sent and really was decided. */
+              if (status === "won") { onWin(); }
+              if (status === "lost") { onCloseDeal("lost"); }
               await reload();
             }}>
               {PROPOSAL_STATUS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
             {p.doc_url && <a className="adm-sl-link" href={p.doc_url} target="_blank" rel="noopener noreferrer">Open the document</a>}
-            <button className="btn btn-sm" onClick={async () => {
+            {!readOnly && <button className="btn btn-sm" onClick={async () => {
               const res = await deleteProposal(p.id);
               if (!res.ok) { toast.error("Could not delete", res.error); return; }
               toast.info("Proposal deleted");
               await reload();
-            }}>Delete</button>
+            }}>Delete</button>}
           </div>
           {p.lost_reason && <div className="adm-sl-prop-lost">Lost because: {p.lost_reason}</div>}
         </div>
@@ -852,7 +1089,11 @@ function PlaybookTab({ lead, company, cadence }) {
 /* MODALS                                                              */
 /* ================================================================== */
 
-function LogModal({ kind, lead, member, text, onClose, reload }) {
+/* EXPORTED, so the Floor's row can log a touch without opening the record.
+ * A second copy of this modal would be a second copy of the one-text rule, and
+ * that rule is the reason claimTextSend lives in the database rather than in a
+ * browser. Aug 27 2026 */
+export function LogModal({ kind, lead, member, text, onClose, reload }) {
   const [outcome, setOutcome] = useState(kind === "call" ? "talked" : "talked");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);

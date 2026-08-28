@@ -20,17 +20,16 @@ import { getAdminSupabase, isServerConfigured } from "../lib/supabase-server.js"
 import { exchangeCodeForTokens, hasGoogleClientCredentials, emailFromIdToken } from "../lib/google-oauth.js";
 import { encryptSecret, isVaultConfigured } from "../lib/vault-crypto.js";
 import { PROVIDER_LABELS, isGoogleProvider } from "../lib/connectors.js";
+import { originFromRequest, secureFlag } from "../lib/req-origin.js";
 
 function callbackUrlFromRequest(req) {
   if (process.env.CONNECT_REDIRECT_URI) return process.env.CONNECT_REDIRECT_URI;
-  const proto = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const { proto, host } = originFromRequest(req);
   return `${proto}://${host}/api/connect-callback`;
 }
 
 function backTo(req, params) {
-  const proto = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const { proto, host } = originFromRequest(req);
   const qs = new URLSearchParams(params).toString();
   // Straight onto the Clients page, with the client already open.
   return `${proto}://${host}/#/dashboard/clients${qs ? `?${qs}` : ""}`;
@@ -49,7 +48,7 @@ export default async function handler(req, res) {
 
   // Cleared no matter how this ends — a one-time cookie that survives its one
   // use is not one-time.
-  res.setHeader("Set-Cookie", "ais_connect_oauth=; HttpOnly; Secure; SameSite=Lax; Path=/api/connect-callback; Max-Age=0");
+  res.setHeader("Set-Cookie", `ais_connect_oauth=; HttpOnly;${secureFlag(req)} SameSite=Lax; Path=/api/connect-callback; Max-Age=0`);
 
   /* A one-time state row is deleted on EVERY way out, not only the ones that
    * got far enough to have loaded it. An abandoned or refused sign-in used to

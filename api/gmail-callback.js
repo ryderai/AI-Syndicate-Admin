@@ -3,17 +3,16 @@
 
 import { getAdminSupabase, isServerConfigured } from "../lib/supabase-server.js";
 import { exchangeCodeForTokens, hasGoogleClientCredentials, emailFromIdToken } from "../lib/google-oauth.js";
+import { originFromRequest, secureFlag } from "../lib/req-origin.js";
 
 function callbackUrlFromRequest(req) {
   if (process.env.GMAIL_REDIRECT_URI) return process.env.GMAIL_REDIRECT_URI;
-  const proto = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const { proto, host } = originFromRequest(req);
   return `${proto}://${host}/api/gmail-callback`;
 }
 
 function inboxUrl(req, params) {
-  const proto = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const { proto, host } = originFromRequest(req);
   const qs = new URLSearchParams(params).toString();
   // Land ON the Inbox page. Since Aug 19 2026 the page id is part of the
   // address, and only the Inbox reads ?gmail= — a bare "#/dashboard" now
@@ -40,7 +39,7 @@ export default async function handler(req, res) {
   // the cookie set by gmail-auth-start has to match the state param.
   const cookies = String(req.headers.cookie || "");
   const cookieState = /(?:^|;\s*)ais_gmail_oauth=([^;]+)/.exec(cookies)?.[1];
-  res.setHeader("Set-Cookie", "ais_gmail_oauth=; HttpOnly; Secure; SameSite=Lax; Path=/api/gmail-callback; Max-Age=0");
+  res.setHeader("Set-Cookie", `ais_gmail_oauth=; HttpOnly;${secureFlag(req)} SameSite=Lax; Path=/api/gmail-callback; Max-Age=0`);
   if (!cookieState || cookieState !== state) {
     return res.redirect(302, inboxUrl(req, { gmail: "error", reason: "browser_mismatch" }));
   }

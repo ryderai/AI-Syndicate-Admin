@@ -38,6 +38,20 @@ import {
  * is the thing that refuses the call in preview mode. */
 import { apiFetch } from "./adminApi.js";
 
+/* THE FLOOR (Aug 27 2026). Tags are an event log and the automatic rules that
+ * produce them are pure, so both live outside this file: the rules next to
+ * claimState in lib/sales-rules.js, the replay in lib/lead-tags.js. The two
+ * report readers come from the sheet module because that is where "what counts
+ * as a score" is already decided, and deciding it twice is deciding it wrong
+ * once. */
+import {
+  TAG, TAG_SLUGS, checkCloseReason, checkPersonalRule, reasonLabel,
+} from "../../lib/sales-rules.js";
+import {
+  tagIndex, eventsByLead, currentTags, currentSlugs, tagHistory, autoTagPlan,
+} from "../../lib/lead-tags.js";
+import { newestReportByCompany, readCompanyReport } from "./salesSheet.js";
+
 /* ONE STAGE LADDER, replacing the outreach sheet's two overlapping columns.
  *
  * The sheet has "Contacted?" (Yes - Email / No) AND "Sales Cycle Status"
@@ -167,12 +181,12 @@ const previewStore = {
    * l7  a firm scoring 93 — Skip - 90+, and it must stay out of every queue
    */
   leads: [
-    { id: "l1", name: "Sarah Chen", company: "Bright Coast Medspa", company_id: "co3", list_id: "li3", title: "Owner", seniority: "Owner", department: null, linkedin_url: null, domain: "brightcoast-sample.com", email: "sarah@sample.com", phone: "(555) 201-8890", city: "Destin", state: "FL", vertical: "medspa", source: "platform", stage: "proposal", owner_id: "preview-user", score: 86, notes: "Booked for Tuesday 2pm. Wants the audit first.", next_step: "Send the audit before the 2pm call", became_customer: false, created_at: daysAgo(9), last_activity_at: daysAgo(1), claimed_at: daysAgo(9), first_contact_at: daysAgo(8), claim_contacted_at: daysAgo(8), last_touch_at: daysAgo(1), cadence_started_at: daysAgo(9), cadence_paused: false, email_opened_at: daysAgo(7), texts_sent: 0, last_text_at: null, imported_owner_name: null, next_follow_up_at: daysAgo(0), follow_up_note: "Send the audit first." },
-    { id: "l2", name: "Tom Rivera", company: "Westpoint Auto Group", company_id: "co2", list_id: "li2", title: "Internet Director", seniority: "Director", department: "Marketing", linkedin_url: null, domain: "westpointauto-sample.com", email: "tom@sample.com", phone: "(555) 318-2244", city: "San Francisco", state: "California", vertical: "car dealership", source: "sheet", stage: "contacted", owner_id: "preview-user", score: 71, notes: "Left voicemail. Callback Friday.", next_step: "Try the mobile", became_customer: false, created_at: daysAgo(30), last_activity_at: daysAgo(16), claimed_at: daysAgo(30), first_contact_at: daysAgo(28), claim_contacted_at: daysAgo(28), last_touch_at: daysAgo(16), cadence_started_at: daysAgo(30), cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: "Brandon R" },
-    { id: "l3", name: "Priya Patel", company: "Harborline Realty Group", company_id: "co1", list_id: "li1", title: "Licensed Realtor", seniority: null, department: null, linkedin_url: null, domain: "harborline-sample.com", email: "priya@sample.com", phone: null, city: "Los Angeles", state: "California", vertical: "realtor", source: "sheet", stage: "new", owner_id: "preview-user", score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(9), last_activity_at: null, claimed_at: daysAgo(9), first_contact_at: null, claim_contacted_at: null, last_touch_at: null, cadence_started_at: daysAgo(9), cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: "Larry Pike" },
-    { id: "l4", name: "Greg Olson", company: "Olson Law PLLC", company_id: null, list_id: null, title: "Managing Partner", seniority: "Owner", department: null, linkedin_url: null, domain: "olsonlaw-sample.com", email: "greg@sample.com", phone: "(555) 442-9012", city: "Tampa", state: "FL", vertical: "lawyer", source: "manual", stage: "won", owner_id: "preview-user", score: 88, notes: "Signed Radar Pro. Handed to onboarding.", next_step: null, became_customer: true, created_at: daysAgo(30), last_activity_at: daysAgo(12), claimed_at: daysAgo(30), first_contact_at: daysAgo(29), claim_contacted_at: daysAgo(29), last_touch_at: daysAgo(12), cadence_started_at: daysAgo(30), cadence_paused: false, email_opened_at: daysAgo(28), texts_sent: 1, last_text_at: daysAgo(27), imported_owner_name: null, closed_at: daysAgo(12) },
+    { id: "l1", name: "Sarah Chen", company: "Bright Coast Medspa", company_id: "co3", list_id: "li3", title: "Owner", seniority: "Owner", department: null, linkedin_url: null, domain: "brightcoast-sample.com", email: "sarah@sample.com", phone: "(555) 201-8890", city: "Destin", state: "FL", vertical: "medspa", source: "platform", stage: "proposal", owner_id: "preview-user", score: 86, notes: "Booked for Tuesday 2pm. Wants the audit first.", next_step: "Send the audit before the 2pm call", became_customer: false, created_at: daysAgo(9), last_activity_at: daysAgo(1), claimed_at: daysAgo(9), first_contact_at: daysAgo(8), claim_contacted_at: daysAgo(8), last_touch_at: daysAgo(1), cadence_started_at: daysAgo(9), cadence_paused: false, email_opened_at: daysAgo(7), texts_sent: 0, last_text_at: null, imported_owner_name: null, next_follow_up_at: daysAgo(0), follow_up_note: "Send the audit first." , first_email_at: daysAgo(8), first_reply_at: daysAgo(6), bounced_at: null },
+    { id: "l2", name: "Tom Rivera", company: "Westpoint Auto Group", company_id: "co2", list_id: "li2", title: "Internet Director", seniority: "Director", department: "Marketing", linkedin_url: null, domain: "westpointauto-sample.com", email: "tom@sample.com", phone: "(555) 318-2244", city: "San Francisco", state: "California", vertical: "car dealership", source: "sheet", stage: "contacted", owner_id: "preview-user", score: 71, notes: "Left voicemail. Callback Friday.", next_step: "Try the mobile", became_customer: false, created_at: daysAgo(30), last_activity_at: daysAgo(16), claimed_at: daysAgo(30), first_contact_at: daysAgo(28), claim_contacted_at: daysAgo(28), last_touch_at: daysAgo(16), cadence_started_at: daysAgo(30), cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: "Brandon R" , first_email_at: daysAgo(28), first_reply_at: null, bounced_at: null },
+    { id: "l3", name: "Priya Patel", company: "Harborline Realty Group", company_id: "co1", list_id: "li1", title: "Licensed Realtor", seniority: null, department: null, linkedin_url: null, domain: "harborline-sample.com", email: "priya@sample.com", phone: null, city: "Los Angeles", state: "California", vertical: "realtor", source: "sheet", stage: "new", owner_id: "preview-user", score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(9), last_activity_at: null, claimed_at: daysAgo(9), first_contact_at: null, claim_contacted_at: null, last_touch_at: null, cadence_started_at: daysAgo(9), cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: "Larry Pike" , first_email_at: daysAgo(8), first_reply_at: null, bounced_at: daysAgo(7) },
+    { id: "l4", name: "Greg Olson", company: "Olson Law PLLC", company_id: null, list_id: null, title: "Managing Partner", seniority: "Owner", department: null, linkedin_url: null, domain: "olsonlaw-sample.com", email: "greg@sample.com", phone: "(555) 442-9012", city: "Tampa", state: "FL", vertical: "lawyer", source: "manual", stage: "won", owner_id: "preview-user", score: 88, notes: "Signed Radar Pro. Handed to onboarding.", next_step: null, became_customer: true, created_at: daysAgo(30), last_activity_at: daysAgo(12), claimed_at: daysAgo(30), first_contact_at: daysAgo(29), claim_contacted_at: daysAgo(29), last_touch_at: daysAgo(12), cadence_started_at: daysAgo(30), cadence_paused: false, email_opened_at: daysAgo(28), texts_sent: 1, last_text_at: daysAgo(27), imported_owner_name: null, closed_at: daysAgo(12) , first_email_at: daysAgo(29), first_reply_at: daysAgo(27), bounced_at: null, won_reason: "scared_by_score", won_reason_note: "Showed her the 42 for AI search next to her competitor at 78. She asked what it would cost the same afternoon." },
     { id: "l5", name: "Marcus Webb", company: "Harborline Realty Group", company_id: "co1", list_id: "li1", title: "Business Development Manager", seniority: "Manager", department: "Sales", linkedin_url: null, domain: "harborline-sample.com", email: "marcus@sample.com", phone: "(555) 310-5460", city: "Los Angeles", state: "California", vertical: "realtor", source: "sheet", stage: "new", owner_id: null, score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(9), last_activity_at: null, claimed_at: null, first_contact_at: null, claim_contacted_at: null, last_touch_at: null, cadence_started_at: null, cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: null },
-    { id: "l6", name: "Dana Whitfield", company: "Harborline Realty Group", company_id: "co1", list_id: "li1", title: "Internet Sales Director", seniority: "Director", department: "Sales", linkedin_url: null, domain: "harborline-sample.com", email: "dana@sample.com", phone: "(555) 310-5461", city: "Los Angeles", state: "California", vertical: "realtor", source: "sheet", stage: "contacted", owner_id: "preview-rep", score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(9), last_activity_at: daysAgo(2), claimed_at: daysAgo(8), first_contact_at: daysAgo(7), claim_contacted_at: daysAgo(7), last_touch_at: daysAgo(2), cadence_started_at: daysAgo(8), cadence_paused: false, email_opened_at: daysAgo(6), texts_sent: 0, last_text_at: null, imported_owner_name: "Hunter Grant" },
+    { id: "l6", name: "Dana Whitfield", company: "Harborline Realty Group", company_id: "co1", list_id: "li1", title: "Internet Sales Director", seniority: "Director", department: "Sales", linkedin_url: null, domain: "harborline-sample.com", email: "dana@sample.com", phone: "(555) 310-5461", city: "Los Angeles", state: "California", vertical: "realtor", source: "sheet", stage: "contacted", owner_id: "preview-rep", score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(9), last_activity_at: daysAgo(2), claimed_at: daysAgo(8), first_contact_at: daysAgo(7), claim_contacted_at: daysAgo(7), last_touch_at: daysAgo(2), cadence_started_at: daysAgo(8), cadence_paused: false, email_opened_at: daysAgo(6), texts_sent: 0, last_text_at: null, imported_owner_name: "Hunter Grant" , first_email_at: daysAgo(7), first_reply_at: daysAgo(2), bounced_at: null },
     { id: "l7", name: "Elena Ruiz", company: "Bright Coast Medspa", company_id: "co3", list_id: "li3", title: "Marketing Director", seniority: "Director", department: "Marketing", linkedin_url: null, domain: "brightcoast-sample.com", email: "elena@sample.com", phone: "(555) 201-8891", city: "Destin", state: "FL", vertical: "medspa", source: "sheet", stage: "skip_90", owner_id: null, score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(4), last_activity_at: null, claimed_at: null, first_contact_at: null, claim_contacted_at: null, last_touch_at: null, cadence_started_at: null, cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: null },
   ],
   notes: [
@@ -360,8 +374,102 @@ const previewStore = {
   proposals: [
     { id: "pr1", lead_id: "l1", company_id: "co3", title: "Radar Pro — 6 month GEO package", package: "Radar Pro", amount_cents: 450000, currency: "usd", term: "monthly", status: "sent", sent_at: daysAgo(2), viewed_at: daysAgo(1), decided_at: null, lost_reason: null, doc_url: null, notes: null, created_at: daysAgo(2) },
   ],
-};
 
+  /* ---- TAGS (Aug 27 2026) ------------------------------------------
+   * THE VOCABULARY, mirroring 0018_lead_tags.sql's seed row for row.
+   *
+   * This IS a second copy of the tag names, and a second copy of anything is a
+   * copy that eventually stops matching — so it is cross-checked rather than
+   * trusted: tests/lead-tags reads the INSERT out of 0018_lead_tags.sql and
+   * asserts every slug, label, colour, group and sort below is identical. The
+   * same trick tests/sales already uses on the stage constraint. Copying it was
+   * the lesser evil: deriving the labels from the slugs would put "no-website"
+   * on a chip where the real console says "No website", so preview mode would
+   * stop being a fair rehearsal of the thing it exists to rehearse.
+   *
+   * The ids are `tg-<slug>` on purpose. In the real database they are uuids, and
+   * nothing anywhere may assume the shape of one — but a readable id makes a
+   * failing preview assertion legible instead of a wall of hex. */
+  leadTags: [
+    { id: "tg-no-website", slug: "no-website", label: "No website", color: "red", tag_group: "website", sort: 10, active: true },
+    { id: "tg-has-website", slug: "has-website", label: "Has a website", color: "gray", tag_group: "website", sort: 11, active: true },
+    { id: "tg-size-solo", slug: "size-solo", label: "Solo (1)", color: "gray", tag_group: "size", sort: 20, active: true },
+    { id: "tg-size-small", slug: "size-small", label: "Small (2-10)", color: "blue", tag_group: "size", sort: 21, active: true },
+    { id: "tg-size-mid", slug: "size-mid", label: "Mid (11-50)", color: "purple", tag_group: "size", sort: 22, active: true },
+    { id: "tg-size-large", slug: "size-large", label: "Large (51+)", color: "brown", tag_group: "size", sort: 23, active: true },
+    { id: "tg-never-touched", slug: "never-touched", label: "Never touched", color: "yellow", tag_group: "source", sort: 30, active: true },
+    { id: "tg-imported", slug: "imported", label: "Imported", color: "gray", tag_group: "source", sort: 31, active: true },
+    { id: "tg-unscanned", slug: "unscanned", label: "Not scanned yet", color: "yellow", tag_group: "score", sort: 40, active: true },
+    { id: "tg-scored-under-60", slug: "scored-under-60", label: "Scored under 60", color: "green", tag_group: "score", sort: 41, active: true },
+    { id: "tg-scored-60s", slug: "scored-60s", label: "Scored 60-79", color: "blue", tag_group: "score", sort: 42, active: true },
+    { id: "tg-scored-80s", slug: "scored-80s", label: "Scored 80-89", color: "orange", tag_group: "score", sort: 43, active: true },
+    { id: "tg-scored-90-plus", slug: "scored-90-plus", label: "Scored 90+", color: "gray", tag_group: "score", sort: 44, active: true },
+    { id: "tg-hot", slug: "hot", label: "Replied", color: "green", tag_group: "state", sort: 50, active: true },
+    { id: "tg-quiet", slug: "quiet", label: "Gone quiet (7d)", color: "yellow", tag_group: "state", sort: 51, active: true },
+    { id: "tg-cold", slug: "cold", label: "Cold (14d)", color: "red", tag_group: "state", sort: 52, active: true },
+    { id: "tg-claim-expiring", slug: "claim-expiring", label: "Claim expiring", color: "orange", tag_group: "state", sort: 53, active: true },
+    { id: "tg-bounced", slug: "bounced", label: "Bad address", color: "red", tag_group: "state", sort: 54, active: true },
+    { id: "tg-skip-90", slug: "skip-90", label: "Not a prospect", color: "gray", tag_group: "state", sort: 55, active: true },
+    { id: "tg-won", slug: "won", label: "Won", color: "green", tag_group: "state", sort: 56, active: true },
+    { id: "tg-lost", slug: "lost", label: "Lost", color: "red", tag_group: "state", sort: 57, active: true },
+  ],
+
+  /* THE EVENTS. Append-only here too — the preview branch of setLeadTag pushes
+   * a row and never edits one, because a preview looser than the query
+   * underneath it is a trap this repo has been bitten by twice.
+   *
+   * Deliberately SPARSE. Most of what a lead carries is worked out by the
+   * automatic rules on load, so seeding every tag here would hide the thing that
+   * needs rehearsing. What IS seeded is the two cases the rules cannot produce
+   * on their own: the import's own dated line, and a tag a person took off by
+   * hand (which the rules must then leave alone). */
+  leadTagEvents: [
+    { id: "te1", lead_id: "l6", tag_id: "tg-imported", action: "added", at: daysAgo(9), by: null, source: "import", why: "On import, Luxury Agents tab." },
+    { id: "te2", lead_id: "l6", tag_id: "tg-quiet", action: "added", at: daysAgo(4), by: null, source: "auto", why: "7 days with no update." },
+    /* THE ONE THAT PROVES THE RULE. A rep took `quiet` off by hand, so the
+     * automatic rule must never put it back — and it does not, because
+     * removedByHand() in lib/lead-tags.js reads the newest event for the tag
+     * rather than a flag somebody has to remember to set. */
+    { id: "te3", lead_id: "l6", tag_id: "tg-quiet", action: "removed", at: daysAgo(2), by: "preview-rep", source: "person", why: "removed by hand — she replied" },
+    { id: "te4", lead_id: "l1", tag_id: "tg-imported", action: "added", at: daysAgo(9), by: null, source: "import", why: "On import, Medspas tab." },
+  ],
+
+  /* ---- WHAT A SCAN FOUND, ON THE FIRM (Aug 27 2026) ---------------
+   * One row per scan, never overwritten — see 0019_reasons_and_company_reports.sql.
+   *
+   * TWO ROWS FOR THE SAME FIRM ON PURPOSE, dated a month apart. "Was 61 in July
+   * and is still 61 now" is itself a sales line, and it is the case a single-row
+   * fixture can never exercise: the newest one has to win, and the older one has
+   * to still be readable.
+   *
+   * co2 (Westpoint) has NO row at all and co3 has one with a null AI Access
+   * score — the two states the screen must not print as a zero. */
+  companyReports: [
+    { id: "cr1", company_id: "co1", lead_id: "l3", kind: "baseline", ai_access_score: 42, seo_score: 61, prompt_sim_hits: 2, prompt_sim_total: 10, findings: [{ title: "No facts file for AI", detail: "There is no llms.txt, so an AI answering a question about this firm has nothing to quote about its prices, hours or services.", severity: "high" }, { title: "Seven pages share one title", detail: "Search cannot tell the pages apart, so none of them ranks for anything specific.", severity: "high" }, { title: "The name, address and phone disagree", detail: "The website and the Google profile do not match, so neither can be trusted as the record.", severity: "medium" }], raw: { note: "sample" }, pitch: null, pitch_gate_reason: "No ANTHROPIC_API_KEY is set in preview mode, so nothing was written.", domain: "harborline-sample.com", measured_at: daysAgo(35), measured_by: "preview-user", created_at: daysAgo(35) },
+    { id: "cr2", company_id: "co1", lead_id: "l3", kind: "rescan", ai_access_score: 44, seo_score: 61, prompt_sim_hits: 2, prompt_sim_total: 10, findings: [{ title: "No facts file for AI", detail: "Still nothing for an AI to quote — this has not moved since the first scan.", severity: "high" }, { title: "Seven pages share one title", detail: "Unchanged since the first scan.", severity: "high" }], raw: { note: "sample" }, pitch: null, pitch_gate_reason: "No ANTHROPIC_API_KEY is set in preview mode, so nothing was written.", domain: "harborline-sample.com", measured_at: daysAgo(2), measured_by: "preview-user", created_at: daysAgo(2) },
+    { id: "cr3", company_id: "co3", lead_id: "l1", kind: "baseline", ai_access_score: null, seo_score: 88, prompt_sim_hits: null, prompt_sim_total: null, findings: [{ title: "The AI-access half of the scan did not come back", detail: "Only the search half returned. The number that is missing is missing, not zero.", severity: "low" }], raw: { note: "sample, half a response" }, pitch: null, pitch_gate_reason: "No ANTHROPIC_API_KEY is set in preview mode, so nothing was written.", domain: "brightcoast-sample.com", measured_at: daysAgo(1), measured_by: "preview-user", created_at: daysAgo(1) },
+  ],
+
+  /* ---- A REP'S OWN AI RULES (Aug 27 2026) -------------------------
+   * One row per rule, `user_id` on every one, and NOT A SINGLE NUMBER anywhere
+   * in a body — see checkPersonalRule in lib/sales-rules.js for why a number in
+   * here would break the honesty gate rather than just look untidy. */
+  userBrain: [
+    { id: "ub1", user_id: "preview-rep", kind: "voice", setting_key: "tone", title: "Tone", body: "Plain and direct", enabled: true, created_at: daysAgo(6), updated_at: daysAgo(6) },
+    { id: "ub2", user_id: "preview-rep", kind: "voice", setting_key: "length", title: "Length", body: "Short — a few sentences at most", enabled: true, created_at: daysAgo(6), updated_at: daysAgo(6) },
+    { id: "ub3", user_id: "preview-rep", kind: "voice", setting_key: "subject", title: "Subject lines", body: "Lowercase, no punctuation", enabled: true, created_at: daysAgo(6), updated_at: daysAgo(6) },
+    { id: "ub4", user_id: "preview-rep", kind: "signature", setting_key: "signoff", title: "Sign-off", body: "— Sample Rep, AI Syndicate", enabled: true, created_at: daysAgo(6), updated_at: daysAgo(6) },
+    { id: "ub5", user_id: "preview-rep", kind: "voice", setting_key: "never_say", title: "Never say", body: "synergy, leverage, circle back, touch base", enabled: true, created_at: daysAgo(6), updated_at: daysAgo(6) },
+    { id: "ub6", user_id: "preview-rep", kind: "rule", setting_key: null, title: null, body: "Open with something about their business, never about us.", enabled: true, created_at: daysAgo(5), updated_at: daysAgo(5) },
+    { id: "ub7", user_id: "preview-rep", kind: "rule", setting_key: null, title: null, body: "One question per email, at the end.", enabled: true, created_at: daysAgo(5), updated_at: daysAgo(5) },
+    { id: "ub8", user_id: "preview-rep", kind: "rule", setting_key: null, title: null, body: "Never send a price in the first email.", enabled: true, created_at: daysAgo(5), updated_at: daysAgo(5) },
+    { id: "ub9", user_id: "preview-rep", kind: "rule", setting_key: null, title: null, body: "If they have no website, lead with the free mockup.", enabled: true, created_at: daysAgo(4), updated_at: daysAgo(4) },
+    /* One belonging to somebody ELSE, so the preview can prove the split: a rep
+     * must see only their own, and an owner must see everybody's. Without a
+     * second person's row, both screens look identical and neither is tested. */
+    { id: "ub10", user_id: "preview-user", kind: "rule", setting_key: null, title: null, body: "Always name the firm in the first line.", enabled: true, created_at: daysAgo(8), updated_at: daysAgo(8) },
+  ],
+};
 /* Sample secrets. In-memory, plain text, preview mode only. There is no key in
  * the browser and there never will be — see the banner note above. */
 /* Which VALUES somebody actually typed in this tab, as opposed to the made-up
@@ -2203,11 +2311,25 @@ export async function listProposals(leadId = null) {
     const rows = leadId ? previewStore.proposals.filter((p) => p.lead_id === leadId) : [...previewStore.proposals];
     return { rows, sample: true };
   }
-  let q = getSupabase().from("admin_proposals").select("*").order("created_at", { ascending: false }).limit(500);
+  /* +1, so the extra row is the only thing that can tell "exactly 500" apart
+   * from "500 and there are more" — the same trick listLeads uses. Every other
+   * capped read in this file says when it hit its cap and this one did not, so a
+   * rep with more than 500 proposals read part of their pipeline as all of it.
+   * Found by an adversarial review, Aug 27 2026. */
+  const CAP = 500;
+  let q = getSupabase().from("admin_proposals").select("*").order("created_at", { ascending: false }).limit(CAP + 1);
   if (leadId) q = q.eq("lead_id", leadId);
   const { data, error } = await q;
   if (error) return { rows: [], error: error.message, sample: false };
-  return { rows: data || [], sample: false };
+  const rows = data || [];
+  if (rows.length > CAP) {
+    return {
+      rows: rows.slice(0, CAP),
+      sample: false,
+      truncated: `Only the ${CAP} newest proposals were loaded, so the proposal counts and totals below may be low.`,
+    };
+  }
+  return { rows, sample: false };
 }
 
 export async function upsertProposal(patch) {
@@ -2388,7 +2510,13 @@ export async function claimTextSend(leadId, max = 1) {
     const i = previewStore.leads.findIndex((l) => l.id === leadId);
     if (i < 0) return { ok: false, error: "No such lead." };
     const l = previewStore.leads[i];
-    if (!l.email_opened_at) return { ok: false, won: false, error: "They have not opened an email yet." };
+    /* THE SAME GATE THE DATABASE FUNCTION USES, and it moved. 0021 repointed
+     * admin_lead_claim_text at `first_reply_at` because nothing has ever written
+     * `email_opened_at`; this preview branch kept the old column, so preview mode
+     * refused a text the live path would have allowed. A preview looser OR
+     * tighter than the query underneath it is the same trap. Found by the third
+     * review, Aug 27 2026. */
+    if (!l.first_reply_at) return { ok: false, won: false, error: "They have not written back yet." };
     if (Number(l.texts_sent || 0) >= max) return { ok: false, won: false, error: "A text has already gone out." };
     previewStore.leads[i] = { ...l, texts_sent: Number(l.texts_sent || 0) + 1, last_text_at: new Date().toISOString() };
     return { ok: true, won: true, sample: true };
@@ -2444,10 +2572,34 @@ export async function getSalesBoard() {
     sample: Boolean(leads.sample || companies.sample),
     /* Errors are carried, not swallowed. A page that renders an empty pipeline
      * because one fetch failed looks exactly like a page with no leads. */
-    errors: [leads.error, companies.error, lists.error, activity.error].filter(Boolean),
+    /* EVERY READ'S ERROR, not four of the seven. `proposals`, `team` and
+     * `sources` were dropped on the floor, so a failed proposals read showed a
+     * rep "Proposals out: 0" with no warning anywhere on the page while five of
+     * their proposals sat in the table. A wrong number with nothing to contradict
+     * it is the worst shape this can take. Found by an adversarial review,
+     * Aug 27 2026. */
+    errors: [
+      leads.error, companies.error, lists.error, activity.error,
+      proposals.error, team.error, sources.error,
+    ].filter(Boolean),
+    /* WHICH READS FAILED, BY NAME, so a caller can pass `null` and mean it.
+     * Every reader in this file turns a failure into `{ rows: [], error }`, which
+     * means "nothing came back" and "nothing is there" arrive as the same value —
+     * so lib/outreach.js's whole null-is-not-zero contract was unreachable on the
+     * live path and a broken read printed confident zeros. This is what makes it
+     * reachable. */
+    failed: {
+      leads: Boolean(leads.error),
+      companies: Boolean(companies.error),
+      lists: Boolean(lists.error),
+      activity: Boolean(activity.error),
+      proposals: Boolean(proposals.error),
+      team: Boolean(team.error),
+      sources: Boolean(sources.error),
+    },
     /* Same rule for a cap as for an error: a page that quietly shows half the
      * pipeline is worse than one that says it is showing half. */
-    truncated: [leads.truncated, activity.truncated].filter(Boolean),
+    truncated: [leads.truncated, activity.truncated, proposals.truncated].filter(Boolean),
   };
 }
 
@@ -3380,3 +3532,656 @@ export async function askRepReport({ instruction, userId } = {}) {
   return buildRepPreviewAnswer({ instruction: gate.instruction, snap, nowMs });
 }
 
+
+/* ============================================================================
+ * TAGS, CLOSE REASONS, SCAN REPORTS AND A REP'S OWN AI RULES
+ *
+ * Aug 27 2026, for THE FLOOR — the rep console rebuilt as four pages. Appended
+ * rather than woven in, the same way every section above this one was, so the
+ * file reads as a history of what was added when.
+ *
+ * ONE ACTION, ONE FUNCTION, AND THE FUNCTION WRITES THE TIMELINE.
+ *
+ * Every write below does the whole act in one call: the row, the dated line on
+ * the person's timeline, and the tag event where there is one. A button never
+ * writes. That is not tidiness — it is the fix for a defect that shipped: FOUR
+ * buttons could mark a deal Won and they had four behaviours, and because one of
+ * them skipped anything already at stage `won`, pressing any of the other three
+ * first made the only working one a no-op for that lead FOREVER.
+ *
+ * A WRITE ASSERTS WHAT THE SCREEN SAID.
+ *
+ * claimLead already carries `.is("owner_id", null)` under `expectUnclaimed`.
+ * Everything new here follows it: two reps clicking at the same moment is a
+ * thing that has already happened in this console, and disabling the button is
+ * the polite half of the fix — the predicate in the query is the half that
+ * works.
+ * ==========================================================================*/
+
+/* The imports these functions need are at the TOP of this file with every other
+ * one, not here. ES modules hoist an import wherever it is written, so a block
+ * of them halfway down a 3,500-line file reads as a second, later set of
+ * dependencies and is not one. */
+
+/* Re-exported so a page asks this file for everything and never has to reach
+ * past it into two libraries to draw one row. Same reason lib/rep-report.js
+ * re-exports tokensForWords. */
+export {
+  TAG, TAG_SLUGS, reasonLabel, checkCloseReason, checkPersonalRule,
+  tagIndex, eventsByLead, currentTags, currentSlugs, tagHistory, autoTagPlan,
+  newestReportByCompany, readCompanyReport,
+};
+export { LOST_REASONS, WON_REASONS, MIN_REASON_NOTE_CHARS } from "../../lib/sales-rules.js";
+
+/* ---- reading -------------------------------------------------------- */
+
+/** The tag vocabulary. Every member may read it; only an admin may write it
+ *  (0018), because naming a new tag is a decision about the whole company's
+ *  filter menu — "medspa", "med-spa" and "MedSpa" as three tags is a menu
+ *  nobody can use. */
+export async function listLeadTags() {
+  if (!live()) return { rows: [...previewStore.leadTags], sample: true };
+  const { data, error } = await getSupabase()
+    .from("admin_lead_tags").select("*").order("sort", { ascending: true, nullsFirst: false }).limit(300);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+/**
+ * WHICH TAGS ARE ON EVERY LEAD RIGHT NOW — read from the view, not by replaying
+ * the whole log in the browser.
+ *
+ * `admin_lead_tags_now` (0018) is the newest event per lead per tag, computed in
+ * one line of SQL. It is not a stored copy — a view holds nothing — so there is
+ * still exactly one record and nothing to fall out of step.
+ *
+ * WHY NOT JUST READ THE EVENTS. The Floor loads two thousand leads and a lead
+ * accumulates events for life, so the log is the wrong shape for a board read —
+ * and it cannot be windowed. An `added` from three months ago that falls outside
+ * a window makes a tag that IS on a lead look like a tag that is off, and a
+ * filter built on quietly wrong tags looks like it worked.
+ *
+ * REMOVALS COME BACK TOO. The rows are "the newest event", not "the tags that
+ * are on": currentTags() filters for `added`, and the automatic rules read the
+ * removals to see what a person took off by hand so they never put it back.
+ */
+export const TAG_STATE_FETCH_CAP = 12000;
+
+export async function listLeadTagState() {
+  if (!live()) return { rows: [...previewStore.leadTagEvents], sample: true };
+  /* ORDERED AT ALL, WHICH IS THE POINT — the direction is the lesser half.
+   *
+   * Without an `order` the rows that come back when the cap bites are whatever
+   * Postgres felt like returning, so a lead's chips could appear on one reload and
+   * vanish on the next with nothing changed. Newest first at least makes the
+   * answer stable and repeatable.
+   *
+   * WHAT IT IS NOT: "the leads somebody touched lately keep their tags". An
+   * earlier version of this comment said that and it is wrong twice over. The view
+   * is ONE ROW PER LEAD-TAG PAIR, not per lead, and `at` is when the TAG changed —
+   * which an automatic rule writes, not a person. So the cap keeps the most
+   * recently CHANGED pairs, and a lead can keep a newer `removed` row (no chip)
+   * while losing an older `added` row (a chip). Corrected by the third review. */
+  const { data, error } = await getSupabase()
+    .from("admin_lead_tags_now").select("*")
+    .order("at", { ascending: false })
+    .limit(TAG_STATE_FETCH_CAP + 1);
+  if (error) return { rows: [], error: error.message, sample: false };
+  const rows = data || [];
+  if (rows.length > TAG_STATE_FETCH_CAP) {
+    /* SAID OUT LOUD, AND SAID CORRECTLY ON THE SECOND ATTEMPT.
+     *
+     * The cap is on LEAD-TAG PAIRS, not on leads, so a lead past it does not lose
+     * all of its tags — it loses the pairs that changed longest ago. It therefore
+     * shows FEWER chips than it carries, which is the original wording, and my
+     * "NO tags at all" rewrite was wrong. Either way the tag FILTERS quietly leave
+     * those rows out, which is the part that matters and is now said explicitly.
+     * Corrected by the third review, Aug 27 2026. */
+    return {
+      rows: rows.slice(0, TAG_STATE_FETCH_CAP),
+      sample: false,
+      truncated: `Only ${TAG_STATE_FETCH_CAP} tag records were loaded, so a contact past that shows fewer tags than it carries — and the tag filters leave it out of their counts. Filter to a list to bring it back into range.`,
+    };
+  }
+  return { rows, sample: false };
+}
+
+/** THE WHOLE dated history for ONE lead — every add and every remove, for the
+ *  drawer's tag panel. Unwindowed and uncapped-by-date on purpose: this is the
+ *  record, and a record that stops three months back is not one. */
+export async function listLeadTagEvents(leadId) {
+  if (!live()) {
+    return {
+      rows: previewStore.leadTagEvents
+        .filter((e) => e.lead_id === leadId)
+        .sort((a, b) => String(b.at).localeCompare(String(a.at))),
+      sample: true,
+    };
+  }
+  const { data, error } = await getSupabase()
+    .from("admin_lead_tag_events").select("*").eq("lead_id", leadId)
+    .order("at", { ascending: false }).limit(500);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+/** Every scan on file, newest first. Capped, and the cap is carried — a firm
+ *  whose scans fell off the end would read as never scanned. */
+export const COMPANY_REPORT_FETCH_CAP = 2000;
+
+export async function listCompanyReports(companyId = null) {
+  if (!live()) {
+    const rows = companyId
+      ? previewStore.companyReports.filter((r) => r.company_id === companyId)
+      : [...previewStore.companyReports];
+    return { rows: rows.sort((a, b) => String(b.measured_at).localeCompare(String(a.measured_at))), sample: true };
+  }
+  let q = getSupabase().from("admin_company_reports").select("*")
+    .order("measured_at", { ascending: false });
+  if (companyId) q = q.eq("company_id", companyId).limit(60);
+  else q = q.limit(COMPANY_REPORT_FETCH_CAP + 1);
+  const { data, error } = await q;
+  if (error) return { rows: [], error: error.message, sample: false };
+  const rows = data || [];
+  if (!companyId && rows.length > COMPANY_REPORT_FETCH_CAP) {
+    return {
+      rows: rows.slice(0, COMPANY_REPORT_FETCH_CAP),
+      sample: false,
+      truncated: `Only the ${COMPANY_REPORT_FETCH_CAP} newest scans were loaded, so an older firm's scan may not show on the rows below.`,
+    };
+  }
+  return { rows, sample: false };
+}
+
+/* ---- writing a tag -------------------------------------------------- */
+
+/**
+ * PUT A TAG ON A LEAD, OR TAKE ONE OFF. The one function.
+ *
+ * It writes the event AND the line on the person's timeline in the same call, so
+ * a tag change with no dated line next to it cannot happen. Four callers use it
+ * — the row's tag menu, the drawer, the automatic sweep and the import — and
+ * none of them writes anything itself.
+ *
+ * `action` is 'added' or 'removed'. A removal is a NEW ROW, never the deletion
+ * of the row that added it: "quiet was added on the 24th and taken off on the
+ * 25th because she replied" is the thing a rep needs to read a month later, and
+ * deleting the first row would make it unreadable.
+ *
+ * `source` is 'auto', 'person' or 'import'. It is what makes the next automatic
+ * sweep leave a tag alone: a 'person' removal is a decision, and the rules read
+ * it rather than fighting it.
+ *
+ * IT REFUSES RATHER THAN GUESSING. No tag id, no lead id, or an action that is
+ * not one of the two, and nothing is written — a tag event pointing at the wrong
+ * tag is a record nobody can correct, because there is no update path.
+ */
+export async function setLeadTag({
+  leadId, tagId, label = null, action = "added", actor = null, source = "person", why = null,
+} = {}) {
+  if (!leadId) return { ok: false, error: "No contact to tag." };
+  if (!tagId) return { ok: false, error: "That tag is not in the list, so nothing was written." };
+  if (!["added", "removed"].includes(action)) {
+    return { ok: false, error: `"${action}" is not something that can happen to a tag.` };
+  }
+  if (!["auto", "person", "import"].includes(source)) {
+    return { ok: false, error: `"${source}" is not a way a tag gets set.` };
+  }
+  /* An automatic change is filed as the system, never as the person who happened
+   * to have the page open. Pretending a rule was a person is worse than saying
+   * nobody, and it is the difference between "you removed this" and "the rule
+   * stopped applying" on the history panel. */
+  const by = source === "auto" || source === "import" ? null : (actor || null);
+  const now = new Date().toISOString();
+  const words = label || "a tag";
+
+  if (!live()) {
+    const row = {
+      id: pid("te"), lead_id: leadId, tag_id: tagId, action, at: now, by, source, why: why || null,
+    };
+    previewStore.leadTagEvents.unshift(row);
+    await addLeadActivity({
+      leadId, actor: by || actor || null, type: "tag",
+      body: `${words} ${action === "added" ? "added" : "removed"}${why ? ` — ${why}` : ""}.`,
+    });
+    return { ok: true, row, sample: true };
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from("admin_lead_tag_events")
+    .insert({ lead_id: leadId, tag_id: tagId, action, by, source, why: why || null })
+    .select().maybeSingle();
+  if (error) return { ok: false, error: error.message };
+
+  /* THE TIMELINE LINE IS BEST-EFFORT AND ITS FAILURE IS REPORTED.
+   *
+   * The event is the record and it is already written; refusing the whole act
+   * because the timeline line failed would mean a rep pressing the button again
+   * and writing a second event. So the tag stands, and the caller is told which
+   * half did not happen — the same shape markLeadWon uses for the client link. */
+  const line = await addLeadActivity({
+    leadId, actor, type: "tag",
+    body: `${words} ${action === "added" ? "added" : "removed"}${why ? ` — ${why}` : ""}.`,
+  });
+  return {
+    ok: true,
+    row: data,
+    timelineFailed: line.ok ? null : (line.error || "the timeline line did not save"),
+  };
+}
+
+/**
+ * Bring one lead's automatic tags up to date.
+ *
+ * Works out the whole plan first (lib/lead-tags.js autoTagPlan) and then writes
+ * it through setLeadTag, so every add and every remove gets its own dated line
+ * with the reason on it. Nothing here decides anything — the rules are in
+ * lib/sales-rules.js and they take `now` as an argument.
+ *
+ * A TAG A PERSON REMOVED BY HAND IS NEVER PUT BACK, and that is not a flag
+ * anybody has to remember to set: autoTagPlan reads the newest event for the
+ * tag, and a removal by a person is the answer.
+ *
+ * Returns what it actually did, including anything it could not do. `unknown` is
+ * a slug the vocabulary does not hold — skipped rather than guessed at, because
+ * writing an event needs a real tag id and inventing one points at the wrong
+ * tag at best.
+ */
+export async function syncAutoTags(lead, {
+  company = null, touchCount = 0, now = new Date().toISOString(),
+  events = [], tagsBySlug = new Map(), tagsById = new Map(), actor = null,
+} = {}) {
+  /* THE ONE LEAD'S WHOLE HISTORY IS RE-READ HERE, and the board's copy is only a
+   * fallback.
+   *
+   * The board reads `admin_lead_tags_now` under a row cap. A lead past that cap
+   * arrives with an EMPTY event list — and autoTagPlan decides "never put back a
+   * tag a person removed by hand" entirely from the events it is handed. So on a
+   * big book, pressing this button re-added tags a rep had taken off and wrote a
+   * fresh dated line claiming an automatic rule did it. Nothing on screen would
+   * have said so. Found by an adversarial review, Aug 27 2026.
+   *
+   * One read of one lead is cheap, and it is the only way the hand-set rules can
+   * be true regardless of what the board managed to load. A failed read falls
+   * back to the board's copy AND is reported, rather than silently planning from
+   * nothing — planning from nothing is the failure this exists to prevent. */
+  let history = events;
+  let historyError = null;
+  const fresh = await listLeadTagEvents(lead.id);
+  if (fresh.error) historyError = fresh.error;
+  else history = fresh.rows || [];
+
+  const plan = autoTagPlan(lead, { company, touchCount, now, events: history, tagsBySlug, tagsById });
+  const done = { added: [], removed: [], failed: [], unknown: plan.unknown, historyError };
+  for (const t of plan.add) {
+    const res = await setLeadTag({
+      leadId: lead.id, tagId: t.tag_id, label: tagsBySlug.get(t.slug)?.label || t.slug,
+      action: "added", actor, source: "auto", why: t.why,
+    });
+    if (res.ok) done.added.push(t.slug); else done.failed.push({ slug: t.slug, error: res.error });
+  }
+  for (const t of plan.remove) {
+    const res = await setLeadTag({
+      leadId: lead.id, tagId: t.tag_id, label: tagsBySlug.get(t.slug)?.label || t.slug,
+      action: "removed", actor, source: "auto", why: t.why,
+    });
+    if (res.ok) done.removed.push(t.slug); else done.failed.push({ slug: t.slug, error: res.error });
+  }
+  return done;
+}
+
+/* ---- closing a deal, with a reason --------------------------------- */
+
+/**
+ * MARK A DEAL LOST — the one path, with the reason in front of it.
+ *
+ * There was no Lost path at all before today. One button wrote
+ * `lost_reason: "No reply after the full cadence."` hard-coded, and every other
+ * way of reaching Lost recorded nothing. So the most useful question in sales —
+ * why are we losing — had no answer in this database.
+ *
+ * THE REASON BOX IS IN FRONT OF THIS FUNCTION, NOT IN FRONT OF THE BUTTONS.
+ * That is the lesson from Won: four buttons each holding their own version of an
+ * act is four behaviours, and the reason box would have ended up on three of
+ * them. checkCloseReason refuses an empty reason and a one-word note here, where
+ * every caller meets it.
+ *
+ * It writes, in this order: the stage and the reason, the dated line saying what
+ * happened in the person's own words, and the `lost` tag. The stage first and
+ * separately, so a failure further down still leaves the close recorded and the
+ * message says which half did not happen.
+ */
+export async function markLeadLost(lead, {
+  actor, reason, note, tagsBySlug = new Map(),
+} = {}) {
+  const gate = checkCloseReason({ kind: "lost", reason, note });
+  if (!gate.ok) return { ok: false, error: gate.error, stageMoved: false };
+
+  const now = new Date().toISOString();
+  const res = await upsertLead({
+    id: lead.id,
+    stage: "lost",
+    lost_reason: gate.reason,
+    lost_reason_note: gate.note,
+    closed_at: lead.closed_at || now,
+  });
+  if (!res.ok) return { ok: false, error: res.error, stageMoved: false };
+
+  const problems = [];
+  const label = reasonLabel(gate.reason) || gate.reason;
+  /* TWO LINES, NOT ONE, and they are different kinds of thing. The stage change
+   * is a fact about the record; the note is what a person wrote. Blending them
+   * would put somebody's words under the heading of a system event, and the
+   * timeline's own rule is that logged, system and theirs never blend. */
+  const moved = await addLeadActivity({
+    leadId: lead.id, actor, type: "status_change",
+    body: `${LEAD_STAGE_LABELS[lead.stage] || lead.stage} → Lost. Reason: ${label}.`,
+  });
+  if (!moved.ok) problems.push("the timeline line did not save");
+
+  const written = await addLeadActivity({
+    leadId: lead.id, actor, type: "note",
+    body: `Lost — ${label}. ${gate.note}`,
+  });
+  if (!written.ok) problems.push("the note did not save");
+
+  const tag = tagsBySlug.get(TAG.LOST);
+  if (tag) {
+    const tagged = await setLeadTag({
+      leadId: lead.id, tagId: tag.id, label: tag.label, action: "added",
+      actor, source: "auto", why: `Marked Lost — ${label}.`,
+    });
+    if (!tagged.ok) problems.push("the Lost tag did not save");
+  } else {
+    /* Named rather than skipped in silence: the tag vocabulary not being loaded
+     * means migration 0018 has not been run, and a rep should be told that the
+     * close IS recorded and the tag is not. */
+    problems.push("the Lost tag was not applied, because the tag list has not been set up yet");
+  }
+
+  return { ok: true, stageMoved: true, reason: gate.reason, note: gate.note, problems };
+}
+
+/** The one sentence to show after markLeadLost, true in every case it can end
+ *  in. Kept next to the function, like wonMessage, so the words and the states
+ *  cannot drift. */
+export function lostMessage(result) {
+  if (!result?.ok) {
+    return { tone: "error", title: "Not saved", body: result?.error || "Nothing was changed." };
+  }
+  if (result.problems?.length) {
+    return {
+      tone: "warn",
+      title: "Marked Lost, with something missing",
+      body: `The reason and the stage are saved. ${result.problems.join("; ")}.`,
+    };
+  }
+  return {
+    tone: "success",
+    title: "Marked Lost",
+    body: "The reason, your note and the dated line are all on the record. Six months of these is how we find the gap.",
+  };
+}
+
+/* ---- a rep's own AI rules ------------------------------------------ */
+
+/**
+ * ONE PERSON'S RULES. `userId` is a hard requirement, not a filter: with a falsy
+ * id the query has no `eq` on it and RLS is the only thing left standing between
+ * a rep and every other rep's rules — and in preview mode there is no RLS at
+ * all, so it would hand back everybody's. The same refusal askRepReport makes,
+ * for the same reason.
+ *
+ * An owner or admin reading somebody else's is a real thing (a rule nobody can
+ * audit rewrites what prospects get told) and it goes through this same function
+ * with that person's id.
+ */
+export async function listUserBrain(userId) {
+  if (!userId) {
+    return {
+      rows: [],
+      error: "Nobody is signed in as far as this page can tell, so no rules were read. These are one person's own settings and reading them without knowing whose would show somebody else's.",
+      sample: false,
+    };
+  }
+  if (!live()) {
+    return {
+      rows: previewStore.userBrain
+        .filter((r) => r.user_id === userId)
+        .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))),
+      sample: true,
+    };
+  }
+  const { data, error } = await getSupabase()
+    .from("admin_user_brain").select("*").eq("user_id", userId)
+    .order("created_at", { ascending: true }).limit(200);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+/**
+ * Save one rule or one setting.
+ *
+ * THE NO-NUMBERS CHECK RUNS HERE, not only on the screen. checkPersonalRule is
+ * the same function the page calls before it lets the button light up, and it is
+ * called again at the door for the reason every guard in this file is doubled: a
+ * writer that trusts its caller is a writer that eventually gets called wrong.
+ *
+ * Why a number in a personal rule matters at all is written out in full above
+ * checkPersonalRule in lib/sales-rules.js. Short version: these rules are shown
+ * to the model AND to the honesty gate, so a number typed here becomes a number
+ * the gate believes we measured.
+ */
+export async function upsertUserBrain(patch) {
+  const gate = checkPersonalRule(patch?.body);
+  if (!gate.ok) return { ok: false, error: gate.error };
+  /* THE LABEL GOES THROUGH THE SAME GATE AS THE RULE.
+   *
+   * `title` was not checked, and BOTH prompt renderers print it —
+   * `lib/ai.js buildSystemPrompt` and `lib/rep-report.js renderPersonalRules` —
+   * so a number typed into a title reached the pool the honesty gate checks the
+   * model's answers against. `{ title: "clients see a 40% lift", body: "keep it
+   * short" }` passed every check and taught the gate that 40% was something we
+   * measured. That is verbatim the failure the no-digits rule exists to prevent,
+   * through the one field nobody was looking at. Found by an adversarial review,
+   * Aug 27 2026. */
+  /* ONLY WHEN THE LABEL IS BEING SET OR CHANGED — never on a patch that is only
+   * turning a rule off.
+   *
+   * The first version checked any patch carrying a title, and repBrain re-sends
+   * the whole row on every edit including the On/Off switch. So a row whose label
+   * already held a digit — one written before this check existed, or through the
+   * database directly — became un-editable AND un-toggleable: the one action you
+   * want on a bad rule is to switch it off, and that was the action refused.
+   * Found by the third review, Aug 27 2026.
+   *
+   * `enabledOnly` is the shape repBrain's toggle sends: an id, a body and
+   * `enabled`. A patch like that is let through whatever the stored title says. */
+  const enabledOnly = Boolean(patch?.id)
+    && Object.prototype.hasOwnProperty.call(patch || {}, "enabled")
+    && !Object.prototype.hasOwnProperty.call(patch || {}, "title");
+  if (!enabledOnly && patch?.title !== null && patch?.title !== undefined && String(patch.title).trim() !== "") {
+    const titleGate = checkPersonalRule(patch.title);
+    if (!titleGate.ok) {
+      return { ok: false, error: `The label on this rule cannot hold a number either. ${titleGate.error}` };
+    }
+  }
+  const clean = { ...patch, body: gate.text };
+
+  if (!live()) {
+    const now = new Date().toISOString();
+    if (clean.id) {
+      const i = previewStore.userBrain.findIndex((r) => r.id === clean.id);
+      if (i < 0) return { ok: false, error: "That rule is not on file any more." };
+      /* AND IT HAS TO BE YOURS. RLS refuses this in the real database (0022) and
+       * the preview branch happily rewrote somebody else's rule if a patch
+       * carried their row id — which is precisely what the note below calls "a
+       * preview looser than the query underneath it", the trap this repo has been
+       * bitten by twice. Found by tests/user-brain, Aug 27 2026.
+       *
+       * `clean.user_id` is what the page believes it is editing for; when a
+       * caller does not say, there is nothing to check against and the safe
+       * answer is to refuse rather than to assume. */
+      if (!clean.user_id || previewStore.userBrain[i].user_id !== clean.user_id) {
+        return { ok: false, error: "That rule belongs to somebody else, so nothing was changed." };
+      }
+      /* THE OWNER OF A ROW IS NEVER CHANGED BY AN EDIT. Without this a patch
+       * carrying somebody else's user_id would move the rule to them — which RLS
+       * refuses in the real database (0022) and preview mode would happily do,
+       * and a preview looser than the query underneath it is the trap this repo
+       * has been bitten by twice. */
+      previewStore.userBrain[i] = {
+        ...previewStore.userBrain[i], ...clean,
+        user_id: previewStore.userBrain[i].user_id,
+        updated_at: now,
+      };
+      return { ok: true, row: previewStore.userBrain[i], sample: true };
+    }
+    if (!clean.user_id) return { ok: false, error: "A rule has to belong to somebody." };
+    const row = {
+      id: pid("ub"), kind: "rule", setting_key: null, title: null, enabled: true,
+      created_at: now, updated_at: now, ...clean,
+    };
+    previewStore.userBrain.unshift(row);
+    return { ok: true, row, sample: true };
+  }
+
+  const supabase = getSupabase();
+  /* A FIXED SETTING IS ONE ROW PER PERSON, so picking "Formal" twice does not
+   * leave two tone rules arguing in the prompt. The unique index in 0022 is what
+   * enforces it; `onConflict` is what makes the second press an update instead
+   * of an error a rep has to read. */
+  if (!clean.id && clean.setting_key) {
+    const { data, error } = await supabase.from("admin_user_brain")
+      .upsert(clean, { onConflict: "user_id,setting_key" }).select().maybeSingle();
+    if (error) return { ok: false, error: error.message };
+    return { ok: true, row: data };
+  }
+  const q = clean.id
+    ? supabase.from("admin_user_brain").update(clean).eq("id", clean.id).select().maybeSingle()
+    : supabase.from("admin_user_brain").insert(clean).select().maybeSingle();
+  const { data, error } = await q;
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, row: data };
+}
+
+/**
+ * `userId` IS REQUIRED, and it is checked in both branches.
+ *
+ * RLS refuses a delete on somebody else's rule in the real database (0022), and
+ * the preview branch filtered on the id alone — so in sample mode a rep could
+ * delete the owner's rule, which live mode would have refused. A preview looser
+ * than the query underneath it is the trap this repo has been bitten by twice,
+ * and it is worth the extra argument at every call site.
+ *
+ * The live branch carries the same `eq` rather than leaning on the policy: the
+ * policy is the thing that works, and this is the thing that makes the failure
+ * legible — a delete that quietly matched nothing looks identical to one that
+ * succeeded.
+ */
+export async function deleteUserBrain(id, userId) {
+  if (!id) return { ok: false, error: "Nothing to delete." };
+  if (!userId) {
+    return { ok: false, error: "Nobody is signed in as far as this page can tell, so nothing was deleted." };
+  }
+  if (!live()) {
+    const row = previewStore.userBrain.find((r) => r.id === id);
+    if (!row) return { ok: true, sample: true };
+    if (row.user_id !== userId) {
+      return { ok: false, error: "That rule belongs to somebody else, so nothing was deleted." };
+    }
+    previewStore.userBrain = previewStore.userBrain.filter((r) => r.id !== id);
+    return { ok: true, sample: true };
+  }
+  const { error } = await getSupabase()
+    .from("admin_user_brain").delete().eq("id", id).eq("user_id", userId);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/* ---- the board, with tags and scans on it -------------------------- */
+
+/**
+ * Everything the Floor and the owner's Sales page need, in ONE read, so no page
+ * can be counting a different snapshot from the tiles above it.
+ *
+ * THIS IS A WIDENING OF getSalesBoard, NOT A SECOND BOARD. Three reads are added
+ * — the tag vocabulary, the current tag state, and the scans — and everything
+ * that already read this function keeps working, because the new keys are extra
+ * rather than instead. A page that fetched its own leads would be a page with
+ * its own snapshot, and two snapshots of one pipeline is how a tile ends up
+ * disagreeing with the list under it.
+ *
+ * ERRORS AND CAPS ARE CARRIED, NOT SWALLOWED, exactly as they already were: a
+ * page that renders no tags because one fetch failed looks precisely like a page
+ * whose leads have no tags.
+ */
+export async function getFloorBoard() {
+  const [board, tags, tagState, reports] = await Promise.all([
+    getSalesBoard(), listLeadTags(), listLeadTagState(), listCompanyReports(),
+  ]);
+  const { byId: tagsById, bySlug: tagsBySlug } = tagIndex(tags.rows);
+  return {
+    ...board,
+    leadTags: tags.rows,
+    tagsById,
+    tagsBySlug,
+    tagEvents: tagState.rows,
+    tagsByLead: eventsByLead(tagState.rows),
+    companyReports: reports.rows,
+    reportByCompany: newestReportByCompany(reports.rows),
+    sample: Boolean(board.sample || tags.sample),
+    errors: [...board.errors, tags.error, tagState.error, reports.error].filter(Boolean),
+    truncated: [...board.truncated, tagState.truncated, reports.truncated].filter(Boolean),
+  };
+}
+
+/**
+ * MARK A DEAL WON, WITH THE REASON IN FRONT OF IT — the one path.
+ *
+ * markLeadWon() above is already the one function that moves the stage and
+ * creates the client record, and all four Won buttons were routed through it on
+ * Aug 25. The reason box goes in front of THAT function, not in front of the
+ * four buttons — so this wraps it rather than replacing it, and the four buttons
+ * now call this.
+ *
+ * Order, and it matters: the reason is checked BEFORE anything is written, so a
+ * refused reason changes nothing at all. Then the stage and the client link (one
+ * call, its own rules, its own safe-to-press-twice guard). Then the note in the
+ * person's own words, then the tag. Anything that fails after the close is
+ * reported in `problems` and the close still stands — rolling back a recorded
+ * sale because a tag did not save would be worse.
+ */
+export async function closeLeadWon(lead, {
+  actor, reason, note, stage = "Onboarding", tagsBySlug = new Map(),
+} = {}) {
+  const gate = checkCloseReason({ kind: "won", reason, note });
+  if (!gate.ok) return { ok: false, error: gate.error, stageMoved: false };
+
+  const res = await markLeadWon(lead, {
+    actor, stage,
+    extraPatch: { won_reason: gate.reason, won_reason_note: gate.note },
+  });
+  if (!res.ok) return res;
+
+  const problems = [];
+  const label = reasonLabel(gate.reason) || gate.reason;
+
+  const written = await addLeadActivity({
+    leadId: lead.id, actor, type: "note",
+    body: `Won — ${label}. ${gate.note}`,
+  });
+  if (!written.ok) problems.push("the note did not save");
+
+  const tag = tagsBySlug.get(TAG.WON);
+  if (tag) {
+    const tagged = await setLeadTag({
+      leadId: lead.id, tagId: tag.id, label: tag.label, action: "added",
+      actor, source: "auto", why: `Marked Won — ${label}.`,
+    });
+    if (!tagged.ok) problems.push("the Won tag did not save");
+  } else {
+    problems.push("the Won tag was not applied, because the tag list has not been set up yet");
+  }
+
+  return { ...res, reason: gate.reason, note: gate.note, problems };
+}

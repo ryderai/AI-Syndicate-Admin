@@ -46,8 +46,54 @@ export default async function handler(req, res) {
     brainRows = data || [];
   }
 
+  /* THE PERSON'S OWN RULES — read UNCONDITIONALLY, for every role, and only ever
+   * their own. Aug 27 2026, migration 0022.
+   *
+   * This is deliberately the opposite gate from the block above it, and the
+   * difference is the whole point. `admin_brain` is the COMPANY's and is
+   * admin-only, so a rep must not be able to make the AI recite it — that is
+   * trap #8 in CONTEXT-FOR-AI.md §8, and the `if (isAdminRole)` above is the fix
+   * for it. `admin_user_brain` is one person's own tone settings, so there is
+   * nothing to leak: the filter is `user_id = the caller`, which is also what the
+   * policy in 0022 says.
+   *
+   * A FAILED READ IS NOT AN EMPTY ONE, and it is not fatal either: the draft still
+   * goes out on the house rules, and `personalRulesRead: false` comes back on the
+   * response. NOTHING READS THAT FLAG YET — said plainly, because an earlier
+   * version of this comment claimed "so the screen can say the settings were not
+   * applied", and no screen does. The AI Brain page covers the common cause a
+   * different way (its own read of the table fails too, and it prints that error),
+   * so the gap is a draft box that cannot tell somebody their tone settings were
+   * skipped. Worth wiring; not wired. Third review, Aug 27 2026.
+   *
+   * NO ROLE GATE and NO WIDENING: it never reads a row belonging to anybody else,
+   * for anybody, including an owner. An owner auditing a rep's rules does it on
+   * the page, where it is visible, not through a draft. */
+  let personalRows = [];
+  let personalRulesRead = true;
+  const callerId = member.membership.user_id || member.user.id;
+  if (callerId) {
+    const { data, error } = await admin
+      .from("admin_user_brain")
+      .select("kind, setting_key, title, body, enabled")
+      .eq("user_id", callerId)
+      .eq("enabled", true)
+      .order("created_at", { ascending: true })
+      .limit(60);
+    if (error) {
+      personalRulesRead = false;
+      console.error("[ai-draft] could not read the caller's own AI rules:", error.message);
+    } else {
+      personalRows = data || [];
+    }
+  } else {
+    /* No id means the token did not identify a person. Nothing is read rather
+     * than everything: the same refusal askRepReport makes, for the same reason. */
+    personalRulesRead = false;
+  }
+
   try {
-    const result = await draft({ kind, context, history, brainRows });
+    const result = await draft({ kind, context, history, brainRows, personalRows });
 
     // Log our own usage so admin AI spend is measured, not guessed.
     const cost = (result.usage.input_tokens * COST.input + result.usage.output_tokens * COST.output) / 1e6;
@@ -61,7 +107,15 @@ export default async function handler(req, res) {
     });
 
     res.setHeader("Cache-Control", "private, no-store");
-    return res.status(200).json({ text: result.text, usage: result.usage });
+    return res.status(200).json({
+      text: result.text,
+      usage: result.usage,
+      /* Said out loud so a screen never has to guess. `personalRules: 0` with
+       * `personalRulesRead: true` means the person has not set any; `false` means
+       * we could not look, which is a different sentence. */
+      personalRules: personalRows.length,
+      personalRulesRead,
+    });
   } catch (err) {
     const status = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
     return res.status(status).json({ error: err?.message || "Draft failed." });

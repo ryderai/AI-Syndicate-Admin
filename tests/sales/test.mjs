@@ -653,18 +653,40 @@ test("a score that is not a number is treated as no score, not as zero", () => {
   assert.equal(scoreGate("").known, false);
 });
 
-test("no text before an open, and only ever one", () => {
-  assert.equal(textGate({ phone: "555", email_opened_at: null, texts_sent: 0 }).allowed, false);
-  assert.equal(textGate({ phone: "555", email_opened_at: ago(1), texts_sent: 0 }).allowed, true);
-  assert.equal(textGate({ phone: "555", email_opened_at: ago(1), texts_sent: 1 }).allowed, false);
-  assert.equal(textGate({ phone: null, email_opened_at: ago(1), texts_sent: 0 }).allowed, false);
+test("no text before a REPLY, and only ever one", () => {
+  /* THE GATE MOVED FROM "THEY OPENED" TO "THEY REPLIED" — Aug 27 2026.
+   *
+   * It read `email_opened_at`, and NOTHING HAS EVER WRITTEN THAT COLUMN, so this
+   * function refused every text ever and the button has never once been usable.
+   * Nobody knew, because the assertion below was written with a fixture that
+   * filled the column by hand. Migration 0021 moved the database's own copy of
+   * this gate to `first_reply_at`; for a few hours the browser's copy was left
+   * behind, which is the live-and-preview divergence this repo has a memory note
+   * about. Both are on `first_reply_at` now.
+   *
+   * A reply is a STRONGER signal than an open, not a weaker one: an open can be an
+   * image proxy loading a pixel, and a reply is a person typing. */
+  assert.equal(textGate({ phone: "555", first_reply_at: null, texts_sent: 0 }).allowed, false);
+  assert.equal(textGate({ phone: "555", first_reply_at: ago(1), texts_sent: 0 }).allowed, true);
+  assert.equal(textGate({ phone: "555", first_reply_at: ago(1), texts_sent: 1 }).allowed, false);
+  assert.equal(textGate({ phone: null, first_reply_at: ago(1), texts_sent: 0 }).allowed, false);
+  /* AND THE OLD COLUMN NO LONGER UNLOCKS ANYTHING. This is the assertion that
+   * would have caught the divergence: a lead with an open on record and no reply
+   * must still be refused. */
+  assert.equal(textGate({ phone: "555", email_opened_at: ago(1), first_reply_at: null, texts_sent: 0 }).allowed, false);
+  /* The database function agrees, in the same words. tests/floor-scoping/sql.sh
+   * proves it against a real Postgres; this reads the file so a drift between the
+   * two is caught even where there is no database to run. */
+  const sql = readFileSync(new URL("../../supabase/migrations/0021_outreach_tracking.sql", import.meta.url), "utf8");
+  assert.match(sql, /and first_reply_at is not null/,
+    "admin_lead_claim_text must gate on first_reply_at too, or the browser and the database disagree");
 });
 
 test("every refusal says why, in words a person can read", () => {
   for (const l of [
-    { phone: null, email_opened_at: ago(1), texts_sent: 0 },
-    { phone: "555", email_opened_at: null, texts_sent: 0 },
-    { phone: "555", email_opened_at: ago(1), texts_sent: 1 },
+    { phone: null, first_reply_at: ago(1), texts_sent: 0 },
+    { phone: "555", first_reply_at: null, texts_sent: 0 },
+    { phone: "555", first_reply_at: ago(1), texts_sent: 1 },
   ]) {
     const g = textGate(l);
     assert.equal(g.allowed, false);
@@ -736,8 +758,12 @@ test("a score outside 0-100 is not a score", () => {
 
 test("an unreadable text counter fails CLOSED", () => {
   // NaN >= 1 is false, so the obvious version unlocked unlimited texts.
-  assert.equal(textGate({ phone: "555", email_opened_at: ago(1), texts_sent: "oops" }).allowed, false);
-  assert.equal(textGate({ phone: "555", email_opened_at: ago(1), texts_sent: -3 }).allowed, false);
+  /* `first_reply_at` since Aug 27 2026 — see the gate test above. This one would
+   * pass either way (an unreadable counter is refused before the reply is even
+   * looked at), and it is updated so the fixture cannot be read as evidence that
+   * the old column still unlocks anything. */
+  assert.equal(textGate({ phone: "555", first_reply_at: ago(1), texts_sent: "oops" }).allowed, false);
+  assert.equal(textGate({ phone: "555", first_reply_at: ago(1), texts_sent: -3 }).allowed, false);
 });
 
 test("the firm warning never warns you about yourself", () => {
@@ -856,6 +882,11 @@ test("list health separates never-touched from claimed-but-quiet", () => {
  */
 
 const srcOf = (rel) => readFileSync(new URL(`../../${rel}`, import.meta.url), "utf8");
+/* The rules file, read as TEXT as well as imported. Some of what has to be true
+ * about it is the shape of the source — that a check exists as one exported
+ * function rather than being re-implemented at three call sites — and that is
+ * not visible from the imported values. */
+const RULES = srcOf("lib/sales-rules.js");
 const SIDEBAR = srcOf("src/components/admin/Sidebar.jsx");
 const DASH = srcOf("src/components/AdminDashboard.jsx");
 const SALESPAGE = srcOf("src/components/admin/SalesPage.jsx");
@@ -891,19 +922,44 @@ const groupsFor = (role) => SECTIONS.filter((g) => g.roles.includes(role));
 const pageIdsFor = (role) => groupsFor(role).flatMap((g) =>
   g.items.flatMap(([id, , kids]) => [id, ...(kids || []).map(([kid]) => kid)]));
 
-test("a rep's sidebar is Work, Leads and My leads, and nothing else", () => {
-  assert.deepEqual(pageIdsFor("sales"), ["work", "leads", "mine"]);
+/* ==================================================================
+ * REWRITTEN Aug 27 2026 — THE REP CONSOLE IS FOUR PAGES, NOT THREE
+ * ==================================================================
+ * Eleven assertions in this block pinned the old shape: Work, Leads (unclaimed
+ * only) and My leads, with the lock applied to the LIST. Ryder's call on Aug 27
+ * replaced that with Overview, The Floor, Gmail and AI Brain, and moved the lock
+ * onto the ROW — a rep sees every lead in the company and may only change the
+ * ones that are theirs or unclaimed.
+ *
+ * The old assertions were not deleted, they were REPOINTED. Each one still
+ * guards the same rule; the rule's shape changed underneath it. Deleting them
+ * would have taken the rep console back to having no test at all at exactly the
+ * moment it changed the most.
+ */
+
+test("a rep's console is four pages: Overview, The Floor, Gmail and AI Brain", () => {
+  assert.deepEqual(pageIdsFor("sales"), ["overview", "floor", "gmail", "brain"]);
+  /* The two that went away. Not renamed — absorbed: Work became Overview, and
+   * the Floor with the switch on "Mine" IS My leads. An id that stops existing
+   * has to stop existing everywhere, or an old bookmark quietly lands on the
+   * landing page and nobody reports it as broken. */
+  assert.ok(!pageIdsFor("sales").includes("work"), "Work is not a rep's page any more");
+  assert.ok(!pageIdsFor("sales").includes("leads"), "Leads is gone; the Floor replaced it");
+  assert.ok(!pageIdsFor("sales").includes("mine"), "My leads is gone; the Floor opens on Mine");
 });
 
-test("a rep lands on Work, because the landing page is the first one their role has", () => {
-  // AdminDashboard: allowedIds[0] when the role cannot see Overview.
-  assert.equal(pageIdsFor("sales")[0], "work");
+test("a rep lands on their own Overview, because the landing page is the first one their role has", () => {
+  // AdminDashboard: LANDING is "overview" and a rep now HAS it, so both paths
+  // agree for the first time.
+  assert.equal(pageIdsFor("sales")[0], "overview");
 });
 
 test("the owner's menu did not change: one Sales page, and the rep's ids are not in it", () => {
   const owner = pageIdsFor("owner");
   assert.ok(owner.includes("sales"), "the owner must keep the four-tab Sales page");
-  assert.ok(!owner.includes("leads") && !owner.includes("mine"), "the rep's pages are not the owner's");
+  assert.ok(!owner.includes("floor"), "the Floor is a rep's page, not the owner's");
+  assert.ok(!owner.includes("gmail"), "the owner has the shared Inbox, not a rep's own mailbox page");
+  assert.ok(owner.includes("work"), "Work is still the owner's page");
   assert.deepEqual(pageIdsFor("owner"), pageIdsFor("admin"), "admin and owner are still the same menu");
   const salesGroup = groupsFor("owner").filter((g) => g.group === "Sales");
   assert.equal(salesGroup.length, 1, "an owner must see exactly one Sales group");
@@ -911,14 +967,28 @@ test("the owner's menu did not change: one Sales page, and the rep's ids are not
 });
 
 test("a rep cannot reach a page their role does not list", () => {
-  for (const id of ["sales", "overview", "clients", "vault", "team", "settings", "operations"]) {
+  for (const id of ["sales", "work", "clients", "vault", "team", "settings", "operations", "inbox", "notes", "finance"]) {
     assert.ok(!pageIdsFor("sales").includes(id), `${id} must not be openable by a rep`);
   }
 });
 
-test("the rep's two items are named in Ryder's words", () => {
+test("TWO PAGE IDS ARE SHARED WITH THE OWNER, AND THE ROLE PICKS THE COMPONENT", () => {
+  /* `overview` and `brain` are deliberately the same ids for everybody, so the
+   * role never appears in a URL. The whole safety of that choice is that
+   * AdminDashboard renders a DIFFERENT component per role — if it ever stopped,
+   * a rep would be routed to the owner's Overview and to the company Brain,
+   * which api/ai-draft.js refuses to load for them on purpose (trap #8). */
+  assert.ok(pageIdsFor("sales").includes("overview") && pageIdsFor("owner").includes("overview"));
+  assert.ok(pageIdsFor("sales").includes("brain") && pageIdsFor("owner").includes("brain"));
+  assert.match(DASH, /case "overview": return member\.role === "sales"/);
+  assert.match(DASH, /<RepOverview member=\{member\} \/>/);
+  assert.match(DASH, /case "brain": return member\.role === "sales"/);
+  assert.match(DASH, /<RepBrain member=\{member\} \/>/);
+});
+
+test("the rep's four items are named in Ryder's words", () => {
   const items = groupsFor("sales").flatMap((g) => g.items).map(([, label]) => label);
-  assert.deepEqual(items, ["Work", "Leads", "My leads"]);
+  assert.deepEqual(items, ["Overview", "The Floor", "Gmail", "AI Brain"]);
 });
 
 test("every rep page id has a sidebar icon", () => {
@@ -927,88 +997,189 @@ test("every rep page id has a sidebar icon", () => {
   }
 });
 
-test("#/dashboard/sales still lands a rep somewhere, and the old renames survive", () => {
+test("every address a rep could already have bookmarked still lands somewhere true", () => {
   const renamed = literal(DASH, "RENAMED");
   assert.equal(renamed.leads, "sales", "old links that say leads must still reach Sales");
   assert.equal(renamed.customers, "clients");
   const split = literal(DASH, "SPLIT_FOR_ROLE");
-  assert.equal(split.sales, "leads", "a rep opening the owner's Sales page must land on the floor");
-  assert.ok(pageIdsFor("sales").includes(split.sales), "the split points at a page a rep actually has");
+  /* A MAP PER ROLE now, not one page id — there are four old addresses to
+   * catch rather than one. Every one of them has to point at a page the role
+   * actually has, or the fallback quietly shows the landing page and the link
+   * looks fine while being wrong. */
+  assert.equal(split.sales.sales, "floor", "a rep opening the owner's Sales page must land on the Floor");
+  assert.equal(split.sales.leads, "floor", "the old floor bookmark must land on the Floor");
+  assert.equal(split.sales.mine, "floor", "My leads IS the Floor with the switch on Mine");
+  assert.equal(split.sales.work, "overview", "Work became Overview");
+  for (const [from, to] of Object.entries(split.sales)) {
+    assert.ok(pageIdsFor("sales").includes(to), `the split from ${from} points at a page a rep does not have`);
+  }
   // And the split is only read when the role cannot open what was named, so an
   // owner's address is untouched.
-  assert.match(DASH, /allowedIds\.includes\(named\) \? named : \(SPLIT_FOR_ROLE\[named\] \|\| named\)/);
+  assert.match(DASH, /allowedIds\.includes\(named\)/);
+  assert.match(DASH, /SPLIT_FOR_ROLE\[member\.role\]\?\.\[named\]/);
 });
 
-test("both rep pages route to the one SalesPage, with a mode", () => {
-  assert.match(DASH, /case "leads": return <SalesPage member=\{member\} mode="floor" \/>/);
-  assert.match(DASH, /case "mine": return <SalesPage member=\{member\} mode="mine" \/>/);
+test("the Floor is the ONE SalesPage with a mode, and there is no second copy", () => {
+  assert.match(DASH, /case "floor": return <SalesPage member=\{member\} mode="floor" \/>/);
   assert.match(DASH, /case "sales": return <SalesPage member=\{member\} \/>/);
+  /* The dead ids are not cases any more. They cannot be reached — they are in no
+   * role's list — and a case for an unreachable id reads to the next person as a
+   * page that still exists. */
+  assert.ok(!/case "mine":/.test(DASH), "the mine route is gone with the page");
+  assert.ok(!/case "leads":/.test(DASH), "the leads route is gone with the page");
   // One import of SalesPage. A second component would be the drifted copy.
   assert.equal((DASH.match(/from "\.\/admin\/SalesPage\.jsx"/g) || []).length, 1);
 });
 
-test("the floor is locked to unclaimed and My leads to the rep's own", () => {
-  assert.equal(MODES.floor.owner, "floor");
-  assert.equal(MODES.mine.owner, "mine");
-  // The names on the pages, so the lock is said out loud somewhere.
-  assert.ok(MODES.floor.saying && MODES.mine.saying);
+test("THE LOCK IS ON THE ROW, NOT ON THE LIST", () => {
+  /* THE ASSERTION THIS REPLACED read `MODES.floor.owner === "floor"` and
+   * `MODES.mine.owner === "mine"` — the two narrowed lists. Both are gone, and
+   * `owner` is gone from MODES with them, because a mode that narrowed the set
+   * is exactly what was removed. What has to be true instead:
+   *
+   *   1. there is one mode, not two;
+   *   2. it does NOT narrow anything — no `owner` key at all;
+   *   3. the page's set is the whole board;
+   *   4. canEditLead is the one thing that decides editability, and it is
+   *      imported rather than re-implemented.
+   */
+  assert.deepEqual(Object.keys(MODES), ["floor"], "one rep lead page, not two");
+  assert.ok(!("owner" in MODES.floor), "a mode must not narrow the set any more — the row lock replaced it");
+  assert.ok(MODES.floor.saying, "the page still says out loud what it holds");
+  assert.match(SALESPAGE, /const scopeLeads = useMemo\(\(\) => board\?\.leads \|\| \[\], \[board\]\)/,
+    "the page's set is every lead it read, for every role");
+  assert.match(SALESPAGE, /canEditLead/, "the page reads the one editability helper");
+  const SHEETLIB = readFileSync(new URL("../../src/lib/salesSheet.js", import.meta.url), "utf8");
+  assert.match(SHEETLIB, /export function canEditLead/, "and the helper is exported from one place");
+  /* The rule itself, read out of the source rather than trusted: a rep may edit
+   * their own or an unclaimed lead, and anybody who is not a rep may edit
+   * anything. Written as "not sales" rather than "owner or admin" so a role
+   * nobody has taught the file about does not silently lose the ability to work. */
+  assert.match(SHEETLIB, /if \(member\.role !== "sales"\) return true;/);
+  assert.match(SHEETLIB, /return lead\.owner_id === member\.user_id \|\| lead\.owner_id == null;/);
+  /* AND A MISSING MEMBER IS NOT AN OWNER. A page that does not know who is
+   * looking at it must get a read-only row, never an editable one. */
+  assert.match(SHEETLIB, /if \(!lead \|\| !member\) return false;/);
 });
 
-test("no tile on a locked page can widen it, and none is left filtering nothing", () => {
+test("the same rule is in the database, not only on the page", () => {
+  /* THE POLITE HALF IS NOT THE LOCK. Every file in api/ runs on the service key
+   * and ignores row-level security, and a disabled button is something a person
+   * sees rather than something that stops a request. So the rule has to be in
+   * migration 0020 as well, and this reads it out of the SQL rather than
+   * believing a comment. */
+  const SQL = readFileSync(new URL("../../supabase/migrations/0020_rep_scoping.sql", import.meta.url), "utf8");
+  assert.match(SQL, /create policy "members update leads" on public\.admin_leads/);
+  /* The `with check` is the whole point: 0001 had a `using` and no `with check`,
+   * which let any rep set any lead's owner_id to their own id by talking to the
+   * database directly. */
+  assert.match(SQL, /with check \(\s*public\.admin_is_admin\(\)\s*or owner_id = auth\.uid\(\)/);
+  assert.match(SQL, /reps work their own mailbox threads/, "a rep's Gmail needs its own policy");
+  assert.match(SQL, /admin_rep_reports add column if not exists counted_cause/,
+    "the column api/rep-report.js already writes has to exist before 0017 is run");
+});
+
+test("no tile on the Floor can widen it, and none is left filtering nothing", () => {
   // "floor", "mine" and "owed" all move the owner filter or the view, so they
-  // cannot appear on a locked page at all.
+  // cannot appear on a rep's page at all.
   for (const [mode, cfg] of Object.entries(MODES)) {
     for (const banned of ["floor", "mine", "owed"]) {
       assert.ok(!cfg.tiles.includes(banned), `${mode} must not carry the ${banned} tile`);
     }
   }
-  // The floor's six tiles were all either inert or lock-breaking, so it has none.
+  /* THE FLOOR HAS NONE AT ALL. Every tile it could carry either says what the
+   * availability switch above the table already says, or belongs on Overview,
+   * which is where a rep's own numbers live now. A tile that filters nothing is
+   * removed rather than left lit and inert. */
   assert.deepEqual(MODES.floor.tiles, []);
-  assert.deepEqual(MODES.mine.tiles, ["atRisk", "meetings", "won"]);
 });
 
-test("the floor has a real Claim button, and says what claiming costs you", () => {
-  /* REWRITTEN Aug 26 2026. The old version asserted the hint pointed at the
-   * Sales Owner dropdown, "because the sheet has no Claim button". It has one
-   * now — an unclaimed row on the floor renders it — so the assertion was
-   * pinning wording that had become false. The hint's real job is the second
-   * half: saying what claiming puts on the clock BEFORE you press it. */
+test("the Floor has a real Claim button, and says what claiming costs you", () => {
   assert.match(MODES.floor.hint, /Claim/, "a floor a rep cannot act on is just a list");
   assert.ok(
     MODES.floor.hint.includes(String(ROE.FIRST_CONTACT_BUSINESS_DAYS)),
     "the hint must quote the real first-contact window, not a number typed twice",
   );
-  assert.ok(!MODES.mine.hint, "My leads is not a page you claim from");
+  /* AND IT SAYS WHAT A GREYED ROW IS. The Floor shows leads a rep cannot change,
+   * which is new, so the page has to explain it where somebody will read it. */
+  assert.match(MODES.floor.hint, /read-only/i, "the hint has to explain the greyed rows");
   assert.match(SALESPAGE, /hint=\{lock \? lock\.hint : null\}/, "and the owner's page gets no hint");
 
-  /* The button exists, only on the floor, and only ever with your own id. A
-   * Claim that could file a lead under somebody else is not a claim. */
   const SHEET = readFileSync(new URL("../../src/components/admin/salesSheet.jsx", import.meta.url), "utf8");
-  assert.match(SHEET, /claimAs && !l\.owner_id/, "the button is for UNCLAIMED rows only");
+  /* The button is for UNCLAIMED rows only, it only ever files a lead under YOUR
+   * OWN id, and it goes through the same assign path the dropdown uses — so the
+   * claim, the clock and the toast cannot behave differently depending on which
+   * control was touched. */
+  assert.match(SHEET, /editable && free && claimAs/, "the button is for unclaimed rows you may edit");
   assert.match(SHEET, /onAssign\(row, claimAs\)/, "and it goes through the same assign path as the dropdown");
   assert.match(
     SALESPAGE,
-    /claimAs=\{lock\?\.owner === "floor" \? member\.user_id : null\}/,
-    "the floor page is the only one that sends a claimer, and it sends YOU",
+    /claimAs=\{lock \? member\.user_id : null\}/,
+    "a rep's page is the only one that sends a claimer, and it sends YOU",
   );
+  /* A REP MAY NEVER HAND A LEAD TO SOMEBODY ELSE. Only an owner or an admin can,
+   * so the person dropdown is not drawn for a rep at all — and assignLead
+   * refuses it a second time for the path that does not go through a control. */
+  assert.match(SALESPAGE, /canAssign=\{isAdmin\}/);
+  assert.match(SHEET, /if \(!canAssign\) \{/, "a rep gets the name, not the picker");
+  assert.match(SALESPAGE, /if \(!isAdmin && userId && userId !== member\.user_id\)/);
 });
 
-test("the lock is applied to the set, not to a dropdown", () => {
-  /* REWRITTEN Aug 26 2026. The filter chain is a function now, because the list
-   * tabs have to count from the same filters the sheet is showing (see the
-   * tab-count test below). The rule this test guards is unchanged and asserted
-   * harder: the chain filters whatever it is HANDED, and every call site hands
-   * it `scopeLeads` — the lock — so there is no path that filters the board. */
-  assert.match(SALESPAGE, /const filterLeads = useCallback\(\(source, \{ skipList = false \} = \{\}\) => \{\s*\n\s*let list = source;/);
+test("WON AND LOST BOTH ASK WHY, IN FRONT OF THE ONE FUNCTION", () => {
+  /* Four buttons can close a deal and all four were routed through markLeadWon
+   * on Aug 25. The reason box goes in front of THAT, not in front of the four —
+   * putting it on each of them is how three get it and one does not, which is
+   * exactly the defect that made one of those four permanently block the only
+   * one that worked. */
+  assert.match(SALESPAGE, /const askForReason = useCallback\(\(lead, kind\)/);
+  assert.match(SALESPAGE, /if \(patch\.stage === "won" && lead\.stage !== "won"\) return askForReason\(lead, "won"\)/);
+  assert.match(SALESPAGE, /if \(patch\.stage === "lost" && lead\.stage !== "lost"\) return askForReason\(lead, "lost"\)/);
+  const PROFILE = readFileSync(new URL("../../src/components/admin/salesProfile.jsx", import.meta.url), "utf8");
+  assert.match(PROFILE, /const doWin = \(\) => doClose\("won"\)/);
+  assert.match(PROFILE, /const flipToClient = \(\) => doClose\("won"\)/);
+  /* THE HARD-CODED REASON IS GONE. This was the only button in the console that
+   * ever wrote lost_reason and it wrote the same sentence every time, so the
+   * loss breakdown would have been one bar tall for ever. */
+  assert.ok(
+    !PROFILE.includes('lost_reason: "No reply after the full cadence."'),
+    "the one hard-coded loss reason must be gone — it made the breakdown meaningless",
+  );
+  /* And the check itself is one function, in the pure module, refusing an empty
+   * reason and a one-word note. */
+  assert.match(RULES, /export function checkCloseReason/);
+  assert.match(RULES, /export const LOST_REASONS/);
+  assert.match(RULES, /export const WON_REASONS/);
+});
+
+test("the filter chain is ONE function, and every caller hands it the page's set", () => {
+  /* REWRITTEN Aug 27 2026. The rule this test guards has not changed — there is
+   * exactly one place that decides what the list holds, and no path filters
+   * anything but the set the page is about. What changed is what that set IS:
+   * the whole board, for every role, because the lock moved onto the row.
+   *
+   * The two assertions that were removed:
+   *   `if (lock.owner === "floor") return all.filter(...)`  — the list lock,
+   *      deleted with the two pages it belonged to.
+   *   the owner-dropdown check for `if (!lock)` — still there, still asserted
+   *      below, but the availability switch is now the rep's version of it and
+   *      has to be in the chain too, or a filter would live in a control. */
+  assert.match(SALESPAGE, /const filterLeads = useCallback\(\(source, \{ skipList = false, skipAvailability = false \} = \{\}\) => \{\s*\n\s*let list = source;/);
   assert.match(SALESPAGE, /const rows = useMemo\(\(\) => filterLeads\(scopeLeads\), /);
   for (const m of SALESPAGE.match(/filterLeads\([a-zA-Z]+/g) || []) {
     assert.ok(m === "filterLeads(source" || m === "filterLeads(scopeLeads",
-      `filterLeads is called on ${m.slice(13)} — every caller must hand it the locked set`);
+      `filterLeads is called on ${m.slice(13)} — every caller must hand it the page's set`);
   }
+  /* THE AVAILABILITY SWITCH IS IN THE CHAIN, not in a control. A filter kept in a
+   * control is only as good as the controls somebody remembered to wire; applied
+   * to the set first, nothing downstream can widen it. */
+  assert.match(SALESPAGE, /if \(lock && !skipAvailability\) list = byAvailability\(list, availability, member\);/);
   assert.match(SALESPAGE, /if \(!lock\) \{\s*\n\s*if \(ownerFilter === "mine"\)/);
-  assert.match(SALESPAGE, /if \(lock\.owner === "floor"\) return all\.filter\(\(l\) => !l\.owner_id\);/);
-  // And the control is gone rather than left to be overridden.
+  // And the owner's control is gone from a rep's page rather than left to be overridden.
   assert.match(SALESPAGE, /\{!lock && \(\s*\n\s*<select className="adm-input adm-sl-sel" data-filter="owner"/);
+  /* THE SWITCH'S THREE NUMBERS COUNT FROM THE SAME ROWS THE LIST HOLDS, minus its
+   * own filter. Counting from `rows` would make "All" show the size of whichever
+   * state happens to be on, which is the class of bug this file is full of. */
+  assert.match(SALESPAGE, /availabilityCounts\(filterLeads\(scopeLeads, \{ skipAvailability: true \}\), member\)/);
 });
 
 test("switching a tile off returns to the page you are on, not the owner's defaults", () => {
@@ -1018,9 +1189,13 @@ test("switching a tile off returns to the page you are on, not the owner's defau
   const m = /const tileOff = useMemo\(\(\) => \(\{([\s\S]*?)\}\), \[/.exec(SALESPAGE);
   assert.ok(m, "tileOff is not built with useMemo any more");
   assert.match(m[1], /view: lock \? "lists"/);
-  assert.match(m[1], /owner: lock \? lock\.owner/);
+  /* CHANGED Aug 27 2026: it was `owner: lock ? lock.owner`, which read a key a
+   * mode no longer has — so it produced `undefined` and put it into a filter that
+   * a locked page does not read anyway. Harmless, and exactly the shape of thing
+   * that stops being harmless later. The honest value is "all", and the reason a
+   * locked page does not need one is that the availability switch replaced it. */
+  assert.match(m[1], /owner: lock \? "all"/);
   assert.match(SALESPAGE, /if \(lock && !lock\.tiles\.includes\(id\)\) return;/);
-  assert.match(SALESPAGE, /setOwnerFilter\(lock \? lock\.owner : "all"\);/);
 });
 
 test("a locked page is the sheet only, and its numbers are counted from it", () => {
@@ -1050,9 +1225,27 @@ test("1 — a rep cannot open a lead that is not on their page, however they arr
    * the whole board, which getSalesBoard loads for every role. */
   assert.match(SALESPAGE, /const openLeadById = useCallback\(\(id\) => \{/,
     "opening has to be one guarded call, not setOpenId handed out");
-  assert.match(SALESPAGE, /if \(lock && !scopeIds\.has\(id\)\) \{/,
-    "the guard has to be the LOCK, not the board");
-  assert.match(SALESPAGE, /const scopeIds = useMemo\(\(\) => new Set\(scopeLeads\.map\(\(l\) => l\.id\)\), \[scopeLeads\]\);/);
+  /* REPOINTED Aug 27 2026, NOT WEAKENED.
+   *
+   * The old guard refused an id outside the page's narrowed set. The set is not
+   * narrowed any more — a rep sees every lead — so that check would now pass for
+   * everything and the guard would be theatre. What replaced it:
+   *
+   *   an id not in the rows we loaded  -> refused, and told why
+   *   an id in the rows, not editable  -> opens READ-ONLY, no buttons at all
+   *   an id in the rows, editable      -> opens as it always did
+   *
+   * Read-only rather than refused IS the requirement: a rep has to be able to see
+   * that somebody else is already in this building. So the thing to assert is
+   * that the read-only decision exists and comes from the one helper. */
+  assert.match(SALESPAGE, /if \(!\(board\?\.leads \|\| \[\]\)\.some\(\(l\) => l\.id === id\)\) \{/,
+    "an id that is not in the rows we loaded still has to be refused");
+  assert.match(SALESPAGE, /readOnly=\{!canEditLead\(openLead, member\)\}/,
+    "the drawer's read-only state must come from the ONE editability helper");
+  const PROF = srcOf("src/components/admin/salesProfile.jsx");
+  assert.match(PROF, /if \(readOnly\) \{/, "the Work tab has to have a read-only body, not disabled buttons");
+  assert.match(PROF, /Read-only — \{heldByName\} holds this one\./,
+    "and it has to say whose it is, where somebody would look for a button");
 
   // Nothing may set openId except the guard and the close button.
   const sets = SALESPAGE.match(/setOpenId\([^)]*\)/g) || [];
@@ -1066,18 +1259,18 @@ test("1 — a rep cannot open a lead that is not on their page, however they arr
   // The deep link goes through it too.
   assert.match(SALESPAGE, /if \(board\.leads\.some\(\(l\) => l\.id === linkedLeadId\)\) openLeadById\(linkedLeadId\);/);
 
-  // Silence is the wrong answer: a rep following a stale link is told why, in
-  // the mode's own words — off the floor and not-yours are different reasons.
-  assert.match(SALESPAGE, /toast\.error\("That contact is not on this page", lock\.notOnPage\);/);
+  // Silence is the wrong answer: a rep following a stale link is told why.
+  assert.match(SALESPAGE, /toast\.error\("That contact is not on this page"/);
   for (const [mode, cfg] of Object.entries(MODES)) {
     assert.ok(cfg.notOnPage && cfg.notOnPage.length > 20, `${mode} has no refusal to say`);
-    assert.ok(!/Somebody else holds/.test(MODES.mine.notOnPage),
-      "My leads must not claim somebody holds it — it may simply be on the floor");
+    /* THE OLD WORDING DESCRIBED A LOCK THAT NO LONGER EXISTS. "Somebody has
+     * claimed this one, so it is on their page now" was true when the page held
+     * only unclaimed rows; the page holds every row now, so the only reason left
+     * is that the contact is not in what was loaded. A refusal that names a cause
+     * that cannot be the cause sends somebody chasing advice that cannot work. */
+    assert.ok(!/claimed this one/i.test(cfg.notOnPage),
+      `${mode} still explains the refusal with a lock that was removed`);
   }
-
-  // And the owner's path is not narrowed: no lock, no check.
-  assert.ok(/if \(lock && !scopeIds\.has\(id\)\)/.test(SALESPAGE) && !/if \(!scopeIds\.has\(id\)\)/.test(SALESPAGE),
-    "the owner must still be able to open anything on the board");
 });
 
 test("2 — no number on a locked page counts rows the sheet is not showing", () => {

@@ -19,6 +19,12 @@ import NotesPage from "./admin/NotesPage.jsx";
 import Assistant from "./admin/Assistant.jsx";
 import PlatformView from "./admin/PlatformView.jsx";
 import WorkPage from "./admin/WorkPage.jsx";
+/* THE REP CONSOLE, Aug 27 2026. Three pages became four: Overview, The Floor,
+ * Gmail and AI Brain. The Floor is SalesPage with a mode — deliberately not a
+ * second copy of it — and Gmail is the Inbox this file already imports. Only
+ * these two are new components. */
+import RepOverview from "./admin/repOverview.jsx";
+import RepBrain from "./admin/repBrain.jsx";
 import VaultPage from "./admin/VaultPage.jsx";
 import TeamPage from "./admin/TeamPage.jsx";
 import SettingsPage from "./admin/SettingsPage.jsx";
@@ -38,8 +44,17 @@ import SettingsPage from "./admin/SettingsPage.jsx";
 export default function AdminDashboard({ go }) {
   const { user, membership, configured } = useAuth();
   const preview = usePreviewAccount();
+  /* `{ ...null, user_id: x }` IS A TRUTHY OBJECT, so the `if (!member) return
+   * null` guard below could never fire on the live path — the exact defence the
+   * comment above this component says exists, silently not existing. A member
+   * with no membership row now really is null, and the guard really does stop.
+   *
+   * Not reachable today: AuthGate.jsx returns NotAuthorized when `membership` is
+   * falsy, so nothing gets this far. It is defence-in-depth, and defence-in-depth
+   * that cannot fire is worse than none — somebody reads the comment and stops
+   * looking. Found by tests/floor-scoping, Aug 27 2026. */
   const member = configured
-    ? { ...membership, user_id: membership?.user_id || user?.id }
+    ? (membership ? { ...membership, user_id: membership.user_id || user?.id } : null)
     : previewMember(preview);
 
   /* Child pages count too — Finance drops down to Invoices, and a page id that
@@ -98,10 +113,31 @@ export default function AdminDashboard({ go }) {
    * sends everybody's `#/dashboard/leads` to Sales, and for a rep the split
    * then hands it on to the page a rep actually has, which is called `leads`
    * again. One hop each way, and neither role sees the other's. */
-  const SPLIT_FOR_ROLE = { sales: "leads" };
+  /* A MAP PER ROLE, not one page id — Aug 27 2026, when the rep console became
+   * four pages. Every address a rep could already have bookmarked has to land
+   * somewhere true:
+   *
+   *   #/dashboard/sales   an owner pasted a link, or the RENAMED hop above sent
+   *                       an old `leads` here     -> The Floor
+   *   #/dashboard/leads   a rep's own bookmark of the old floor page
+   *                       (RENAMED rewrites it to `sales` first, and the line
+   *                       above then sends it on) -> The Floor
+   *   #/dashboard/mine    a rep's bookmark of My leads. The Floor opens on
+   *                       "Mine", so this is the same screen -> The Floor
+   *   #/dashboard/work     Work is not a rep's page any more -> Overview
+   *
+   * Without an entry, an unknown page id quietly falls back to the landing page,
+   * which is the kind of broken link nobody reports because it does not look
+   * broken. Read ONLY when the role cannot open the page that was named, so an
+   * owner never reaches this and their addresses behave exactly as before. */
+  const SPLIT_FOR_ROLE = {
+    sales: { sales: "floor", leads: "floor", mine: "floor", work: "overview" },
+  };
   const rawPage = urlPath.split("/")[0];
   const named = RENAMED[rawPage] || rawPage;
-  const fromUrl = allowedIds.includes(named) ? named : (SPLIT_FOR_ROLE[named] || named);
+  const fromUrl = allowedIds.includes(named)
+    ? named
+    : ((member && SPLIT_FOR_ROLE[member.role]?.[named]) || named);
   const query = urlQuery ? `?${urlQuery}` : "";
   // `|| "work"` is the last resort: a role nobody has taught this file about
   // would otherwise leave the page id blank, and a blank page id shows one
@@ -137,7 +173,15 @@ export default function AdminDashboard({ go }) {
   const renderSection = () => {
     switch (section) {
       case "work": return <WorkPage member={member} />;
-      case "overview": return <Overview member={member} setSection={setSection} />;
+      /* ONE PAGE ID, TWO LAYOUTS — Aug 27 2026. An owner's Overview is the whole
+       * agency; a rep's is their own book with an ask-anything box on top. Same
+       * address either way, because a URL that has to agree with who is signed in
+       * is a URL that eventually does not. The same trick is used for `brain`
+       * below, and it is the routing half of "one set of records, three
+       * layouts". */
+      case "overview": return member.role === "sales"
+        ? <RepOverview member={member} />
+        : <Overview member={member} setSection={setSection} />;
       case "finance": return <Finance member={member} setSection={setSection} />;
       case "invoices": return <Invoices member={member} />;
       /* The query comes through: `?id=` is which client is open, and the
@@ -145,19 +189,38 @@ export default function AdminDashboard({ go }) {
        * swallow both. */
       case "clients": return <ClientsPage member={member} query={query} />;
       case "sales": return <SalesPage member={member} />;
-      /* THE SAME COMPONENT, TWICE, LOCKED TWO DIFFERENT WAYS.
-       * `mode` is the whole difference between a rep's two pages and the
-       * owner's one: floor = the sheet locked to leads nobody has claimed,
-       * mine = the sheet locked to this rep's own. No mode means the page the
-       * owner has always had. A second copy of SalesPage is the one thing
-       * this must never become — see the note at the top of SalesPage.jsx. */
-      case "leads": return <SalesPage member={member} mode="floor" />;
-      case "mine": return <SalesPage member={member} mode="mine" />;
+      /* THE SAME COMPONENT, ONE MODE — Aug 27 2026. `mode="floor"` is the rep's
+       * whole lead page: every lead in the company, with a three-state switch
+       * over it (Mine / Available / All) instead of two separate pages. No mode
+       * means the page the owner has always had. A second copy of SalesPage is
+       * the one thing this must never become — see the note at the top of
+       * SalesPage.jsx.
+       *
+       * `leads` and `mine` are GONE as page ids. They are not cases here any
+       * more because they are not in any role's allowed list, so `section` can
+       * never hold one — SPLIT_FOR_ROLE above turns both into `floor` before it
+       * gets this far, and rewrites the address so the dead name stops being
+       * passed around. */
+      case "floor": return <SalesPage member={member} mode="floor" />;
       case "operations": return <Operations member={member} />;
       case "inbox": return <Inbox member={member} />;
+      /* A REP'S OWN MAILBOX. Same component, `mine` set: their own address, their
+       * own threads, no sharing controls. The lock that matters is not this prop
+       * — it is resolveMailbox() in lib/gmail-mailbox.js, which refuses a rep a
+       * shared mailbox, and the policy added in migration 0020, which scopes the
+       * thread rows to addresses that person connected. This prop only changes
+       * the words on the screen. */
+      case "gmail": return <Inbox member={member} mine />;
       case "tickets": return <Tickets member={member} />;
       case "notes": return <NotesPage member={member} />;
-      case "brain": return <Brain member={member} />;
+      /* The COMPANY Brain for an owner or admin; a rep's OWN tone and formatting
+       * rules for a rep. They are different tables, not two views of one:
+       * admin_brain is admin-only at the database (0001) and api/ai-draft.js
+       * refuses to load it for a rep on purpose, so a rep must never be routed
+       * to Brain.jsx even by accident. */
+      case "brain": return member.role === "sales"
+        ? <RepBrain member={member} />
+        : <Brain member={member} />;
       case "platform": return <PlatformView member={member} />;
       case "vault": return <VaultPage member={member} />;
       case "team": return <TeamPage member={member} />;
@@ -199,7 +262,7 @@ export default function AdminDashboard({ go }) {
             </span>
           </div>
         )}
-        <Header section={section} preview={!isConfigured()} />
+        <Header section={section} role={member.role} preview={!isConfigured()} />
         <div className="dash-content">
           {renderSection()}
         </div>

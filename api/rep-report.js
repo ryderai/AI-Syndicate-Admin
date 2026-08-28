@@ -121,15 +121,44 @@ export default async function handler(req, res) {
     return res.status(500).json({ ok: false, error: `Could not read your sales records: ${err?.message || "unknown error"}` });
   }
 
+  /* THE PERSON'S OWN WORDING RULES. Read here, for the caller only, and handed to
+   * repFactsText so the model and the honesty gate read the SAME string —
+   * otherwise the gate throws away answers for using words it was never shown,
+   * which is the defect renderRepClaims exists to document.
+   *
+   * A failed read is not an empty one and it is not fatal: the answer still gets
+   * written on the house rules, and the reason is logged for whoever has to run
+   * migration 0022. */
+  let personalRows = [];
+  if (userId) {
+    const { data: brainRows, error: brainErr } = await admin
+      .from("admin_user_brain")
+      .select("kind, setting_key, title, body, enabled")
+      .eq("user_id", userId)
+      .eq("enabled", true)
+      .order("created_at", { ascending: true })
+      .limit(60);
+    if (brainErr) console.error("[rep-report] could not read the caller's own AI rules:", brainErr.message);
+    else personalRows = brainRows || [];
+  }
+
   const facts = assembleRepFacts(snap, { nowMs });
   /* The rendered snapshot plus the house rules its numbers are judged by. The
    * SAME string goes to the model and to the gate — see repFactsText. */
-  const factsText = repFactsText(snap, nowMs);
+  const factsText = repFactsText(snap, nowMs, personalRows);
 
   let report = null;
   let countedOnly = true;
   let gateReason = null;
   let usage = null;
+  /* WHICH of the three reasons the words ended up counted rather than written.
+   * "a draft was thrown away", "nothing was ever sent" and "the AI did not
+   * answer" are three different sentences to a reader, and the panel was
+   * inferring which one to print by matching the prose of `gateReason` — so a
+   * reworded reason would have silently changed what the screen claimed.
+   * Aug 26 2026, after a checker caught the preview case saying a draft had
+   * been thrown away when nothing had been sent at all. */
+  let countedCause = "not_sent";
 
   if (isAiConfigured()) {
     try {
@@ -172,6 +201,8 @@ export default async function handler(req, res) {
           meta: { kind: "rep_report", user: member.membership?.email, role },
         }).then(() => {}, () => {});
       } else {
+        /* A draft really was written and read, and it failed. */
+        countedCause = "draft_failed";
         gateReason = result.cappedOut
           ? "the answer stopped part way through, so it would have been half a story"
           : verdict.why;
@@ -179,9 +210,11 @@ export default async function handler(req, res) {
     } catch (err) {
       /* A 503 from the model is not a server error here — the counted version
        * still answers the question, so say what happened and ship it. */
+      countedCause = "no_draft";
       gateReason = `the AI did not answer: ${err?.message || "unknown error"}`;
     }
   } else {
+    countedCause = "not_sent";
     gateReason = "there is no ANTHROPIC_API_KEY set, so nothing could be written";
   }
 
@@ -200,6 +233,7 @@ export default async function handler(req, res) {
     summary: report.summary || "",
     body: report.body || "",
     counted_only: countedOnly,
+    counted_cause: countedCause,
     gate_reason: gateReason,
     facts: {
       counts: facts.counts,
@@ -234,6 +268,7 @@ export default async function handler(req, res) {
       body: report.body || "",
       facts: row.facts,
       counted_only: countedOnly,
+      counted_cause: countedCause,
       gate_reason: gateReason,
       saved,
       generated_at: savedRow?.created_at || generatedAt,

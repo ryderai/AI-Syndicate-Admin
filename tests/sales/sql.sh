@@ -81,6 +81,36 @@ else
   bad "0009 is not re-runnable:"; sed 's/^/       /' /tmp/salesmig.err
 fi
 
+# AND NOW PUT THE LATER MIGRATIONS BACK. Added Aug 28 2026, after a checker
+# noticed this file was testing a rule the repo had already replaced.
+#
+# Re-applying 0009 above is a real check and stays. But 0009 contains
+# `create or replace function public.admin_lead_claim_text(...)`, so running it
+# a second time — AFTER 0021 — quietly REVERTS that function to 0009's version:
+# the gate goes back to `email_opened_at is not null`, and 0020's row-lock line
+# inside the function disappears. Nothing errors. Section 4b below then passed
+# for a whole day while proving the OLD rule, and the two lines this build
+# actually changed were not covered by anything here.
+#
+# This is the same hazard 0018_lead_tags.sql warns about in its own words, and
+# the reason 0020 section 6b writes down a re-run ORDER. So: re-apply 0020 and
+# 0021, in that order, and check the function really is the new one before any
+# assertion leans on it.
+for f in supabase/migrations/0020_rep_scoping.sql supabase/migrations/0021_outreach_tracking.sql; do
+  if ! $PSQL -f "$f" >/dev/null 2>/tmp/salesmig.err; then
+    bad "could not re-apply $f after 0009:"; sed 's/^/       /' /tmp/salesmig.err
+  fi
+done
+GATE=$($PSQL -tAc "select pg_get_functiondef(p.oid) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='admin_lead_claim_text';")
+case "$GATE" in
+  *first_reply_at*) ok "after 0009 was re-run, 0021's one-text gate is back (first_reply_at)" ;;
+  *) bad "re-running 0009 left the OLD one-text gate in place — every assertion in 4b would be testing the replaced rule" ;;
+esac
+case "$GATE" in
+  *"owner_id = auth.uid()"*) ok "...and 0020's row lock is back inside the function too" ;;
+  *) bad "the row-lock line is missing from admin_lead_claim_text after the re-runs" ;;
+esac
+
 # ------------------------------------------------------------------
 # People to act as.
 # ------------------------------------------------------------------
@@ -181,8 +211,14 @@ as_rep "insert into public.admin_lead_lists (name) values ('Rep List');" >/dev/n
   && ok "a sales rep can add a list" || bad "a sales rep could not add a list"
 as_rep "insert into public.admin_proposals (lead_id, title, amount_cents) values ('aaaaaaaa-0000-0000-0000-000000000001','Rep Proposal', 250000);" >/dev/null 2>&1 \
   && ok "a sales rep can write a proposal" || bad "a sales rep could not write a proposal"
+# LABEL CORRECTED Aug 28 2026. This used to read "a sales rep can move any
+# lead's stage (no locks between reps)". That was true when it was written and is
+# not true now: 0020 put the lock on the row. Lead ...0001 is owned by THIS rep,
+# so what this line proves is that a rep can still work their OWN lead. The
+# "another rep's lead is refused" half lives in tests/floor-scoping/sql.sh
+# section 3, and is mutation-proved there.
 as_rep "update public.admin_leads set stage='meeting' where id='aaaaaaaa-0000-0000-0000-000000000001';" >/dev/null 2>&1 \
-  && ok "a sales rep can move any lead's stage (no locks between reps)" || bad "a sales rep could not update a lead"
+  && ok "a sales rep can move the stage of a lead THEY OWN" || bad "a sales rep could not update their own lead"
 
 # A DELETE that row-level security refuses does not raise an error — it
 # deletes nothing and reports success. So this counts rows, not exit codes.
@@ -224,7 +260,7 @@ fi
 # read 0 and both write 1. This claims it in one statement, so exactly one
 # caller wins.
 $PSQL <<'SQL' >/dev/null
-insert into public.admin_leads (id, name, stage, owner_id, phone, email_opened_at, texts_sent)
+insert into public.admin_leads (id, name, stage, owner_id, phone, first_reply_at, texts_sent)
 values ('aaaaaaaa-0000-0000-0000-000000000003','Text Test','contacted',
         '22222222-2222-2222-2222-222222222222','555-0100', now() - interval '1 day', 0);
 SQL
@@ -239,13 +275,13 @@ fi
 
 # And with no email open on record, nobody gets one.
 $PSQL <<'SQL' >/dev/null
-insert into public.admin_leads (id, name, stage, owner_id, phone, email_opened_at, texts_sent)
+insert into public.admin_leads (id, name, stage, owner_id, phone, first_reply_at, texts_sent)
 values ('aaaaaaaa-0000-0000-0000-000000000004','Cold Text','contacted',
         '22222222-2222-2222-2222-222222222222','555-0101', null, 0);
 SQL
 COLD=$(as_rep_val "select public.admin_lead_claim_text('aaaaaaaa-0000-0000-0000-000000000004');")
-[ "$COLD" = "f" ] && ok "no text is allowed before an email open is recorded" \
-  || bad "a cold contact was allowed a text (got '$COLD')"
+[ "$COLD" = "f" ] && ok "no text is allowed before a REPLY is on record (Aug 27: this used to say 'an email open', which nothing has ever written)" \
+  || bad "a contact who has not replied was allowed a text (got '$COLD')"
 
 # The counter can never go negative, whatever writes it.
 if $PSQL -c "insert into public.admin_leads (name, texts_sent) values ('bad counter', -5);" >/dev/null 2>&1; then
@@ -285,10 +321,32 @@ $PSQL <<'SQL' >/dev/null
 insert into public.admin_leads (id, name, stage, owner_id)
 values ('aaaaaaaa-0000-0000-0000-000000000002','Never Rung','new','22222222-2222-2222-2222-222222222222');
 SQL
+# 0009 is run again here ON PURPOSE — its backfill is what this section tests.
 $PSQL -f supabase/migrations/0009_sales.sql >/dev/null 2>&1
 NEVER=$($PSQL -tAc "select first_contact_at is null and claimed_at is not null from public.admin_leads where id='aaaaaaaa-0000-0000-0000-000000000002';")
 [ "$NEVER" = "t" ] && ok "the backfill stamps a claim date but never invents a first contact" \
   || bad "the backfill invented a first-contact date for a lead nobody has rung (got '$NEVER')"
+
+# AND PUT THE LATER MIGRATIONS BACK AGAIN. Added Aug 28 2026, same reason as the
+# block near the top of this file: the line above re-ran 0009, which silently
+# reverts admin_lead_claim_text() to 0009's version — the old `email_opened_at`
+# gate, and 0020's row-lock line gone from inside it.
+#
+# NOTHING BELOW THIS POINT CURRENTLY READS THAT FUNCTION, so no assertion in this
+# file is wrong today. This is here so that the NEXT assertion somebody appends
+# is not wrong either, and so the file does not END with the database holding a
+# rule the repo replaced. A trap that is only harmless because of where it sits
+# in the file is still a trap.
+for f in supabase/migrations/0020_rep_scoping.sql supabase/migrations/0021_outreach_tracking.sql; do
+  if ! $PSQL -f "$f" >/dev/null 2>/tmp/salesmig.err; then
+    bad "could not re-apply $f after the backfill re-run:"; sed 's/^/       /' /tmp/salesmig.err
+  fi
+done
+GATE2=$($PSQL -tAc "select pg_get_functiondef(p.oid) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='admin_lead_claim_text';")
+case "$GATE2" in
+  *first_reply_at*) ok "this file ends with 0021's one-text gate in place, not 0009's" ;;
+  *) bad "this file ends with the OLD one-text gate in the database — the next assertion added below would test the replaced rule" ;;
+esac
 
 echo ""
 if [ "$fails" -gt 0 ]; then

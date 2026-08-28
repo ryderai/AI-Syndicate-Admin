@@ -18,11 +18,18 @@ import {
 } from "../../lib/data.js";
 import { useScreenContext } from "../../lib/screenContext.js";
 
-/* INBOX — the team mailbox.
+/* INBOX — a mailbox worked inside the console.
  *
- * What it is: growth@aisyndicate.com (or anyone's own Gmail) worked inside the
- * console, with the things Gmail cannot do bolted on — a status per email, the
- * client it belongs to, who owns it, and a dated follow-up.
+ * WHOSE MAILBOX depends on who is looking, and it is one component either way:
+ *   owner / admin   <Inbox member={member} />        the shared team inbox,
+ *                                                   growth@aisyndicate.com
+ *   sales rep       <Inbox member={member} mine />   their own work address,
+ *                                                   and nobody else's
+ * See the note above the component for what `mine` does and, more importantly,
+ * what it does not do.
+ *
+ * Either way it is Gmail with the things Gmail cannot do bolted on — a status
+ * per email, the client it belongs to, who owns it, and a dated follow-up.
  *
  * THE ONE IMPORTANT IDEA
  * Gmail owns the mail. We own the bookkeeping. Those are two different reads:
@@ -49,7 +56,29 @@ import { useScreenContext } from "../../lib/screenContext.js";
  * and Waiting views work at all.
  */
 
-const PREVIEW_MAILBOX = "growth@aisyndicate.com";
+/* THE SAMPLE MAILBOX IN PREVIEW MODE — whose address the page pretends to hold
+ * when there are no real keys.
+ *
+ * This was a constant reading "growth@aisyndicate.com" for everybody, and for a
+ * sales rep that was false in two separate ways:
+ *   1. growth@ is the SHARED team inbox. A rep is never allowed to open it —
+ *      resolveMailbox() in lib/gmail-mailbox.js refuses a non-admin a shared
+ *      mailbox, and migration 0020 § 5 only hands a rep threads from an address
+ *      they connected themselves. So the sample screen showed them a mailbox
+ *      that would vanish the moment real keys went in.
+ *   2. It is not their address. The whole point of preview mode is to see what
+ *      your own console will look like.
+ *
+ * So it is a function of who is looking. `shared` is FALSE for a rep on purpose:
+ * a rep can never have a shared mailbox (api/gmail-accounts.js refuses them),
+ * and drawing the "(team)" tag beside their own name would be a lie on screen.
+ *
+ * The fallback address is only reached if a member row somehow has no email —
+ * it says "sample" out loud rather than borrowing the team inbox's name. */
+function previewMailboxFor(isAdminRole, email) {
+  if (isAdminRole) return { email_address: "growth@aisyndicate.com", shared: true };
+  return { email_address: email || "rep@aisyndicate.com", shared: false };
+}
 
 /* Statuses that a view groups together. `match` is the only definition of what
  * a view means — the counts and the list both run through it. */
@@ -105,13 +134,41 @@ function dueAtFromDate(dateStr) {
   return new Date(`${dateStr}T09:00:00`).toISOString();
 }
 
-export default function Inbox({ member }) {
+/* `mine` — this page is ONE PERSON'S OWN MAILBOX, not the team inbox.
+ *
+ * AdminDashboard.jsx renders <Inbox member={member} mine /> for a sales rep and
+ * <Inbox member={member} /> for an owner or admin. The flag changes the WORDS on
+ * screen and hides the sharing tick, and that is all it does.
+ *
+ * IT IS NOT A PERMISSION. What actually stops a rep reaching somebody else's
+ * mail is in two other places, both server-side: resolveMailbox() in
+ * lib/gmail-mailbox.js refuses a non-admin a shared mailbox, and the row policy
+ * in migration 0020 § 5 only gives a rep threads whose mailbox is an address
+ * they connected themselves. A prop the browser passes is politeness, never
+ * security — trap #6 of CONTEXT-FOR-AI § 8, for the fourth time in this repo.
+ *
+ * SEND STAYS ON, AT EVERY ROLE, AND THAT IS DELIBERATE.
+ * A rep reads the draft and presses send on their own outreach, from their own
+ * mailbox. Ryder decided that on Aug 27 2026. The standing "nothing is ever
+ * sent from the console" rule is about CLIENT REPORTS — it is enforced in
+ * clientReports.jsx (`draftInGmail` saves a Gmail DRAFT and never sends), and it
+ * is a different thing to a different audience. Do not "fix" one into the other:
+ * turning Send off here breaks the whole reason a rep has this page, and turning
+ * sending ON for client reports would mail a client a report nobody read.
+ */
+export default function Inbox({ member, mine = false }) {
   const health = useHealth();
   const now = useNow();
   const configured = isConfigured();
   const gmailReady = Boolean(configured && health?.gmail);
   const userId = member?.user_id || null;
+  const myEmail = member?.email || null;
   const isAdminRole = ["owner", "admin"].includes(member?.role);
+  /* Two separate reasons the sharing tick must not be on screen, AND'd here so
+   * there is one name to read: only an owner/admin may mark a mailbox shared
+   * (api/gmail-accounts.js refuses anybody else), and on a person's own-mail
+   * page sharing is the wrong idea whoever they are. */
+  const canShare = isAdminRole && !mine;
 
   const [mailboxes, setMailboxes] = useState(null); // null = still checking
   const [mailbox, setMailbox] = useState(null);
@@ -168,17 +225,31 @@ export default function Inbox({ member }) {
 
   /* ---------------- mailboxes ---------------- */
   const loadMailboxes = useCallback(async () => {
-    if (!gmailReady) {
-      setMailboxes([{ email_address: PREVIEW_MAILBOX, shared: true, mine: true, needs_reconnect: false, sample: true }]);
-      setMailbox(PREVIEW_MAILBOX);
+    /* SAMPLE MAIL IS DEMO-ONLY NOW. Ryder, Aug 28 2026: "it should never show
+     * the sample rows ever again". It used to appear whenever Gmail was not
+     * connected, which made an unconnected mailbox look like a working one and
+     * hid the Connect button completely.
+     * It survives in ONE place: `!configured` — no Supabase keys at all, which
+     * is the role-preview demo. With a real console, no mailbox means the
+     * connect screen, every time. */
+    if (!configured) {
+      const sample = previewMailboxFor(isAdminRole, myEmail);
+      setMailboxes([{ ...sample, mine: true, needs_reconnect: false, sample: true }]);
+      setMailbox(sample.email_address);
       return;
     }
+    if (!gmailReady) { setMailboxes([]); setMailbox(null); return; }
     const res = await apiFetch("/api/gmail-accounts");
     if (!res.ok) { setMailboxes([]); toast.error("Could not check the mailboxes", res.error); return; }
     const list = res.data.mailboxes || res.data.accounts || [];
     setMailboxes(list);
     setMailbox((cur) => (cur && list.some((m) => m.email_address === cur) ? cur : (list[0]?.email_address || null)));
-  }, [gmailReady]);
+    /* Deps are the two PRIMITIVES the sample mailbox is worked out from, not the
+     * `member` object. AdminDashboard.jsx rebuilds `member` with a spread on
+     * every render, so a dependency on the object itself would give this
+     * callback a new identity every render and the effect below would re-run for
+     * ever. */
+  }, [gmailReady, configured, isAdminRole, myEmail]);
 
   useEffect(() => { if (health) loadMailboxes(); }, [health, loadMailboxes]);
 
@@ -197,11 +268,12 @@ export default function Inbox({ member }) {
     setListError(null);
     setGmailThreads(null);
     setPageToken(null);
-    if (!gmailReady) {
+    if (!configured) {
       setGmailThreads(sampleMailThreads({ q: search }));
       await loadRows(box);
       return;
     }
+    if (!gmailReady) { setGmailThreads([]); return; }
     const params = new URLSearchParams({ account: box });
     if (search?.trim()) params.set("q", search.trim());
     const res = await apiFetch(`/api/gmail-threads?${params.toString()}`);
@@ -215,8 +287,14 @@ export default function Inbox({ member }) {
     setGmailThreads(res.data.threads || []);
     setPageToken(res.data.nextPageToken || null);
     setNeedsReconnect(Boolean(res.data.needsReconnect));
+    /* /api/gmail-threads answers 207 with a `problems` list when the mail came
+     * through but one of its own bookkeeping writes did not — a reply it spotted
+     * and could not record, or the "last synced" time. apiFetch treats 207 as ok
+     * (it is), so without this the failure would be invisible on screen. Shown as
+     * a warning, not an error: the mail on screen is correct. */
+    for (const p of res.data.problems || []) toast.warn("Saved the mail, not the note", p);
     await loadRows(box);
-  }, [gmailReady, loadRows]);
+  }, [gmailReady, configured, loadRows]);
 
   useEffect(() => { if (mailbox) loadThreads(mailbox, { search: "" }); }, [mailbox, loadThreads]);
 
@@ -471,7 +549,7 @@ export default function Inbox({ member }) {
     setOpenId(thread.id);
     setMessages(null);
     setThreadLoading(true);
-    if (!gmailReady) {
+    if (!configured) {
       sampleMarkRead(thread.id);
       setGmailThreads((cur) => (cur || []).map((t) => (t.id === thread.id ? { ...t, unread: false } : t)));
       setMessages(sampleThreadMessages(thread.id));
@@ -526,7 +604,7 @@ export default function Inbox({ member }) {
     if (!to?.length) { toast.warn("No recipient", "This thread has no address to reply to."); return; }
     setSending(true);
 
-    if (!gmailReady) {
+    if (!configured) {
       sampleAppendMessage(thread.id, { from: mailbox, fromEmail: mailbox, to: to.join(", "), body });
       await patchThread(thread, { status: "waiting" });
       setMessages(sampleThreadMessages(thread.id));
@@ -657,7 +735,14 @@ export default function Inbox({ member }) {
             {gmailReady && mailboxRow?.mine && (
               <button className="btn btn-ghost" style={{ color: "var(--danger)" }} onClick={disconnect}>Disconnect</button>
             )}
-            {mailboxRow?.mine && isAdminRole && (
+            {/* The sharing tick is hidden on a rep's own page (`mine`) as well
+              * as for a non-admin role. Both are needed and they are not the
+              * same check: api/gmail-accounts.js refuses `shared: true` from
+              * anybody who is not an owner or admin, so for a rep the box could
+              * only ever produce a red error — and on the `mine` page the whole
+              * idea is wrong, because that page is one person's own mail and
+              * sharing it would hand the team somebody's private inbox. */}
+            {canShare && mailboxRow?.mine && (
               <label className="adm-inbox-check" title="Shared means every owner and admin can read this mailbox and reply from it. Nobody ever sees the password or the token.">
                 <input
                   type="checkbox"
@@ -754,20 +839,111 @@ export default function Inbox({ member }) {
       )}
 
       {/* ---- the list ---- */}
-      {gmailThreads === null ? (
+      {/* THE ORDER OF THESE THREE BRANCHES MATTERS, and it was wrong until
+        * Aug 27 2026. "No mailbox connected" used to be checked AFTER
+        * `gmailThreads === null`. loadThreads() returns straight away when there
+        * is no mailbox (see it above) and therefore never clears gmailThreads
+        * from its null starting value — so somebody with nothing connected sat
+        * looking at "Loading the mail..." for ever and the connect panel below
+        * could not be reached on a fresh page. A sales rep, who has nothing
+        * connected by definition, could never get past it.
+        *
+        * Nothing connected is the ANSWER, not a loading state, so it is asked
+        * first. */}
+      {!mailbox ? (
+        /* CONNECT SCREEN — deliberately one button and one line.
+         * Ryder, Aug 28 2026: the old version was a bordered card with a
+         * four-step list and a three-row permission table. Nobody read it, and
+         * it buried the only thing there is to do here.
+         *
+         * The permission detail is NOT deleted, it is folded into the <details>
+         * below. It is a promise made to somebody about to attach their own
+         * work mailbox, so it stays available — just not in the way. Native
+         * <details> keeps it keyboard reachable with no JS.
+         *
+         * Every line inside it is still checked against GMAIL_SCOPE_LIST in
+         * lib/google-oauth.js. If anybody widens the scope list, this becomes a
+         * lie — change it in the same commit. */
+        <div style={{ padding: "72px 24px", textAlign: "center" }}>
+          <h2 style={{
+            fontFamily: "var(--display)", fontSize: 22, fontWeight: 700,
+            color: "var(--ink)", margin: 0,
+          }}>
+            {mine ? "Connect your work email" : "Connect a mailbox"}
+          </h2>
+
+          <p style={{ margin: "10px auto 0", fontSize: 14, color: "var(--ink-dim)", maxWidth: 420, lineHeight: 1.6 }}>
+            Takes about twenty seconds. You only do it once.
+          </p>
+
+          <button
+            className="btn btn-accent"
+            onClick={connect}
+            disabled={!gmailReady}
+            style={{ marginTop: 28, padding: "16px 40px", fontSize: 16, fontWeight: 600 }}
+          >
+            Continue with Google
+          </button>
+
+          {/* Only say this once the server has actually ANSWERED. useHealth
+            * returns null while the request is in flight, which made this claim
+            * "the keys are not set" on every single page load for the second or
+            * two before health arrived — including when they were set fine.
+            * A loading state is not a failure. Aug 28 2026. */}
+          {/* A FAILED health call is not the same as a missing key, and until
+            * Aug 28 2026 this screen could not tell them apart. getHealth()
+            * fabricates an all-false object when the request fails (adminApi.js
+            * line 41), so an expired sign-in rendered as "your Google keys are
+            * not set" — and cost an hour of chasing keys that were fine.
+            * The fabricated object carries `error`. Check it first. */}
+          {health?.error && (
+            <p className="adm-inbox-opthelp" style={{ margin: "14px auto 0", maxWidth: 440, fontSize: 13 }}>
+              Could not reach the server, so nothing below is confirmed. Most often this is a sign-in that
+              has gone stale — sign out and back in. ({health.error})
+            </p>
+          )}
+          {health && !health.error && !gmailReady && (
+            <p className="adm-inbox-opthelp" style={{ margin: "14px auto 0", maxWidth: 420, fontSize: 13 }}>
+              The console&apos;s own Google keys are not set on the server yet, so this button cannot do anything.
+            </p>
+          )}
+
+          <p style={{ margin: "18px auto 0", fontSize: 12.5, color: "var(--ink-faint)", maxWidth: 440, lineHeight: 1.6 }}>
+            That screen is Google&apos;s, not ours — we never see your password.
+          </p>
+
+          <details style={{ marginTop: 18, textAlign: "left", maxWidth: 440, marginLeft: "auto", marginRight: "auto" }}>
+            <summary style={{ cursor: "pointer", fontSize: 12.5, color: "var(--ink-dim)", textAlign: "center" }}>
+              What can we do, and who can see it?
+            </summary>
+            <div style={{ marginTop: 12, fontSize: 12.5, color: "var(--ink-dim)", lineHeight: 1.65 }}>
+              <p style={{ margin: "0 0 8px" }}>
+                <strong style={{ color: "var(--ink-2)" }}>We can</strong> read your mail, send, reply, label a
+                thread and archive it.
+              </p>
+              <p style={{ margin: "0 0 8px" }}>
+                <strong style={{ color: "var(--ink-2)" }}>We cannot</strong> permanently delete anything or empty
+                your bin. We never ask Google for that permission.
+              </p>
+              <p style={{ margin: 0 }}>
+                <strong style={{ color: "var(--ink-2)" }}>Who sees it.</strong>{" "}
+                {mine
+                  ? <>No other rep can open this mailbox or read the mail in it. An owner or admin can see what the console files ABOUT a thread — sender, subject, first line, status, notes — never the message bodies, which are never stored.</>
+                  : <>Only you, until you tick &ldquo;Shared with the team&rdquo;. Sharing lets every owner and admin read it and reply from it.</>}
+              </p>
+            </div>
+          </details>
+        </div>
+      ) : gmailThreads === null ? (
         <div className="card" style={{ padding: 32, textAlign: "center", color: "var(--ink-dim)", fontSize: 13.5 }}>Loading the mail...</div>
-      ) : !mailbox ? (
-        <EmptyState
-          icon="✉" title="No mailbox connected yet"
-          body="One person connects growth@aisyndicate.com and switches Shared on. Google asks you to approve it on its own screen, and the console only ever asks to read, send, label and archive - never to delete."
-          action={gmailReady ? <button className="btn btn-accent" onClick={connect}>Connect a mailbox</button> : null}
-        />
       ) : shown.length === 0 ? (
         <EmptyState
           icon="✉"
           title={`Nothing in ${activeView.label}`}
           body={view === "needs"
-            ? "Nothing is waiting on us in this mailbox. Check Waiting on them to see what other people owe us."
+            ? (mine
+              ? "Nothing is waiting on you in this mailbox. Check Waiting on them to see what other people owe you."
+              : "Nothing is waiting on us in this mailbox. Check Waiting on them to see what other people owe us.")
             : "Try another view, clear the filters, or search the whole mailbox."}
         />
       ) : (
