@@ -9,6 +9,7 @@ import { Toaster } from "./admin/shared.jsx";
 import Overview from "./admin/Overview.jsx";
 import Finance from "./admin/Finance.jsx";
 import Invoices from "./admin/Invoices.jsx";
+import AiCost from "./admin/AiCost.jsx";
 import ClientsPage from "./admin/Clients.jsx";
 import SalesPage from "./admin/SalesPage.jsx";
 import Operations from "./admin/Operations.jsx";
@@ -184,6 +185,7 @@ export default function AdminDashboard({ go }) {
         : <Overview member={member} setSection={setSection} />;
       case "finance": return <Finance member={member} setSection={setSection} />;
       case "invoices": return <Invoices member={member} />;
+      case "ai-cost": return <AiCost member={member} />;
       /* The query comes through: `?id=` is which client is open, and the
        * Google sign-in bounces back through `?connect=`. Dropping it would
        * swallow both. */

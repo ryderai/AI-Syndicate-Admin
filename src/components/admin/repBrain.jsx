@@ -294,7 +294,9 @@ export default function RepBrain({ member }) {
     setPreview({ busy: true });
     const res = await apiFetch("/api/ai-draft", {
       method: "POST",
-      body: { kind: "lead_outreach", context: SAMPLE_LEAD },
+      /* A sample draft against a made-up lead, so there is no client and no
+       * real record to attach. It still costs money, so it is still logged. */
+      body: { kind: "lead_outreach", context: SAMPLE_LEAD, surface: "brain" },
     });
     if (!res.ok) {
       /* NO FAKE DRAFT, EVER. apiFetch answers { ok:false, preview:true } when the

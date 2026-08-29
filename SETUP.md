@@ -1247,3 +1247,65 @@ its own once the Supabase keys are set.
 **Still not working after all six:** the site-scan button. That needs the scanner's address on the
 server (`PLATFORM_SCORE_URL`), which nobody has yet. The button stays off and says why. Everything
 else on those pages works.
+
+## Migration 0024 — AI usage and cost (added Aug 28 2026)
+
+**What it does.** Every AI call the console makes is recorded with what it cost, who asked, which
+client it was for and which page it came from. Before this, the cost was guessed with one price
+copied into seven files.
+
+**One thing to run, and nothing to configure.** No new keys. No cron. Nothing to switch on.
+
+1. Open Supabase → your project → **SQL Editor** → **New query**.
+2. Paste the whole of `supabase/migrations/0024_ai_usage.sql`.
+3. Press **Run**.
+
+That is it. It is safe to run twice.
+
+**What it did while you were not looking:**
+
+- Made a price book (`ai_model_prices`) and filled it with the nine Anthropic prices read off
+  Anthropic's own pricing page on Aug 28 2026. Every row records the URL it was copied from.
+- Added the columns the cost page groups on to `admin_usage_events`. Nothing was removed;
+  `cost_usd` is still there and still filled in.
+- Converted your old rows and labelled them `legacy`, because they were costed with the old
+  guessed price. They still show; they are just marked as estimates.
+- Made an empty `ai_provider_bills` table. **Nothing writes to it yet** — see below.
+
+**Where to look afterwards:** sidebar → **Finance** → the arrow next to it → **AI Cost**.
+
+### Adding a price for a model that is not Anthropic's
+
+Nothing in the console calls OpenAI, Gemini or Perplexity today, so no prices were invented for
+them. If one gets wired up, its calls will show on the AI Cost page with **NOT PRICED** beside
+them and their tokens counted but not costed. To fix that, add one row:
+
+```sql
+insert into public.ai_model_prices
+  (provider, model, effective_from, input_per_mtok, output_per_mtok,
+   cache_write_per_mtok, cache_read_per_mtok, source_url)
+values
+  ('openai', 'the-exact-model-id', '2026-08-28',
+   1000000,      -- $1.00 per million input tokens, written in millionths of a dollar
+   4000000,      -- $4.00 per million output tokens
+   null, null,   -- null means that provider has no such charge
+   'https://the-page-you-copied-it-from');
+```
+
+**A price is written in millionths of a dollar per million tokens.** $3.00 is `3000000`.
+$0.30 is `300000`. Whole numbers only — no decimal points anywhere.
+
+**Never edit a price row to change a price.** Add a new row with a later `effective_from` and put
+an `effective_to` on the old one. Old calls keep the price they were charged; new ones get the new
+one. Editing in place is how last month's total silently changes.
+
+### What is NOT set up, and why
+
+**The check against the real bill.** The page counts what we spend. It has never compared that to
+what Anthropic actually charged, because reading a provider's bill needs an **Admin key** — a
+different, higher-level key from the one that makes the calls, which only an organisation owner
+can create. Until one exists the page shows METERED with no BILLED column and says so on screen.
+
+**Platform and backend spend.** Anything Andrew's side sends to an AI is not in these numbers until
+it posts to `/api/usage-ingest`. The endpoint is ready and takes a dedupe key now, so a retry
+cannot double-count. Its request shape is documented at the top of `api/usage-ingest.js`.

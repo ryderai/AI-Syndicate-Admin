@@ -58,7 +58,8 @@
  */
 
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
-import { converse, isAiConfigured } from "../lib/ai-agent.js";
+import { converse, isAiConfigured, AGENT_MODEL } from "../lib/ai-agent.js";
+import { recordAiUsage } from "../lib/ai-usage.js";
 import { loadSystemContext, teamDate } from "../lib/brain-context.js";
 import {
   assembleRepFacts, buildRepInstruction, parseRepReport, checkRepReport, repFactsText,
@@ -66,7 +67,6 @@ import {
   tokensForWords, MAX_INSTRUCTION_CHARS,
 } from "../lib/rep-report.js";
 
-const COST = { input: 3.0, output: 15.0 };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -150,7 +150,6 @@ export default async function handler(req, res) {
   let report = null;
   let countedOnly = true;
   let gateReason = null;
-  let usage = null;
   /* WHICH of the three reasons the words ended up counted rather than written.
    * "a draft was thrown away", "nothing was ever sent" and "the AI did not
    * answer" are three different sentences to a reader, and the panel was
@@ -161,6 +160,11 @@ export default async function handler(req, res) {
   let countedCause = "not_sent";
 
   if (isAiConfigured()) {
+    /* Hoisted out of the try so the log below runs on EVERY path. */
+    let aiResult = null;
+    let aiStatus = "ok";
+    let aiError = null;
+    let aiErr = null;
     try {
       const words = wordsForRep(instruction);
       const system = [
@@ -177,6 +181,7 @@ export default async function handler(req, res) {
         maxTokens: tokensForWords(words),
       });
 
+      aiResult = result;
       const parsed = parseRepReport(result.text);
       const teamNames = (snap.team || []).map((t) => t.full_name).filter(Boolean);
       const verdict = parsed
@@ -191,17 +196,9 @@ export default async function handler(req, res) {
          * the body above has already checked it. */
         report = { ...parsed, summary: summaryFrom(parsed.body) };
         countedOnly = false;
-        usage = result.usage;
-        const cost = (usage.input_tokens * COST.input + usage.output_tokens * COST.output) / 1e6;
-        /* Best-effort. A missing usage table must not cost a rep their answer. */
-        await admin.from("admin_usage_events").insert({
-          source: "admin", model: "claude-sonnet-4-6",
-          input_tokens: usage.input_tokens, output_tokens: usage.output_tokens,
-          cost_usd: cost,
-          meta: { kind: "rep_report", user: member.membership?.email, role },
-        }).then(() => {}, () => {});
       } else {
         /* A draft really was written and read, and it failed. */
+        aiStatus = result.cappedOut ? "capped" : "rejected";
         countedCause = "draft_failed";
         gateReason = result.cappedOut
           ? "the answer stopped part way through, so it would have been half a story"
@@ -210,9 +207,34 @@ export default async function handler(req, res) {
     } catch (err) {
       /* A 503 from the model is not a server error here — the counted version
        * still answers the question, so say what happened and ship it. */
+      aiStatus = "failed";
+      aiErr = err;
+      aiError = String(err?.message || "unknown").slice(0, 120);
       countedCause = "no_draft";
       gateReason = `the AI did not answer: ${err?.message || "unknown error"}`;
     }
+
+    /* One log, every path. Never throws — see lib/ai-usage.js. */
+    await recordAiUsage(admin, {
+      model: AGENT_MODEL,
+      /* aiErr carries what converse() had already been billed for when it
+       * threw. Without it, four completed rounds of a five-round
+       * conversation are recorded as costing nothing. */
+      usage: aiResult?.usage ?? aiErr?.partialUsage,
+      requestId: aiResult?.requestId ?? aiErr?.partialRequestId,
+      latencyMs: aiResult?.latencyMs ?? aiErr?.latencyMs,
+      status: aiStatus,
+      errorCode: aiError,
+      feature: "rep_report",
+      surface: "floor",
+      /* About a person, not a client — so Internal, never split across clients. */
+      userId,
+      meta: {
+        role,
+        rounds: aiResult?.rounds,
+        ...(gateReason ? { rejected: gateReason } : {}),
+      },
+    });
   } else {
     countedCause = "not_sent";
     gateReason = "there is no ANTHROPIC_API_KEY set, so nothing could be written";

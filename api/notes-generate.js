@@ -39,9 +39,9 @@
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
 import { loadSystemContext } from "../lib/brain-context.js";
 import { computeNotes, notesToPromptLines } from "../lib/notes-engine.js";
-import { draft, isAiConfigured } from "../lib/ai.js";
+import { draft, isAiConfigured, AI_MODEL } from "../lib/ai.js";
+import { recordAiUsage } from "../lib/ai-usage.js";
 
-const COST = { input: 3.0, output: 15.0 };
 
 const REWRITE_INSTRUCTION = `Below are notes for an internal team board. Each one was produced by
 counting real records. Rewrite each one so a smart 12-year-old could act on it.
@@ -127,7 +127,9 @@ export default async function handler(req, res) {
   let aiUsed = false;
   let aiError = null;
   let finalNotes = counted;
-  const usageTotals = { input: 0, output: 0 };
+  /* Not a running total any more — each batch logs itself through
+   * recordAiUsage below. usageModel is kept only so a batch that THREW can say
+   * which model it would have used. */
   let usageModel = null;
 
   /* Rewritten in small batches, not all at once.
@@ -157,9 +159,32 @@ export default async function handler(req, res) {
         // stops note 7's words landing on note 6's facts.
         for (let j = 0; j < batch.length; j += 1) rewritten.push(part ? part[j] : null);
         if (!part) aiError = "One batch came back in the wrong shape, so those notes kept their counted wording.";
-        usageTotals.input += result.usage.input_tokens;
-        usageTotals.output += result.usage.output_tokens;
         usageModel = result.model;
+
+        /* ONE ROW PER BATCH, NOT ONE PER PAGE-LOAD.
+         *
+         * Writing today's notes is several real API calls, and the old code
+         * added them all up and wrote a single row with a single model name.
+         * That threw away the per-call request ids — the only thing that could
+         * ever match a row to a line on the provider's bill — and made a run of
+         * ten batches look like one call in every average on the page.
+         *
+         * These rows stay on Internal deliberately. One batch rewrites notes
+         * spanning several clients, so there is no single client to charge it
+         * to; splitting the batch per client would change what the feature
+         * costs, and inventing a split would be worse than leaving it whole. */
+        await recordAiUsage(admin, {
+          model: result.model || AI_MODEL,
+          usage: result.usage,
+          requestId: result.requestId,
+          latencyMs: result.latencyMs,
+          status: part ? "ok" : "rejected",
+          errorCode: part ? null : "batch_wrong_shape",
+          feature: "notes",
+          surface: "notes",
+          userId: member.user?.id || null,
+          meta: { batch: Math.floor(i / BATCH) + 1, batchSize: batch.length, notes: counted.length },
+        });
       }
       const parsed = rewritten;
       if (parsed) {
@@ -175,15 +200,23 @@ export default async function handler(req, res) {
         aiUsed = finalNotes.some((n) => n.written_by === "ai_written");
       }
 
-      const cost = (usageTotals.input * COST.input + usageTotals.output * COST.output) / 1e6;
-      admin.from("admin_usage_events").insert({
-        source: "admin", model: usageModel,
-        input_tokens: usageTotals.input, output_tokens: usageTotals.output,
-        cost_usd: cost, meta: { kind: "notes", user: member.membership.email, batches: Math.ceil(counted.length / BATCH) },
-      }).then(() => {}, () => {});
     } catch (err) {
       // The page is still correct without this. Say what happened; do not fail.
       aiError = `The AI rewrite failed (${err?.message || "unknown"}), so these are the counted words.`;
+      /* A batch that threw is still a call we may have been billed for. The
+       * batches BEFORE it already logged themselves above, so only the one that
+       * died is recorded here — with tokensUnknown, because the provider never
+       * told us how big it was. */
+      await recordAiUsage(admin, {
+        model: usageModel || AI_MODEL,
+        usage: null,
+        status: "failed",
+        errorCode: String(err?.message || "unknown").slice(0, 120),
+        feature: "notes",
+        surface: "notes",
+        userId: member.user?.id || null,
+        meta: { tokensUnknown: true, notes: counted.length },
+      });
     }
   }
 

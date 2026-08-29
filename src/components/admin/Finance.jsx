@@ -4,6 +4,7 @@ import { apiFetch } from "../../lib/adminApi.js";
 import { isConfigured } from "../../lib/supabase.js";
 import { toast } from "../../lib/toast.js";
 import { listClients, listUsage } from "../../lib/data.js";
+import { summarize, eventMonth, microsToCents, pricedCost } from "../../../lib/ai-cost.js";
 import { listExpenses, listInvoices, getFinanceSettings, saveFinanceSettings } from "../../lib/finance.js";
 import {
   SourceBadge, MetricCard, Modal, Field, TextInput, CountUp, fmtMoney,
@@ -337,12 +338,28 @@ export default function Finance({ member, setSection }) {
     const daysToPay = avgDaysToPay(invoiceRows);
     const collected = billedVsCollected(invoiceRows);
 
-    // AI spend, as measured by the usage feed — a cross-check on the typed cost.
-    let aiMeasuredThisMonth = 0;
-    for (const r of usage.rows || []) {
-      const k = monthKey(new Date(r.ts));
-      if (k === thisMonth) aiMeasuredThisMonth += Number(r.cost_usd || 0) * 100;
-    }
+    /* AI SPEND, as measured by the usage feed — a cross-check on the typed cost.
+     *
+     * THREE THINGS WERE WRONG HERE and each made the figure quietly false.
+     * Found by an adversarial review, Aug 28 2026:
+     *
+     * 1. `Number(r.cost_usd || 0)` read an UNPRICED call — one whose model has
+     *    no price row — as $0. Wire up a second provider and this cross-check
+     *    reads $0.00 against a real typed cost, making the typed figure look
+     *    like a 100% overstatement.
+     * 2. `* 100` on a dollars decimal produced a FRACTION of a cent
+     *    (0.012345 -> 1.2345) inside an accumulator lib/finance-math.js
+     *    requires to hold whole integers.
+     * 3. `monthKey(new Date(r.ts))` bucketed in the BROWSER's zone while
+     *    Overview.jsx used teamDate() for the same figure, so the two pages
+     *    disagreed about which month a 7pm-Central call belonged to.
+     *
+     * All three go through lib/ai-cost.js now — the same code the AI Cost page
+     * runs — so the three screens cannot drift apart again. */
+    const aiThisMonth = summarize((usage.rows || []).filter((r) => eventMonth(r) === thisMonth));
+    const aiPriced = pricedCost(aiThisMonth);
+    const aiMeasuredThisMonth = aiPriced === null ? null : microsToCents(aiPriced);
+    const aiUnpricedCalls = aiThisMonth.unpricedCalls;
     const aiTyped = byCategory["AI & APIs"] || 0;
 
     // Cost to serve one client this month, and per-client profit.
@@ -372,7 +389,7 @@ export default function Finance({ member, setSection }) {
       gm, nm, arpaNow, custChurn, revChurn, cacNow, ltvNow, ltvCac, payback, nrrNow, qr, be, cash, runway,
       categoryRows, vendorRows, fv, concentration, planRows,
       outstanding, overdue, dueThisWeek, aging, daysToPay, collected,
-      aiMeasuredThisMonth, aiTyped, costToServe, deliveryCost, clientCostRows,
+      aiMeasuredThisMonth, aiUnpricedCalls, aiTyped, costToServe, deliveryCost, clientCostRows,
       totalIn12: sum(Object.values(revenueByMonth)),
       totalOut12: sum(Object.values(costByMonth)),
       newCustomersThisMonth,
@@ -691,14 +708,26 @@ export default function Finance({ member, setSection }) {
           </div>
         )}
 
-        {calc.aiMeasuredThisMonth > 0 && (
+        {(calc.aiMeasuredThisMonth !== null || calc.aiUnpricedCalls > 0) && (
           <div className="adm-fin-callout">
-            <strong>Cross-check on the AI bill.</strong> The usage feed measured{" "}
-            <strong>{money(Math.round(calc.aiMeasuredThisMonth))}</strong> of AI spend this month.
-            You typed <strong>{money(calc.aiTyped)}</strong> in the "AI & APIs" category.
-            {Math.abs(calc.aiMeasuredThisMonth - calc.aiTyped) > Math.max(2000, calc.aiTyped * 0.25)
-              ? " Those are far enough apart to be worth a look — the typed figure is the one used in every number on this page."
-              : " Close enough. The typed figure is the one used on this page."}
+            <strong>Cross-check on the AI bill.</strong>{" "}
+            {calc.aiMeasuredThisMonth === null ? (
+              <>Nothing measurable this month: every AI call ran on a model with no price in the
+                book, so the feed cannot say what they cost. You typed{" "}
+                <strong>{money(calc.aiTyped)}</strong> in the &quot;AI &amp; APIs&quot; category, and that
+                is the figure every number on this page uses.</>
+            ) : (
+              <>The usage feed measured <strong>{money(calc.aiMeasuredThisMonth)}</strong> of AI
+                spend this month. You typed <strong>{money(calc.aiTyped)}</strong> in the
+                &quot;AI &amp; APIs&quot; category.
+                {Math.abs(calc.aiMeasuredThisMonth - calc.aiTyped) > Math.max(2000, calc.aiTyped * 0.25)
+                  ? " Those are far enough apart to be worth a look — the typed figure is the one used in every number on this page."
+                  : " Close enough. The typed figure is the one used on this page."}</>
+            )}
+            {calc.aiUnpricedCalls > 0 && (
+              <> {calc.aiUnpricedCalls} more calls this month have no price at all, so whatever
+                they cost is in neither figure — the AI Cost page lists them.</>
+            )}
           </div>
         )}
 

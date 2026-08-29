@@ -240,10 +240,31 @@ const previewStore = {
       const growth = 0.35 + 0.65 * ((369 - d) / 369);          // spend rises as we scale
       const weekday = [0.45, 1, 1.1, 1.05, 1, 0.95, 0.5][new Date(Date.now() - d * 86400000).getDay()];
       const calls = Math.round((30 + 70 * Math.abs(Math.sin(d * 1.7))) * growth * weekday);
+      /* Spread across the real groupings so the AI Cost page has something to
+       * group BY in preview. The ids are the preview store's own client ids.
+       * One model is deliberately left with no price row (`gpt-preview`) so the
+       * UNPRICED path is visible on screen rather than only in a test. */
+      const feat = ["assistant", "client_report", "notes", "rep_report", "email_draft"][d % 5];
+      const surf = ["overview", "client_detail", "notes", "floor", "inbox"][d % 5];
+      const client = [null, "c1", "c2", "c3", "c1"][d % 5];
+      const model = d % 17 === 0 ? "gpt-preview" : "claude-sonnet-4-6";
+      const unpriced = model === "gpt-preview";
+      const inTok = calls * 1900;
+      const outTok = calls * 620;
+      const micros = (inTok * 3 + outTok * 15);
       rows.push({
-        id: `u${d}`, ts: daysAgo(d), source: "platform", model: "claude-sonnet-4-6",
-        input_tokens: calls * 1900, output_tokens: calls * 620,
-        cost_usd: (calls * 1900 * 3 + calls * 620 * 15) / 1e6,
+        id: `u${d}`, ts: daysAgo(d), source: "platform",
+        provider: unpriced ? "openai" : "anthropic", model,
+        input_tokens: inTok, output_tokens: outTok,
+        cache_write_tokens: 0, cache_write_1h_tokens: 0,
+        cache_read_tokens: d % 3 === 0 ? Math.round(inTok * 0.6) : 0,
+        cost_micros: unpriced ? null : micros,
+        cost_usd: unpriced ? null : micros / 1e6,
+        client_id: client, user_id: `t${(d % 3) + 1}`,
+        feature: feat, surface: surf,
+        status: d % 23 === 0 ? "rejected" : "ok",
+        latency_ms: 700 + (d % 40) * 55,
+        billable: true, meta: {},
       });
     }
     return rows;
@@ -848,14 +869,132 @@ export async function deleteBrain(id) {
 /* USAGE + ACTIVITY + TEAM                                              */
 /* ------------------------------------------------------------------ */
 
-export async function listUsage(sinceDays = 30) {
-  if (!live()) return { rows: [...previewStore.usage], sample: true };
-  const since = new Date(Date.now() - sinceDays * 86400000).toISOString();
+/* Everything the AI Cost page groups on. `meta` is in the list because the
+ * attribution used to live ONLY in meta and this reader never fetched it, so
+ * no per-client or per-feature figure was possible at all. */
+const USAGE_COLS = [
+  "id", "ts", "source", "provider", "model", "request_id",
+  "input_tokens", "output_tokens", "cache_write_tokens", "cache_write_1h_tokens",
+  "cache_read_tokens", "cost_micros", "cost_usd", "price_id",
+  "client_id", "user_id", "feature", "surface", "entity_kind", "entity_id",
+  "status", "error_code", "latency_ms", "billable", "meta",
+].join(", ");
+
+/* One page of rows. 1,000 is Supabase's own default ceiling per request, so
+ * asking for more in one go silently gets 1,000 back. */
+const USAGE_PAGE = 1000;
+
+/* A hard stop, so a runaway query cannot hang the page — but unlike the old
+ * `.limit(5000)` this one is REPORTED when it is hit. */
+const USAGE_MAX = 50000;
+
+/**
+ * AI usage events.
+ *
+ * THE BUG THIS REPLACED, and it was live: the old reader had a bare
+ * `.limit(5000)` and never selected `meta`. Past 5,000 events in the window
+ * the AI figure on the Finance page was simply too low, with no warning, on
+ * the page whose whole premise is that every number says where it came from.
+ *
+ * It now pages until it has everything, and when it does hit the ceiling it
+ * says so — `truncated: true` — so a caller can print the caveat instead of a
+ * confident wrong number.
+ *
+ * `sinceDays` keeps working exactly as it did, so Overview and Finance are
+ * unchanged. Pass `{ fromMs, toMs }` for an explicit window.
+ */
+export async function listUsage(sinceDays = 30, opts = {}) {
+  if (!live()) return { rows: [...previewStore.usage], sample: true, truncated: false };
+
+  const fromMs = typeof opts.fromMs === "number" ? opts.fromMs : Date.now() - sinceDays * 86400000;
+  const toMs = typeof opts.toMs === "number" ? opts.toMs : null;
+
+  const rows = [];
+  let truncated = false;
+  for (let page = 0; page * USAGE_PAGE < USAGE_MAX; page += 1) {
+    let q = getSupabase()
+      .from("admin_usage_events").select(USAGE_COLS)
+      .gte("ts", new Date(fromMs).toISOString());
+    if (toMs) q = q.lte("ts", new Date(toMs).toISOString());
+    /* ORDERED ON ts AND THEN id, and the second one is load-bearing.
+     * `ts` is not unique — usage-ingest writes up to 500 rows in one call and
+     * recordAiUsage stamps whole milliseconds — and Postgres gives no stable
+     * order inside a tie group across two separate range queries. With 40 rows
+     * sharing a timestamp across a page boundary, page 1 can re-order and hand
+     * back rows page 0 already had while others are never returned at all. The
+     * old `.limit(5000)` was a known undercount; ordering on ts alone would
+     * have replaced it with a silent, non-repeatable one. */
+    const { data, error } = await q
+      .order("ts", { ascending: true })
+      .order("id", { ascending: true })
+      .range(page * USAGE_PAGE, (page + 1) * USAGE_PAGE - 1);
+    if (error) {
+      /* Rows already read are still true. Return them AND the error, so a page
+       * can show what it has and say the rest is missing — rather than
+       * throwing away good rows or, worse, presenting a part total as whole. */
+      /* `partial`, not `truncated`. They are different sentences on screen:
+       * one says "pick a shorter window", the other says "the database did not
+       * answer". The first version returned truncated for both. */
+      return { rows, error: error.message, sample: false, truncated: false, partial: true };
+    }
+    const batch = data || [];
+    rows.push(...batch);
+    if (batch.length < USAGE_PAGE) return { rows, sample: false, truncated: false };
+    if (rows.length >= USAGE_MAX) { truncated = true; break; }
+  }
+  return { rows, sample: false, truncated };
+}
+
+/** The price book, for the AI Cost page's own price table. */
+export async function listModelPrices() {
+  if (!live()) {
+    return { rows: [{
+      id: "p1", provider: "anthropic", model: "claude-sonnet-4-6",
+      effective_from: "2026-01-01", effective_to: null,
+      input_per_mtok: 3000000, output_per_mtok: 15000000,
+      cache_write_per_mtok: 3750000, cache_write_1h_per_mtok: 6000000,
+      cache_read_per_mtok: 300000, currency: "USD",
+      source_url: "https://platform.claude.com/docs/en/about-claude/pricing",
+    }], sample: true };
+  }
   const { data, error } = await getSupabase()
-    .from("admin_usage_events").select("ts, source, model, input_tokens, output_tokens, cost_usd")
-    .gte("ts", since).order("ts", { ascending: true }).limit(5000);
+    .from("ai_model_prices").select("*")
+    .order("provider", { ascending: true }).order("model", { ascending: true })
+    .order("effective_from", { ascending: false }).limit(500);
   if (error) return { rows: [], error: error.message, sample: false };
   return { rows: data || [], sample: false };
+}
+
+/**
+ * The provider's own bills, for the true-up.
+ * NOTHING WRITES TO THIS TABLE YET — that needs an Admin key, which only an org
+ * owner can create. An empty list here is the normal state, not a fault, and
+ * the page says "no bill on file" rather than showing a gap of 100%.
+ */
+export async function listProviderBills() {
+  if (!live()) return { rows: [], sample: true };
+  const { data, error } = await getSupabase()
+    .from("ai_provider_bills").select("*").order("period_start", { ascending: false }).limit(200);
+  /* A missing table is the expected state until 0024 has been run, and it is
+   * not worth an error banner. Anything else is. */
+  if (error) return { rows: [], error: error.message, sample: false, missing: /does not exist|schema cache/i.test(error.message) };
+  return { rows: data || [], sample: false };
+}
+
+/** Usage writes we are KNOWN to have lost. A hole nobody is told about is the
+ *  same as no books at all. */
+export async function listUsageMisses(sinceDays = 1) {
+  if (!live()) return { rows: [], sample: true };
+  const since = new Date(Date.now() - sinceDays * 86400000).toISOString();
+  const { data, error } = await getSupabase()
+    .from("admin_activity_log").select("id, created_at, body")
+    .eq("kind", "usage_write_failed").gte("created_at", since)
+    .order("created_at", { ascending: false }).limit(51);
+  if (error) return { rows: [], error: error.message, sample: false };
+  const rows = data || [];
+  // 51 asked for, 50 shown: fetching one more than you print is how a "there
+  // are more" line gets to be true rather than decorative.
+  return { rows: rows.slice(0, 50), more: rows.length > 50, sample: false };
 }
 
 export async function listActivity(limit = 30) {

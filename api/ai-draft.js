@@ -5,14 +5,14 @@
  *
  * Grounded in the AI Brain (enabled admin_brain rows) so the team's edits
  * to the Brain page change how every draft is written. Each call also logs
- * its own token usage into admin_usage_events (source: "admin"), so the
+ * its own token usage through lib/ai-usage.js, so the
  * console's AI spend shows up on the Overview page automatically. */
 
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
-import { draft, isAiConfigured } from "../lib/ai.js";
+import { draft, isAiConfigured, AI_MODEL } from "../lib/ai.js";
+import { recordAiUsage } from "../lib/ai-usage.js";
 
 // Rough cost table (USD per 1M tokens) — keep in sync with Anthropic pricing.
-const COST = { input: 3.0, output: 15.0 };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -95,15 +95,19 @@ export default async function handler(req, res) {
   try {
     const result = await draft({ kind, context, history, brainRows, personalRows });
 
-    // Log our own usage so admin AI spend is measured, not guessed.
-    const cost = (result.usage.input_tokens * COST.input + result.usage.output_tokens * COST.output) / 1e6;
-    await admin.from("admin_usage_events").insert({
-      source: "admin",
-      model: result.model,
-      input_tokens: result.usage.input_tokens,
-      output_tokens: result.usage.output_tokens,
-      cost_usd: cost,
-      meta: { kind, user: member.membership.email },
+    // Measured, not guessed, and on every path — see the catch below.
+    await recordAiUsage(admin, {
+      model: result.model || AI_MODEL,
+      usage: result.usage,
+      requestId: result.requestId,
+      latencyMs: result.latencyMs,
+      status: "ok",
+      feature: featureForKind(kind),
+      surface: surfaceOf(body),
+      clientId: body?.clientId || null,
+      userId: member.user?.id || null,
+      entity: body?.entityKind && body?.entityId ? { kind: body.entityKind, id: body.entityId } : null,
+      meta: { kind },
     });
 
     res.setHeader("Cache-Control", "private, no-store");
@@ -117,7 +121,47 @@ export default async function handler(req, res) {
       personalRulesRead,
     });
   } catch (err) {
+    /* A failed draft is still a call the provider may have billed us for. It is
+     * logged with tokensUnknown, because a call that threw never reported its
+     * token counts — so the FAILURE is countable even though its cost is not.
+     * Before this build these calls left no trace at all. */
+    await recordAiUsage(admin, {
+      model: AI_MODEL,
+      usage: null,
+      status: "failed",
+      errorCode: String(err?.message || "unknown").slice(0, 120),
+      feature: featureForKind(kind),
+      surface: surfaceOf(body),
+      clientId: body?.clientId || null,
+      userId: member.user?.id || null,
+      meta: { kind, tokensUnknown: true },
+    });
     const status = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
     return res.status(status).json({ error: err?.message || "Draft failed." });
   }
+}
+
+/* The draft kinds are the caller's vocabulary; FEATURES is the cost page's.
+ * Mapped in one place rather than at each call site, because two spellings of
+ * the same feature split one row on the page into two. */
+function featureForKind(kind) {
+  switch (kind) {
+    case "email_reply":
+    case "email_new":
+    case "ticket_reply":
+      return "email_draft";
+    case "lead_outreach":
+      return "outreach_draft";
+    case "chat":
+      return "assistant";
+    default:
+      return "other";
+  }
+}
+
+/* The page the person was on, when they told us. Never guessed from the kind:
+ * a lead outreach draft can be written from the Floor or from Sales, and
+ * pretending to know which would put real calls under the wrong heading. */
+function surfaceOf(body) {
+  return body?.surface || "unknown";
 }

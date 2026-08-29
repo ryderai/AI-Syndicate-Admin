@@ -25,6 +25,13 @@ const BASIS = {
   estimate: { label: "ESTIMATE", c: "#92400e", bg: "#fffbeb", hint: "Worked out with a formula from the numbers above. It is a projection, not a fact." },
   unknown: { label: "NOT MEASURED", c: "var(--ink-dim)", bg: "var(--bg-3)", hint: "We cannot work this out yet. Shown as a blank on purpose — a zero here would read as a fact." },
   sample: { label: "SAMPLE", c: "#92400e", bg: "#fffbeb", hint: "Sample data — preview only. Nothing real behind it." },
+  /* Added Aug 28 2026 for the AI Cost page. AI spend is the one cost we can
+   * measure ourselves, call by call, so it needs a badge of its own rather than
+   * borrowing "typed" (it is not typed) or "stripe" (no money moved). */
+  metered: { label: "METERED", c: "#065f46", bg: "#ecfdf5", hint: "Counted by us at the moment of the call, from the token numbers the AI company's own reply carried." },
+  billed: { label: "BILLED", c: "#1e3a8a", bg: "#eff6ff", hint: "The AI company's own figure — from their admin API, or typed off an invoice." },
+  unpriced: { label: "NOT PRICED", c: "#92400e", bg: "#fffbeb", hint: "We have the token counts but no price for that model yet. Shown as a gap on purpose — a zero here would read as free." },
+  drift: { label: "DRIFT", c: "#7c2d12", bg: "#fff7ed", hint: "The gap between what we counted and what the AI company charged, for the same month." },
 };
 
 export function BasisBadge({ basis, hint }) {

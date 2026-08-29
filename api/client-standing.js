@@ -18,12 +18,12 @@
  */
 
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
-import { draft, isAiConfigured } from "../lib/ai.js";
+import { draft, isAiConfigured, AI_MODEL } from "../lib/ai.js";
+import { recordAiUsage } from "../lib/ai-usage.js";
 import {
   assembleFacts, factsToText, deterministicStanding, parseStanding, checkStanding, STANDING_INSTRUCTION,
 } from "../lib/client-standing.js";
 
-const COST = { input: 3.0, output: 15.0 };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -86,6 +86,13 @@ export default async function handler(req, res) {
   let rejected = null;
 
   if (isAiConfigured()) {
+    /* Hoisted out of the try so the log below runs on EVERY path — accepted,
+     * rejected, and thrown. Before this build a call was logged only when its
+     * answer was used, so every rejected draft was money we spent and never
+     * counted, and there was no way to know how much. */
+    let aiResult = null;
+    let aiStatus = "ok";
+    let aiError = null;
     try {
       const brain = await admin
         .from("admin_brain").select("kind, title, body").eq("enabled", true)
@@ -96,6 +103,7 @@ export default async function handler(req, res) {
         context: `${STANDING_INSTRUCTION}\n\nFACTS:\n${factsText}`,
         brainRows: brain.data || [],
       });
+      aiResult = result;
       const parsed = parseStanding(result.text);
       /* Shape is not enough. checkStanding() throws the answer away if it
        * contains a number that is not in the facts, or promise wording. A
@@ -107,13 +115,8 @@ export default async function handler(req, res) {
         standing = parsed;
         source = "written";
         usage = result.usage;
-        const cost = (result.usage.input_tokens * COST.input + result.usage.output_tokens * COST.output) / 1e6;
-        await admin.from("admin_usage_events").insert({
-          source: "admin", model: result.model,
-          input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens,
-          cost_usd: cost, meta: { kind: "client_standing", client: client.name, user: member.membership.email },
-        });
       } else {
+        aiStatus = "rejected";
         rejected = verdict.why;
         await admin.from("admin_activity_log").insert({
           actor: member.user.id,
@@ -122,9 +125,29 @@ export default async function handler(req, res) {
           body: `${verdict.why} — the counted version was used instead.`,
         });
       }
-    } catch {
+    } catch (err) {
       // AI down, out of credit, timed out — the counted version still ships.
+      aiStatus = "failed";
+      aiError = String(err?.message || "unknown").slice(0, 120);
     }
+
+    /* One log, every path. recordAiUsage never throws — see lib/ai-usage.js. */
+    await recordAiUsage(admin, {
+      model: aiResult?.model || AI_MODEL,
+      usage: aiResult?.usage,
+      requestId: aiResult?.requestId,
+      latencyMs: aiResult?.latencyMs,
+      status: aiStatus,
+      errorCode: aiError,
+      feature: "client_standing",
+      surface: "client_detail",
+      clientId,
+      userId: member.user.id,
+      entity: { kind: "client", id: clientId },
+      meta: {
+        ...(rejected ? { rejected } : {}),
+      },
+    });
   }
 
   if (!standing) standing = deterministicStanding(facts);

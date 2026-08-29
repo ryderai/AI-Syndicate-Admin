@@ -17,6 +17,7 @@ import { salesQueue, isOpenStage } from "../../../lib/sales-rules.js";
 import { listInvoices } from "../../lib/finance.js";
 import { invoiceOutstandingCents } from "../../../lib/finance-math.js";
 import { teamDate } from "../../../lib/brain-context.js";
+import { summarize, eventMonth, pricedCost } from "../../../lib/ai-cost.js";
 import {
   teamDayStartOf, teamDayEndOf, dueLabel, taskBucket, parsedOr0,
 } from "../../lib/teamDay.js";
@@ -362,11 +363,14 @@ export default function Overview({ member, setSection }) {
     // --- money, one line ---
     const outstandingCents = (invoices.rows || []).reduce((sum, inv) => sum + invoiceOutstandingCents(inv), 0);
     const usageRows = usage.rows || [];
-    const aiSpendMonth = usageRows.reduce((sum, r) => {
-      const t = Date.parse(r.ts);
-      if (Number.isNaN(t)) return sum;
-      return teamDate(t).slice(0, 7) === thisMonth ? sum + Number(r.cost_usd || 0) : sum;
-    }, 0);
+    /* `Number(r.cost_usd || 0)` read an unpriced call as free. Through
+     * lib/ai-cost.js now — the same code Finance and the AI Cost page use, so
+     * the three cannot disagree. NULL means nothing this month could be priced,
+     * which is a different sentence from zero and is given one below. */
+    const aiThisMonth = summarize(usageRows.filter((r) => eventMonth(r) === thisMonth));
+    const aiPricedMicros = pricedCost(aiThisMonth);
+    const aiSpendMonth = aiPricedMicros === null ? null : aiPricedMicros / 1000000;
+    const aiUnpricedCalls = aiThisMonth.unpricedCalls;
 
     // --- the one sentence at the top ---
     const bits = [];
@@ -411,6 +415,7 @@ export default function Overview({ member, setSection }) {
         stripeTestMode: stripe.data?.livemode === false,
         outstandingCents,
         aiSpendMonth,
+        aiUnpricedCalls,
         invoiceSample: Boolean(invoices.sample),
         usageSample: Boolean(usage.sample),
         noUsageYet: usageRows.length === 0,
@@ -843,13 +848,16 @@ export default function Overview({ member, setSection }) {
                 AI spend this month <SourceBadge mode={view.broken.usage ? "error" : m.usageSample ? "sample" : m.noUsageYet ? "waiting" : "live"} />
               </div>
               <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, marginTop: 4 }}>
-                {view.broken.usage || m.noUsageYet ? "—"
+                {view.broken.usage || m.noUsageYet || m.aiSpendMonth === null ? "—"
                   : `$${m.aiSpendMonth.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
               </div>
               <div style={{ fontSize: 11, color: "var(--ink-dim)", marginTop: 2 }}>
                 {view.broken.usage ? "usage couldn't be read"
                   : m.noUsageYet ? "no usage reported yet"
-                    : m.usageSample ? "sample feed, not real spend" : "from the usage feed"}
+                    : m.aiSpendMonth === null ? `${m.aiUnpricedCalls} calls, none of them priced yet`
+                      : m.usageSample ? "sample feed, not real spend"
+                        : m.aiUnpricedCalls ? `from the usage feed · ${m.aiUnpricedCalls} not priced`
+                          : "from the usage feed"}
               </div>
             </div>
           </div>

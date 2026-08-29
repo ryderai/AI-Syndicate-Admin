@@ -188,7 +188,13 @@ function TicketModal({ ticket, member, onClose, reload }) {
     setDrafting(true);
     const context = `Ticket: ${ticket.subject}\nFrom: ${ticket.requester_name || "customer"} (${ticket.requester_email || "no email"})\n\n` +
       messages.map((m) => `[${m.author_kind}] ${m.body}`).join("\n\n");
-    const res = await apiFetch("/api/ai-draft", { method: "POST", body: { kind: "ticket_reply", context } });
+    /* A ticket has no client_id column, so there is no client to send and none
+     * is invented — this draft lands on Internal, honestly. The page it came
+     * from is known, and that is worth sending. */
+    const res = await apiFetch("/api/ai-draft", { method: "POST", body: {
+      kind: "ticket_reply", context,
+      surface: "tickets", entityKind: "ticket", entityId: ticket?.id || null,
+    } });
     setDrafting(false);
     if (!res.ok) {
       if (res.preview) setReply("PREVIEW — with the AI key set, a support reply drafted from the ticket history and the Brain's rules appears here.");

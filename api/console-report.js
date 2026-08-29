@@ -38,7 +38,8 @@
  */
 
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
-import { converse, isAiConfigured } from "../lib/ai-agent.js";
+import { converse, isAiConfigured, AGENT_MODEL } from "../lib/ai-agent.js";
+import { recordAiUsage } from "../lib/ai-usage.js";
 import { loadSystemContext, renderContext, teamDate } from "../lib/brain-context.js";
 import {
   assembleConsoleFacts, buildConsoleInstruction, parseConsoleReport, checkConsoleReport,
@@ -46,7 +47,6 @@ import {
   MAX_INSTRUCTION_CHARS, MAX_FEEDBACK_NOTES,
 } from "../lib/console-report.js";
 
-const COST = { input: 3.0, output: 15.0 };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -113,9 +113,14 @@ export default async function handler(req, res) {
   let source = "counted";
   let rejected = null;
   let usage = null;
-  let model = null;
 
   if (isAiConfigured()) {
+    /* Hoisted out of the try so the log below runs on EVERY path — accepted,
+     * rejected and thrown. A rejected draft is money we spent. */
+    let aiResult = null;
+    let aiStatus = "ok";
+    let aiError = null;
+    let aiErr = null;
     try {
       const words = wordsFor(instruction, presetId);
       const system = [
@@ -133,6 +138,7 @@ export default async function handler(req, res) {
         maxTokens: tokensForWords(words),
       });
 
+      aiResult = result;
       const parsed = parseConsoleReport(result.text);
       const teamNames = (snap.team || []).map((t) => t.full_name).filter(Boolean);
       const verdict = parsed
@@ -146,15 +152,8 @@ export default async function handler(req, res) {
         report = { ...parsed, cannotCheck: facts.cannotAnswer.map((g) => `- ${g}`).join("\n") };
         source = "written";
         usage = result.usage;
-        model = "claude-sonnet-4-6";
-        const cost = (usage.input_tokens * COST.input + usage.output_tokens * COST.output) / 1e6;
-        await admin.from("admin_usage_events").insert({
-          source: "admin", model,
-          input_tokens: usage.input_tokens, output_tokens: usage.output_tokens,
-          cost_usd: cost,
-          meta: { kind: "console_report", preset: presetId, user: member.membership?.email, feedbackUsed: feedback.length },
-        }).then(() => {}, () => {});
       } else {
+        aiStatus = result.cappedOut ? "capped" : "rejected";
         rejected = result.cappedOut
           ? "the answer stopped part way through, so it would have been half a story"
           : verdict.why;
@@ -162,8 +161,35 @@ export default async function handler(req, res) {
     } catch (err) {
       /* A 503/504 from the model is not a server error here — the counted
        * version still answers the question, so say what happened and ship it. */
+      aiStatus = "failed";
+      aiErr = err;
+      aiError = String(err?.message || "unknown").slice(0, 120);
       rejected = `the AI did not answer: ${err?.message || "unknown error"}`;
     }
+
+    /* One log, every path. Never throws — see lib/ai-usage.js. */
+    await recordAiUsage(admin, {
+      model: AGENT_MODEL,
+      /* aiErr carries what converse() had already been billed for when it
+       * threw. Without it, four completed rounds of a five-round
+       * conversation are recorded as costing nothing. */
+      usage: aiResult?.usage ?? aiErr?.partialUsage,
+      requestId: aiResult?.requestId ?? aiErr?.partialRequestId,
+      latencyMs: aiResult?.latencyMs ?? aiErr?.latencyMs,
+      status: aiStatus,
+      errorCode: aiError,
+      feature: "console_report",
+      surface: "overview",
+      /* No client on purpose. This report is about the whole business, so it
+       * goes to Internal rather than being split across clients as a guess. */
+      userId: member.user?.id || null,
+      meta: {
+        preset: presetId,
+        feedbackUsed: feedback.length,
+        rounds: aiResult?.rounds,
+        ...(rejected ? { rejected } : {}),
+      },
+    });
   } else {
     rejected = "there is no ANTHROPIC_API_KEY set, so nothing could be written";
   }

@@ -5394,3 +5394,162 @@ the same name, so linking a shared key over a dead project-level row changes not
 Ready-to-paste block: **`.env.vercel-paste.local`** — 16 values, per-project overrides
 already applied (`ADMIN_BASE_URL` set to the live address, `VITE_NO_SIGNIN=false`, both
 `*_REDIRECT_URI` deliberately omitted).
+
+## §48. AI USAGE + COST — one price book, one logger, and a page that says what it cannot see — Fri Aug 28 2026 (append-only section)
+
+Ryder's ask: *"for tracking api usage and our costs, can we track that if i have the api key for
+each of the ai's?"* then *"lets skip on the admin key for now. can you build all of that with what
+you have so that it tracks the finances correctly?"*
+
+**BUILT. lint clean. 324 pure assertions across five timezones. 47 checks against a real Postgres.
+Driven in a real browser, 20 checks, zero console errors. NOT DEPLOYED. Migration 0024 NOT RUN.**
+
+Full design: `BLUEPRINT-AI-USAGE-TRACKING-2026-08-28.md`. Setup clicks: `SETUP.md` → "Migration
+0024". Work log: `WORK-LOG/2026-08-28--internal--ai-cost-tracking-built.md`.
+
+### The answer to the original question, because it shapes everything below
+
+**A normal API key cannot read spend.** It can spend money; it cannot read the bill. That takes an
+**Admin key**, which only an org owner can create — Anthropic and OpenAI both have one, Gemini has
+no usage API at all (it is Cloud Billing export), and Perplexity has none that could be found. So
+the tracker is two halves and only one of them is built: **we count every call ourselves** (works
+for every provider, and the only way to say which *client* the money went to), and one day we check
+that against the provider's own bill. The second half is deliberately absent, and the page says so
+where the comparison would be rather than showing a green tick it has not earned.
+
+### The five rules the whole thing runs on
+
+1. **A cost we cannot work out honestly is NULL, and null prints as words.** Never 0. Zero is a
+   real answer meaning "this was free" and must never be the shape "we don't know" takes.
+2. **Prices are dated rows in a table, not numbers in code**, and the cost is worked out once at
+   write and frozen with the `price_id` it used. Changing a price tomorrow cannot move last
+   month's total.
+3. **Money is whole micro-dollars (`bigint`).** A cheap call costs a fraction of a cent; floats
+   lose those fractions a little at a time over tens of thousands of calls. `numeric(12,6)` also
+   overflows at 999,999.999999.
+4. **`status` says what happened to the CALL. `cost_micros IS NULL` says we could not price it.**
+   Two questions, two answers. An earlier draft made one column answer both and a failed call to
+   an unknown model came out labelled 'unpriced' with the failure lost.
+5. **Days and months are the team's calendar**, never the browser's and never UTC.
+
+### What was actually wrong before, with file and line
+
+The console already logged AI spend. It was wrong in eight ways, and every one made the *total*
+wrong rather than just the presentation:
+
+1. `const COST = { input: 3.0, output: 15.0 }` hardcoded in **seven** files — Sonnet's price,
+   applied to whatever model ran.
+2. Cached tokens never counted (`lib/ai.js:165-168` returned two fields).
+3. The client stored as a NAME (`client-report.js:297`) — a rename split a history in two.
+4. Failed calls recorded no cost at all.
+5. All seven swallowed a failed write, by **two** mechanisms: four fire-and-forget, and three that
+   `await` and never read `{ error }` — and supabase-js does not throw on a DB error.
+6. No dedupe. `usage-ingest.js` said so in its own comment.
+7. Dollars-as-decimal in a codebase whose money pages run on whole integers.
+8. **A live bug nobody was looking for:** `listUsage()` capped at 5,000 rows and never selected
+   `meta`, so Finance's AI figure could already be silently too low.
+
+### The shape now
+
+- **`lib/ai-cost.js`** — pure. Prices, tokens, cost, rollups, part-months, drift. No database, no
+  network, no clock of its own.
+- **`lib/ai-usage.js`** — `recordAiUsage()`. One function, every call site. Never throws.
+- **`supabase/migrations/0024_ai_usage.sql`** — `ai_model_prices`, ~19 additive columns on
+  `admin_usage_events`, `ai_provider_bills`, the constraints, and nine seeded Anthropic prices.
+- **`src/components/admin/AiCost.jsx`** — Finance → AI Cost. Six grouping tabs, everything
+  clickable down to the individual calls.
+- **`tests/ai-cost/`** — `test.mjs` (324), `run.sh` (five timezones, `TZ=` in the runner),
+  `sql.sh` (47 against a real Postgres).
+
+### THE FIFTEEN DEFECTS A REVIEW FOUND, AND WHAT THEY TEACH
+
+A second agent was pointed at the finished build and told to prove it broken. It found fifteen.
+Several were the kind that would have shipped and stayed hidden for months.
+
+**1. The ingest endpoint would have 500'd on every single call, forever.**
+`upsert(..., { onConflict: "event_key" })` makes PostgREST emit `ON CONFLICT (event_key) DO
+NOTHING`. The index was **partial** (`where event_key is not null`), and Postgres will not infer a
+partial index as an ON CONFLICT target unless the statement repeats the predicate — which PostgREST
+never does. Every call: *"there is no unique or exclusion constraint matching the ON CONFLICT
+specification"*, zero rows, silently, at the documented hand-off point for all platform spend.
+**The lesson:** the test hand-inserted duplicates, which exercises the index but never issues the
+statement the code actually sends. A guard is only proven by the statement that will meet it.
+**The fix:** the index did not need to be partial. A unique index already treats NULLs as distinct.
+
+**2. An unknown cost was recorded as 0 on every failure path.** `costMicros` returned null only
+when the *price row* was missing. A call that threw passes `usage: null`, which normalised to four
+zeros and returned a confident, priced-looking `0` — then sat in the denominator of the average.
+`usage == null` now returns null before anything is normalised.
+
+**3. The assistant — the highest-volume AI route — logged nothing when it failed.** Its
+`recordAiUsage` sat inside the `try`. Every other route hoists its state out precisely to avoid
+that; the one that mattered most was the one not done.
+
+**4. A mid-conversation failure discarded every round already billed.** `converse()`'s usage
+accumulator is local, so a throw on round 5 took rounds 1-4 with it. It now attaches
+`partialUsage` to the error and the three routes log it.
+
+**5. `Number(r.cost_usd || 0)` on Overview and Finance read an unpriced call as free** — and
+`* 100` on a dollars decimal put a *fraction of a cent* into an accumulator `finance-math.js`
+requires to be whole, and `monthKey(new Date(r.ts))` bucketed in the browser's zone while Overview
+used `teamDate` for the same figure. Both pages go through `lib/ai-cost.js` now.
+
+**6. `formatMicros(0)` is the string "$0.00", and a Figure only blanks on null.** So a month in
+which nothing could be priced printed a confident **$0.00** under a green METERED badge — the exact
+failure the file's own header says it exists to prevent. `pricedCost()` returns null instead.
+
+**7. Pagination ordered on a non-unique key drops and duplicates rows.** `ts` is not unique;
+Postgres gives no stable order inside a tie group across two range queries. Forty rows sharing a
+millisecond across a page boundary get counted twice and others never returned. **The old
+`.limit(5000)` was a known undercount; ordering on `ts` alone replaced it with a silent,
+non-repeatable one.** Now `.order("ts").order("id")`.
+
+**8. `legacy` rows were presented as measured.** The migration labels old estimate rows so no
+screen can call them measured — and then `summarize()` counted them as plain `ok` and summed them
+into a METERED total, which made the label do nothing.
+
+**9. `normalizeUsage` deleted 200 tokens on a round trip, and a test asserted the wrong answer.**
+`cache_write_tokens` is our own stored column and already holds the 5-minute figure alone; the code
+subtracted the 1-hour count from it anyway. The test named this "our own stored column names round
+trip" and asserted `500 + 200 → 300`. **A test that agrees with the code is not a test** — this
+repo has now learned that twice.
+
+**10. `converse()` never forwarded the 5m/1h cache split**, so the assistant, console-report and
+rep-report booked every cache write at the cheaper 5-minute rate — a 60% understatement on the
+three most cache-heavy features, invisible on the bill.
+
+**11. Not one `ai-draft` caller sent a client**, so 100% of email, ticket and outreach drafts
+landed on Internal from pages that knew exactly whose they were. And `uuidOrNull`'s comment claimed
+a bad id was "named in meta"; it was not, so spend moved to Internal with no trace.
+
+**12. No call site sent an `event_key`**, so the dedupe protected only Andrew's feed. The key now
+defaults to the provider's own request id.
+
+**13. `recordAiUsage` could throw.** Destructuring with `= {}` only defaults on `undefined`, so
+`recordAiUsage(admin, null)` threw before the try block — the guarantee was false in exactly the
+case a caller hits by accident.
+
+**14. `role="button"` on a `<tr>`** overrides the row's implicit role and breaks the table's
+required parent/child structure, so assistive tech loses the table entirely. The button is in the
+first cell now. Also: "showing the 100 most recent, there are more" fired at exactly 100 with no
+more; the drill's token column omitted 1-hour cache writes; the cache-saving fallback re-priced old
+rows against *today's* book (it uses the row's own frozen `price_id` now); `billable: false` was
+written by two writers and read by nothing.
+
+**15. Three tests were tautologies.** `migration.includes("'notes'")` is satisfied by a comment;
+`` `\b${col}\b`.test(logger) `` is satisfied by the file's own prose; and `SURFACES.length > 5`
+pretended to check a `surface` constraint that did not exist. All three are real now, checked in
+both directions against the constraint text with comments stripped — and the surface constraint
+was added.
+
+### Two traps worth carrying beyond this project
+
+- **A partial unique index cannot be an `ON CONFLICT` target through PostgREST.** If you want
+  upsert-on-a-nullable-key, make the index plain: Postgres already treats NULLs as distinct.
+- **Zero is a real number.** Any code path where "we don't know" and "it was free" produce the same
+  value is a bug, however carefully the rest of the file is written about it.
+
+### What is still needed
+
+Run `0024_ai_usage.sql`, deploy. Nothing else, and nobody else. The provider true-up is the only
+thing blocked, on an Admin key an owner creates, and the page is honest about its absence.

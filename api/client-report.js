@@ -27,14 +27,14 @@
  */
 
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
-import { draft, isAiConfigured } from "../lib/ai.js";
+import { draft, isAiConfigured, AI_MODEL } from "../lib/ai.js";
+import { recordAiUsage } from "../lib/ai-usage.js";
 import {
   assembleReportFacts, buildFactsText, buildReportInstruction, parseAnswer,
   checkReport, deterministicReport, missingFrom, presetById, MAX_INSTRUCTION_CHARS,
   MAX_SHAPE_CHARS,
 } from "../lib/client-report.js";
 
-const COST = { input: 3.0, output: 15.0 };
 
 /* The facts for a deep report run up to 13,000 characters. The default input cap
  * in lib/ai.js is 6,000, which would quietly cut the last third off — money,
@@ -255,6 +255,13 @@ export default async function handler(req, res) {
   const teamNames = (roster.data || []).map((r) => r.full_name).filter(Boolean);
 
   if (isAiConfigured()) {
+    /* Hoisted out of the try so the log below runs on EVERY path — accepted,
+     * rejected, and thrown. Before this build a call was logged only when its
+     * answer was used, so every rejected draft was money we spent and never
+     * counted, and there was no way to know how much. */
+    let aiResult = null;
+    let aiStatus = "ok";
+    let aiError = null;
     try {
       const brain = await admin
         .from("admin_brain").select("kind, title, body").eq("enabled", true)
@@ -275,6 +282,7 @@ export default async function handler(req, res) {
         maxInputChars: AI_INPUT_CHARS,
         maxTokens: tokensForPreset(presetId),
       });
+      aiResult = result;
       truncated = result.inputTruncated || 0;
 
       const parsed = parseAnswer(result.text);
@@ -289,14 +297,8 @@ export default async function handler(req, res) {
         };
         source = "written";
         usage = result.usage;
-        const cost = (result.usage.input_tokens * COST.input + result.usage.output_tokens * COST.output) / 1e6;
-        await admin.from("admin_usage_events").insert({
-          source: "admin", model: result.model,
-          input_tokens: result.usage.input_tokens, output_tokens: result.usage.output_tokens,
-          cost_usd: cost,
-          meta: { kind: "client_report", client: client.name, preset: presetId, user: member.membership.email },
-        });
       } else {
+        aiStatus = "rejected";
         /* Truncation is treated as a failure, not a warning. A report written
          * from part of the facts looks exactly like one written from all of
          * them, and there is no way for a reader to tell which they have. */
@@ -311,8 +313,29 @@ export default async function handler(req, res) {
         });
       }
     } catch (err) {
+      aiStatus = "failed";
+      aiError = String(err?.message || "unknown").slice(0, 120);
       rejected = `the AI call failed (${String(err?.message || "unknown").slice(0, 140)})`;
     }
+
+    /* One log, every path. recordAiUsage never throws — see lib/ai-usage.js. */
+    await recordAiUsage(admin, {
+      model: aiResult?.model || AI_MODEL,
+      usage: aiResult?.usage,
+      requestId: aiResult?.requestId,
+      latencyMs: aiResult?.latencyMs,
+      status: aiStatus,
+      errorCode: aiError,
+      feature: "client_report",
+      surface: "client_detail",
+      clientId,
+      userId: member.user.id,
+      entity: { kind: "client", id: clientId },
+      meta: {
+        preset: presetId,
+        ...(rejected ? { rejected } : {}),
+      },
+    });
   }
 
   if (!report) report = deterministicReport(facts, { presetId, todayIso });

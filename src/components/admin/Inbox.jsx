@@ -573,7 +573,14 @@ export default function Inbox({ member, mine = false }) {
       thread?.threadNotes ? `Notes the team left on this thread: ${thread.threadNotes}` : null,
       (msgs || []).slice(-6).map((m) => `From: ${m.from}\n${m.body}`).join("\n\n---\n\n"),
     ].filter(Boolean).join("\n\n");
-    const res = await apiFetch("/api/ai-draft", { method: "POST", body: { kind: "email_reply", context } });
+    /* The client and the page ride along so the cost of this draft lands on
+     * the right line of the AI Cost page. Without them every draft was booked
+     * to "Internal" from a page that knew the client perfectly well. */
+    const res = await apiFetch("/api/ai-draft", { method: "POST", body: {
+      kind: "email_reply", context,
+      surface: "inbox", clientId: thread?.clientId || null,
+      entityKind: "email", entityId: thread?.id || null,
+    } });
     setDrafting(false);
     if (res.ok) return res.data.text;
     if (res.preview || res.status === 503) {
@@ -588,7 +595,12 @@ export default function Inbox({ member, mine = false }) {
     const context = client
       ? `${instruction}\n\nThis is for our client ${client.name}${client.domain ? ` (${client.domain})` : ""}.`
       : instruction;
-    const res = await apiFetch("/api/ai-draft", { method: "POST", body: { kind: "email_new", context } });
+    /* aiCompose writes a NEW email, so there is no thread — the client comes
+     * from the argument the composer already passes in. */
+    const res = await apiFetch("/api/ai-draft", { method: "POST", body: {
+      kind: "email_new", context,
+      surface: "inbox", clientId: client?.id || null,
+    } });
     if (res.ok) return res.data.text;
     if (res.preview || res.status === 503) {
       return "Subject: Preview draft\n\nPREVIEW - with the AI key set, a full email written from your one-line instruction appears here.";

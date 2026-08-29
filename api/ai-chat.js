@@ -20,9 +20,8 @@ import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-serve
 import { loadSystemContext, renderContext, renderFocus } from "../lib/brain-context.js";
 import { toolsForRole, runTool, logToolRun } from "../lib/assistant-tools.js";
 import { converse, isAiConfigured, AGENT_MODEL } from "../lib/ai-agent.js";
+import { recordAiUsage } from "../lib/ai-usage.js";
 
-// Same table as api/ai-draft.js. Keep the two in step with Anthropic pricing.
-const COST = { input: 3.0, output: 15.0 };
 
 const HOUSE = `You are the AI Syndicate console assistant. You work for a small GEO agency —
 GEO means Generative Engine Optimization: getting businesses found, trusted and quoted by AI
@@ -121,6 +120,31 @@ export default async function handler(req, res) {
 
   const tools = toolsForRole(role, { allowWrites });
 
+  /* The one shape every other route in this build uses: what gets logged is
+   * decided outside the try, so the catch can log too. The assistant is the
+   * highest-volume AI route in the console and it was the one route left
+   * logging only its successes — every failed conversation, tokens and all,
+   * left no trace at all. */
+  const logUsage = (u, extra) => recordAiUsage(admin, {
+    model: AGENT_MODEL,
+    usage: u?.usage,
+    requestId: u?.requestId,
+    latencyMs: u?.latencyMs,
+    feature: "assistant",
+    surface: screen?.page || "unknown",
+      /* THE CLIENT IS ONLY KNOWN WHEN THE PERSON IS STANDING ON A CLIENT.
+       * screenContext carries { page, record: { type, id } } and nothing else,
+       * so a lead page, a ticket or an invoice has no client id to read. Rather
+       * than guess one, those calls go to Internal — a wrong client on a cost
+       * row is worse than an honest "we could not tell". */
+    clientId: screen?.record?.type === "client" ? screen.record.id : null,
+    userId: member.user?.id || null,
+    entity: screen?.record?.type && screen?.record?.id
+      ? { kind: screen.record.type, id: screen.record.id }
+      : null,
+    ...extra,
+  });
+
   try {
     const out = await converse({
       system,
@@ -142,16 +166,13 @@ export default async function handler(req, res) {
       },
     });
 
-    // Our own spend, measured rather than guessed — it shows on Overview.
-    const cost = (out.usage.input_tokens * COST.input + out.usage.output_tokens * COST.output) / 1e6;
-    await admin.from("admin_usage_events").insert({
-      source: "admin",
-      model: AGENT_MODEL,
-      input_tokens: out.usage.input_tokens,
-      output_tokens: out.usage.output_tokens,
-      cost_usd: cost,
-      meta: { kind: "assistant", user: member.membership.email, rounds: out.rounds, screen: screen?.page || null },
-    }).then(() => {}, () => {}); // never let bookkeeping break the answer
+    /* Our own spend, measured rather than guessed. recordAiUsage never throws,
+     * so this no longer needs a swallowing .then() to keep the answer safe —
+     * and a write that DOES fail is now reported instead of vanishing. */
+    await logUsage(out, {
+      status: out.cappedOut ? "capped" : "ok",
+      meta: { rounds: out.rounds, tools: out.actions?.length || 0 },
+    });
 
     // Recency on the memories that were in play. Fire-and-forget on purpose:
     // a failure to stamp last_used_at must never cost the person their answer.
@@ -186,6 +207,17 @@ export default async function handler(req, res) {
       },
     });
   } catch (err) {
+    /* A conversation is several separate billed requests. If round 5 failed,
+     * rounds 1-4 were charged — converse() attaches what it had got to before
+     * the throw so those tokens are recorded rather than lost. */
+    await logUsage(
+      { usage: err?.partialUsage, requestId: err?.partialRequestId, latencyMs: err?.latencyMs },
+      {
+        status: "failed",
+        errorCode: String(err?.message || "unknown").slice(0, 120),
+        meta: { rounds: err?.partialRounds || 0 },
+      },
+    );
     const status = Number.isInteger(err?.statusCode) ? err.statusCode : 500;
     return res.status(status).json({ error: err?.message || "The assistant failed." });
   }

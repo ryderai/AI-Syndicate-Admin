@@ -54,7 +54,7 @@ const SECTIONS = [
    * a job you sit down and do rather than something you glance at. */
   { group: "Command", roles: ["owner", "admin"], items: [
     ["overview", "Overview"],
-    ["finance", "Finance", [["invoices", "Invoices"]]],
+    ["finance", "Finance", [["invoices", "Invoices"], ["ai-cost", "AI Cost"]]],
     ["clients", "Clients"],
   ]},
   // Work is the owner's and the admin's landing page. It is NOT a rep's any
