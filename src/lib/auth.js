@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import { getSupabase, isConfigured } from "./supabase.js";
 
 const sharedAuth = {
-  state: { user: null, loading: isConfigured(), membership: undefined },
+  state: { user: null, loading: isConfigured(), membership: undefined, membershipError: null },
   listeners: new Set(),
   initialized: false,
 };
@@ -31,7 +31,7 @@ function setAuthState(patch) {
 async function loadMembership(user) {
   const supabase = getSupabase();
   if (!supabase || !user) {
-    setAuthState({ membership: null });
+    setAuthState({ membership: null, membershipError: null });
     return;
   }
   const { data, error } = await supabase
@@ -40,7 +40,28 @@ async function loadMembership(user) {
     .eq("user_id", user.id)
     .eq("active", true)
     .maybeSingle();
-  setAuthState({ membership: error ? null : data || null });
+
+  /* A FAILED CHECK AND A DENIED ONE ARE NOT THE SAME THING.
+   *
+   * This line used to read `membership: error ? null : data || null`, which
+   * threw the error away and made both cases null — so the screen said "you
+   * are not on the team roster" whether the roster said no or the database
+   * never answered.
+   *
+   * That cost an hour on Sat Aug 29 2026. Ryder's roster row was present,
+   * correct and active the whole time; the live database had lost
+   * `grant execute on function admin_is_member() to authenticated`, which
+   * migration 0001 line 83 grants. Every read of admin_users raised
+   * "permission denied for function admin_is_member" — and the console
+   * calmly reported that he was not on the team.
+   *
+   * The error is kept now. AuthGate shows a different screen for it, with the
+   * reason on it, because "we could not check" is a different sentence from
+   * "we checked and the answer is no". */
+  setAuthState({
+    membership: error ? null : data || null,
+    membershipError: error ? (error.message || "the roster check failed") : null,
+  });
 }
 
 function initSharedAuth() {
