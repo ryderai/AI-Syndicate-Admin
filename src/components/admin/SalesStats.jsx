@@ -4,7 +4,7 @@ import { repStats, isOpenStage } from "../../../lib/sales-rules.js";
 import { outreachByRep, lossReasons, OUTREACH_WINDOW_DAYS } from "../../../lib/outreach.js";
 import {
   REP_METRIC_GROUPS, DEFAULT_REP_METRIC, rankReps, barPct,
-  PERIOD_ALL, PERIOD_WINDOW,
+  PERIOD_ALL, PERIOD_WINDOW, PERIOD_NOW,
 } from "../../../lib/rep-metrics.js";
 import { Tile, MiniBar, money } from "./salesParts.jsx";
 import { SourceBadge } from "./shared.jsx";
@@ -21,13 +21,18 @@ import { SourceBadge } from "./shared.jsx";
  * best." That is the chart in the middle of this page — one row of chips, one
  * bar per rep, sorted so the best is at the top.
  *
- * WHERE THE NUMBERS COME FROM, AND WHY THERE ARE NO NEW ONES.
- * Every figure on this page is produced by a function the console already had
- * and already tested — `repStats`, `outreachByRep`, `lossReasons`, all from the
- * same `getSalesBoard()` read the Sales page itself runs. Not one number is
- * computed here for the first time, and the chart adds none either: it reads
- * the same objects through lib/rep-metrics.js, which only picks a field and
- * sorts on it.
+ * WHERE THE NUMBERS COME FROM.
+ * EVERY PER-REP FIGURE — the chart and every cell of the table — is produced by
+ * a function the console already had and already tested: `repStats`,
+ * `outreachByRep` and `lossReasons`, all from the same `getSalesBoard()` read
+ * the Sales page itself runs. The chart adds nothing: it reads those same
+ * objects through lib/rep-metrics.js, which only picks a field and sorts on it.
+ *
+ * The ONE exception, and it is deliberate: the six team tiles and the pipeline
+ * bar are counted here, over every lead, in the `team` memo below. They have to
+ * be, and the note on that memo says why — most of this pipeline has no owner,
+ * so adding the rep rows together would give a much smaller number than the
+ * truth. Nothing per-rep is worked out twice.
  *
  * That is deliberate. This page replaces the "Rep numbers" modal that used to
  * open from the Sales toolbar, and the fastest way to end up with two screens
@@ -61,10 +66,18 @@ import { SourceBadge } from "./shared.jsx";
 const BAR_BEST = "var(--accent-deep)";
 const BAR_REST = "#a5b4fc";
 
+/* "over everything loaded", not "all time". `PERIOD_ALL` means every row the
+ * page managed to READ, which is not the same sentence — and on a short or
+ * failed read it is very much not the same sentence. The table's own footnote
+ * has always been careful about this; the chart heading was not.
+ *
+ * There is no silent default: an unrecognised period prints nothing rather than
+ * labelling an all-time figure "right now". */
 function periodWords(period) {
-  if (period === PERIOD_ALL) return "all time";
+  if (period === PERIOD_ALL) return "over everything loaded";
   if (period === PERIOD_WINDOW) return `last ${OUTREACH_WINDOW_DAYS} days`;
-  return "right now";
+  if (period === PERIOD_NOW) return "right now";
+  return "";
 }
 
 /* ------------------------------------------------------------------ */
@@ -89,14 +102,21 @@ function RepBars({ rows, metricKey, onPick, meId }) {
           announced and reachable by keyboard rather than being a coloured div. */}
       <div className="adm-st-filters" role="group" aria-label="Which number to chart">
         {REP_METRIC_GROUPS.map((g) => (
-          <div className="adm-st-fgroup" key={g.group}>
-            <span className="adm-st-fglabel">{g.group}</span>
+          /* Each band is its own group with its own name. Without this a
+             screen reader hears thirteen buttons under one flat label and
+             loses the Results / Effort / Watch split the eye gets for free. */
+          <div className="adm-st-fgroup" key={g.group} role="group" aria-label={g.group}>
+            <span className="adm-st-fglabel" aria-hidden="true">{g.group}</span>
             {g.metrics.map((mm) => (
               <button
                 key={mm.key}
                 type="button"
                 className={`adm-st-chip${mm.key === m.key ? " on" : ""}`}
                 aria-pressed={mm.key === m.key}
+                /* The explanation is on the button itself, not only in a
+                   `title` — a hover tooltip is unreachable by keyboard and does
+                   not exist on a touch screen. `title` stays for the mouse. */
+                aria-label={`${mm.label} — ${mm.what}`}
                 title={mm.what}
                 onClick={() => onPick(mm.key)}
               >
@@ -129,11 +149,14 @@ function RepBars({ rows, metricKey, onPick, meId }) {
           <div className="adm-sl-empty">Nobody to chart yet.</div>
         ) : (
           <div className="adm-st-bars" role="list">
-            {r.bars.map((b) => {
+            {r.bars.map((b, i) => {
               const pct = barPct(b.value, r.max);
               const who = b.rep?.full_name || b.rep?.email || "Unnamed";
               return (
-                <div className="adm-st-row" role="listitem" key={b.id || who}>
+                /* The id, never the display name: two rows both falling back
+                   to "Unnamed" would share a key and React would reuse the
+                   wrong row. */
+                <div className="adm-st-row" role="listitem" key={b.id || `row-${i}`}>
                   <div className="adm-st-name">
                     <span className="adm-st-who">
                       {who}
@@ -167,19 +190,37 @@ function RepBars({ rows, metricKey, onPick, meId }) {
         <div className="adm-st-foot">
           {/* WHY THERE MAY BE NO WINNER, said out loud rather than left as a
               missing chip. Three different reasons, three different sentences. */}
-          {r.crowned ? null : r.measured < 2 ? (
+          {r.crowned ? null : !r.crownable ? (
             <span>
-              Nobody is marked best: only {r.measured === 1 ? "one rep has" : "no reps have"} this
-              number, and best of one is not a comparison.
+              <strong>Nobody is marked best on this one, on purpose.</strong> It is a plain count
+              with nothing underneath it, so a rep who has claimed nothing has the best-looking
+              number on the team. The figure beside each bar says which book it came out of.
+              {m.better === "low" ? " Close rate is the version of this question that can be won." : ""}
+            </span>
+          ) : r.measured === 0 ? (
+            <span>
+              Nobody is marked best, because nobody has this number yet. There is nothing to
+              rank rather than a team that all scored the same.
+            </span>
+          ) : r.measured === 1 ? (
+            <span>
+              Nobody is marked best: only one rep has this number, and best of one is not a
+              comparison.
             </span>
           ) : (
             <span>Nobody is marked best: every rep is on zero, so there is no top performer to name.</span>
           )}
           {r.unmeasured > 0 ? (
+            /* TWO REASONS A ROW IS UNMEASURED, and this sentence must not pick
+               one. A rate is null when nothing has been sent yet — there is no
+               denominator — and it is ALSO null when the read failed. Saying
+               "could not read it" for a rep who simply has not emailed anybody
+               is a claim about our systems that is not true. */
             <span>
               {r.unmeasured} rep{r.unmeasured === 1 ? "" : "s"} sit at the bottom with no bar. That is
-              not a score of zero — it is a number this page could not read for them, and it is kept
-              out of the ranking rather than counted as a bad result.
+              not a score of zero: this page has no number for them at all — either there is nothing
+              to count yet, or the read came back empty — so they are kept out of the ranking rather
+              than counted as a bad result.
             </span>
           ) : null}
           {m.rate ? (
@@ -220,14 +261,38 @@ export default function SalesStats({ member }) {
 
   const reps = useMemo(() => (board?.team || []).filter((t) => t.active), [board]);
 
+  /* A FAILED READ HAS TO ARRIVE AS `null`, NOT AS AN EMPTY LIST.
+   *
+   * Every reader in src/lib/data.js turns a failure into `{ rows: [], error }`,
+   * so "nothing came back" and "nothing is there" reach this page as the same
+   * value. lib/outreach.js was written against a null-is-not-zero contract —
+   * `emailed: null` means could not read, `emailed: 0` means sent none — and
+   * that contract was unreachable here, so a broken read would have printed
+   * confident zeros and a rep with forty emails out would have shown "0".
+   * `board.failed` is exactly what makes it reachable. Found by an adversarial
+   * review, Aug 30 2026.
+   *
+   * Note repStats has no such contract: it takes arrays. So the table's
+   * repStats half still shows zeros on a failed leads read — which is why the
+   * banner above the page, not this, is what has to stop somebody reading it. */
+  const readable = useMemo(() => {
+    if (!board) return { leads: null, activity: null, proposals: null };
+    const f = board.failed || {};
+    return {
+      leads: f.leads ? null : board.leads,
+      activity: f.activity ? null : board.activity,
+      proposals: f.proposals ? null : board.proposals,
+    };
+  }, [board]);
+
   const outreachById = useMemo(() => {
     if (!board) return new Map();
     const rows = outreachByRep({
-      team: reps, leads: board.leads, activity: board.activity,
-      proposals: board.proposals, nowMs,
+      team: reps, leads: readable.leads, activity: readable.activity,
+      proposals: readable.proposals, nowMs,
     });
     return new Map(rows.map((o) => [o.member.user_id, o.stats]));
-  }, [board, reps, nowMs]);
+  }, [board, readable, reps, nowMs]);
 
   /* A REP APPEARS ONCE THERE IS ANYTHING TO COUNT — including outreach alone.
    * Reading repStats by itself left a rep who had emailed forty people and
@@ -287,8 +352,8 @@ export default function SalesStats({ member }) {
   }, [board]);
 
   const losses = useMemo(
-    () => (board ? lossReasons({ leads: board.leads, nowMs }) : null),
-    [board, nowMs],
+    () => (board ? lossReasons({ leads: readable.leads, nowMs }) : null),
+    [board, readable, nowMs],
   );
 
   if (err) {
@@ -303,6 +368,21 @@ export default function SalesStats({ member }) {
   }
   if (!board) return <div className="adm-db"><div className="adm-sl-empty">Counting…</div></div>;
 
+  /* THE ONLY THING ON THIS PAGE THAT CAN TELL YOU A NUMBER IS SHORT.
+   *
+   * `getSalesBoard()` does not reject when a read fails — it returns a board
+   * with an empty list and the failure recorded in `errors` / `failed` — so the
+   * catch above never fires for the ordinary case. Without these two banners the
+   * page renders "Contacts loaded 0 · Won 0", says "that is an empty list, not a
+   * missing one", and signs off with "every figure here is counted from real
+   * rows", and every one of those sentences is false.
+   *
+   * The Sales page and a rep's own Overview have carried this pair since Aug 27.
+   * This page shipped without them. Found by an adversarial review, Aug 30 2026. */
+  const errors = board.errors || [];
+  const truncated = board.truncated || [];
+  const short = errors.length > 0 || truncated.length > 0;
+
   /* One dash function for the whole table. `null` and `0` are different
    * sentences — "nobody replied" and "we have not measured" are opposite
    * answers — and printing them the same is the defect this console keeps
@@ -312,7 +392,28 @@ export default function SalesStats({ member }) {
     : <>{v}{suffix}</>);
 
   return (
-    <div className="adm-db adm-sl">
+    /* `adm-st-page` scopes this page's roomier spacing. The tile, health-bar and
+       table classes are shared with the Sales sheet, and the sheet is a working
+       screen where tighter rows are the point — this is a reading screen. */
+    <div className="adm-db adm-sl adm-st-page">
+      {errors.length > 0 && (
+        <div className="adm-sl-warn" role="alert">
+          <strong>Some of this did not load.</strong> {errors.join(" · ")} Every number below is
+          counted from what did come back, so treat them as incomplete — and do not compare two
+          reps on a number one of them is missing.
+        </div>
+      )}
+
+      {/* A CAP MATTERS AS MUCH AS AN ERROR. A page quietly showing half the
+          pipeline reads exactly like a page showing all of it — and this one
+          names a top performer, which a half-read pipeline can get wrong. */}
+      {truncated.length > 0 && (
+        <div className="adm-sl-warn" role="status">
+          <strong>Not everything is loaded.</strong> {truncated.join(" ")} The chart ranks the reps
+          on what was loaded, so the order can change once the rest arrives.
+        </div>
+      )}
+
       {/* ---- the team, in one row ---- */}
       <div className="adm-sl-tiles">
         <Tile label="Contacts loaded" value={team.total} hint="everything the pipeline holds" />
@@ -343,7 +444,7 @@ export default function SalesStats({ member }) {
       </div>
 
       {/* ---- every rep, beside every other ---- */}
-      <div className="label" style={{ display: "flex", alignItems: "center", gap: 10, margin: "24px 0 8px" }}>
+      <div className="label" style={{ display: "flex", alignItems: "center", gap: 10, margin: "34px 0 14px" }}>
         By rep <SourceBadge mode={board.sample ? "sample" : "live"} />
       </div>
 
@@ -351,7 +452,7 @@ export default function SalesStats({ member }) {
         <RepBars rows={rows} metricKey={metricKey} onPick={setMetricKey} meId={member.user_id} />
       ) : null}
 
-      <div className="label" style={{ margin: "24px 0 8px" }}>
+      <div className="label" style={{ margin: "34px 0 14px" }}>
         Every number, side by side
       </div>
 
@@ -449,7 +550,7 @@ export default function SalesStats({ member }) {
           lead that was released after it was lost has no owner, so a per-rep
           sum would silently miss it and this would add up to less than the
           total above it. */}
-      <div className="label" style={{ margin: "24px 0 8px" }}>
+      <div className="label" style={{ margin: "34px 0 14px" }}>
         Where deals die — everybody, last {losses.window.days} days
       </div>
       {losses.rows === null ? (
@@ -460,7 +561,9 @@ export default function SalesStats({ member }) {
         <div className="card adm-sl-empty-card">
           <strong>Nothing was marked Lost in the last {losses.window.days} days.</strong>
           <div>
-            That is an empty list, not a missing one.
+            {short
+              ? "Some of this page did not load — see the warning at the top — so this may be a missing list rather than an empty one."
+              : "That is an empty list, not a missing one."}
             {losses.undated > 0
               ? ` ${losses.undated} lost lead${losses.undated === 1 ? " has" : "s have"} no date on the close, so ${losses.undated === 1 ? "it is" : "they are"} in no window at all.`
               : ""}
@@ -486,7 +589,10 @@ export default function SalesStats({ member }) {
       )}
 
       <p className="adm-sl-modalnote">
-        Every figure here is counted from real rows. <strong>There is no open rate</strong> — Gmail
+        {short
+          ? "Every figure here is counted from the rows that came back, and some did not — the warning at the top says which. "
+          : "Every figure here is counted from real rows. "}
+        <strong>There is no open rate</strong> — Gmail
         cannot tell anybody whether an email was opened, and the only thing that can is a tracking
         image that Apple Mail loads for everybody, so the number would not be a measurement. People
         emailed and replies are both real. A call that was not logged is not counted, and a rep with

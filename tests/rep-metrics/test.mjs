@@ -190,17 +190,31 @@ test("a measured zero still prints 0 — it is a result, not a gap", () => {
 });
 
 test("a failed read is never crowned best, even on a fewer-is-better metric", () => {
-  /* null sorts nowhere near zero: on "At risk" a rep we could not read must not
-   * come out as the safest person on the team. */
+  /* null sorts nowhere near zero. On "Speed to first touch" a rep we could not
+   * measure must not come out as the fastest person on the team.
+   * (Speed rather than At risk: At risk is `crown: false` — see the raw-count
+   * rule — so it could not test the crown at all.) */
   const r = rankReps([
-    rep("Cannot read", { at_risk: null }),
-    rep("Two at risk", { at_risk: 2 }),
-    rep("Five at risk", { at_risk: 5 }),
-  ], "at_risk");
-  assert.equal(r.bars[0].rep.full_name, "Two at risk");
+    rep("Cannot read", { speed_days: null, speed_sample: 0 }),
+    rep("Two days", { speed_days: 2, speed_sample: 5 }),
+    rep("Five days", { speed_days: 5, speed_sample: 5 }),
+  ], "speed");
+  assert.equal(r.bars[0].rep.full_name, "Two days");
   assert.equal(r.bars[0].best, true);
   assert.equal(r.bars[2].best, false);
   assert.equal(r.bars[2].measured, false);
+});
+
+test("an unmeasured row goes to the bottom on a metric nobody can win, too", () => {
+  /* `crown: false` turns off the CHIP, not the ordering or the null rule. */
+  const r = rankReps([
+    rep("Cannot read", { at_risk: null }),
+    rep("Five at risk", { at_risk: 5 }),
+    rep("Two at risk", { at_risk: 2 }),
+  ], "at_risk");
+  assert.deepEqual(r.bars.map((b) => b.rep.full_name), ["Two at risk", "Five at risk", "Cannot read"]);
+  assert.equal(r.bars[2].measured, false);
+  assert.equal(r.bars.every((b) => !b.best), true);
 });
 
 test("a whole missing outreach object does not throw", () => {
@@ -230,10 +244,15 @@ test("nobody is crowned when everybody is on zero", () => {
 });
 
 test("zero DOES win on a fewer-is-better metric", () => {
-  /* Nobody at risk is the best possible result, not an absence of one. */
-  const r = rankReps([rep("Clean", { at_risk: 0 }), rep("Messy", { at_risk: 3 })], "at_risk");
+  /* Touching a lead the same day it was claimed is 0 business days — the best
+   * possible result, not an absence of one. This is the case the "winner must
+   * be above zero" rule must NOT apply to. */
+  const r = rankReps([
+    rep("Same day", { speed_days: 0, speed_sample: 6 }),
+    rep("Three days", { speed_days: 3, speed_sample: 6 }),
+  ], "speed");
   assert.equal(r.crowned, true);
-  assert.equal(r.bars[0].rep.full_name, "Clean");
+  assert.equal(r.bars[0].rep.full_name, "Same day");
   assert.equal(r.bars[0].best, true);
 });
 
@@ -241,6 +260,55 @@ test("everybody tied at the top is marked, not one of them picked", () => {
   const r = rankReps([rep("A", { won: 5 }), rep("B", { won: 5 }), rep("C", { won: 1 })], "won");
   assert.equal(r.bars.filter((b) => b.best).length, 2);
   assert.equal(r.bars[2].best, false);
+});
+
+test("the three metrics nobody can win are the three we mean", () => {
+  const nocrown = REP_METRICS.filter((m) => m.crown === false).map((m) => m.key).sort();
+  assert.deepEqual(nocrown, ["at_risk", "lost", "open"]);
+});
+
+test("a rep who did NOTHING is not crowned best on Lost or At risk", () => {
+  /* The defect this exists to stop, found by an adversarial review Aug 30 2026:
+   * `lost` and `at_risk` were ranked as raw counts, lowest first. A rep who
+   * emailed forty people and claimed nothing has lost 0 and holds 0 at risk, so
+   * the page put a BEST chip on them above a rep with 200 claims and 3 losses.
+   * A count with no denominator is not a performance. */
+  const rows = [
+    rep("Did nothing", { claimed: 0, lost: 0, at_risk: 0, open: 0 }),
+    rep("Worked hard", { claimed: 200, lost: 3, at_risk: 2, open: 40 }),
+  ];
+  for (const key of ["lost", "at_risk"]) {
+    const r = rankReps(rows, key);
+    assert.equal(r.crowned, false, `${key} crowned somebody`);
+    assert.equal(r.crownable, false, `${key} still claims to be winnable`);
+    assert.equal(r.bars.every((b) => !b.best), true, `${key} marked a bar best`);
+  }
+});
+
+test("hoarding leads is not a win either — Open right now crowns nobody", () => {
+  const r = rankReps([rep("Hoarder", { open: 80, claimed: 80 }), rep("Closer", { open: 4, claimed: 40 })], "open");
+  assert.equal(r.crowned, false);
+  assert.equal(r.bars[0].rep.full_name, "Hoarder", "it should still SORT biggest first and draw the bar");
+  assert.equal(r.bars[0].best, false, "it must not put a chip on them");
+});
+
+test("every metric nobody can win prints the book its number came out of", () => {
+  /* If the page will not name a winner it has to give the reader what they need
+   * to judge it themselves. "Lost 3" means nothing; "3 of 200 claimed" does. */
+  const row = rep("A", { claimed: 200, lost: 3, at_risk: 2, open: 40 });
+  for (const m of REP_METRICS.filter((x) => x.crown === false)) {
+    const r = rankReps([row], m.key);
+    assert.ok(r.bars[0].sub, `${m.key} draws a bare count with nothing underneath it`);
+  }
+  assert.equal(rankReps([row], "lost").bars[0].sub, "of 200 they have claimed");
+  assert.equal(rankReps([row], "at_risk").bars[0].sub, "of 40 they are holding");
+});
+
+test("a winnable metric is still winnable — the crown rule did not turn everything off", () => {
+  const r = rankReps([rep("A", { won: 5 }), rep("B", { won: 1 })], "won");
+  assert.equal(r.crownable, true);
+  assert.equal(r.crowned, true);
+  assert.equal(r.bars[0].best, true);
 });
 
 /* ================================================================== */
@@ -304,10 +372,15 @@ test("an empty team produces an empty chart rather than a crash", () => {
 });
 
 test("rankReps does not reorder or mutate the rows it was given", () => {
+  /* Order alone was not enough — `.map()` cannot reorder its input, so that
+   * half of this test could never fail. The stat objects are what matter: this
+   * page hands the SAME rows to the chart and to the table, so a chart that
+   * wrote into them would change the table. */
   const rows = [rep("A", { won: 1 }), rep("B", { won: 9 })];
-  const before = rows.map((r) => r.rep.full_name);
+  const before = JSON.stringify(rows);
   rankReps(rows, "won");
-  assert.deepEqual(rows.map((r) => r.rep.full_name), before);
+  rankReps(rows, "at_risk");
+  assert.equal(JSON.stringify(rows), before, "rankReps changed the rows it was given");
 });
 
 /* ================================================================== */
@@ -330,10 +403,23 @@ test("the Stats page draws the chart from lib/rep-metrics.js", () => {
 });
 
 test("the Stats page still reads the shared maths, not its own", () => {
-  assert.ok(PAGE.includes("repStats"), "repStats is gone from the page");
-  assert.ok(PAGE.includes("outreachByRep"), "outreachByRep is gone from the page");
-  assert.ok(!/const\s+won\s*=\s*.*filter/.test(PAGE) || PAGE.includes("l.stage === \"won\""),
-    "the page looks like it is counting wins for itself");
+  /* IMPORTS, not substrings. The first version of this test grepped the whole
+   * file for "repStats" — which passes on a page where the import is unused —
+   * and its third line was `!A || B` where B was unconditionally true, so it
+   * could never fail. Found by an adversarial review, Aug 30 2026. */
+  assert.ok(/import\s*\{[^}]*\brepStats\b[^}]*\}\s*from\s*"[^"]*sales-rules\.js"/.test(CODE),
+    "the page does not import repStats from lib/sales-rules.js");
+  assert.ok(/import\s*\{[^}]*\boutreachByRep\b[^}]*\}\s*from\s*"[^"]*outreach\.js"/.test(CODE),
+    "the page does not import outreachByRep from lib/outreach.js");
+  assert.ok(/repStats\(/.test(CODE) && /outreachByRep\(/.test(CODE), "they are imported but never called");
+
+  /* THE ONE PLACE THIS PAGE IS ALLOWED TO COUNT FOR ITSELF is the team line —
+   * over every lead, because most of this pipeline has no owner. That is one
+   * loop. A SECOND per-rep loop over `leads` would be the page working an
+   * answer out twice, which is the whole thing this file exists to stop. */
+  const loops = (CODE.match(/for\s*\(const\s+l\s+of\s+leads\)/g) || []).length;
+  assert.equal(loops, 1, `the page loops over every lead ${loops} times, not once`);
+  assert.ok(!/owner_id === r\.user_id/.test(CODE), "the page looks like it is splitting leads by rep itself");
 });
 
 test("the chart and the table are handed the SAME rows", () => {
@@ -343,9 +429,83 @@ test("the chart and the table are handed the SAME rows", () => {
   assert.equal((CODE.match(/getSalesBoard\(/g) || []).length, 1, "the page reads the board more than once");
 });
 
-test("the filter chips are real buttons with a pressed state", () => {
-  assert.ok(PAGE.includes("aria-pressed"), "the chips do not announce which is chosen");
-  assert.ok(PAGE.includes("<button"), "the chips are not buttons");
+test("the page can tell the owner that a read FAILED", () => {
+  /* getSalesBoard() does not reject on a failed read — it returns an empty list
+   * and records the failure in `errors` / `failed`. Without these banners the
+   * page prints "Contacts loaded 0 · Won 0" and signs off "every figure here is
+   * counted from real rows", and all of it is false. The Sales page and a rep's
+   * Overview have carried this pair since Aug 27; this page shipped without it.
+   * Found by an adversarial review, Aug 30 2026. */
+  assert.ok(CODE.includes("board.errors"), "the page never looks at board.errors");
+  assert.ok(CODE.includes("board.truncated"), "the page never looks at board.truncated");
+  assert.ok(/role="alert"[\s\S]{0,400}Some of this did not load/.test(CODE)
+    || /Some of this did not load[\s\S]{0,400}/.test(CODE), "there is no failed-read banner");
+  assert.ok(CODE.includes("Not everything is loaded"), "there is no short-read banner");
+});
+
+test("a failed read reaches the outreach maths as null, not as an empty list", () => {
+  /* lib/outreach.js's whole null-is-not-zero contract is unreachable unless the
+   * page passes null. `board.failed` is what makes it reachable. */
+  assert.ok(CODE.includes("board.failed"), "the page never reads board.failed");
+  assert.ok(/f\.leads \? null : board\.leads/.test(CODE), "leads are passed through even when the read failed");
+  assert.ok(/f\.activity \? null : board\.activity/.test(CODE), "activity is passed through even when the read failed");
+  assert.ok(/f\.proposals \? null : board\.proposals/.test(CODE), "proposals are passed through even when the read failed");
+});
+
+test("the page does not promise 'real rows' when some of them did not arrive", () => {
+  assert.ok(CODE.includes("short"), "there is no short-read flag");
+  /* The unconditional version of both of these sentences must be gone. */
+  assert.ok(!/>\s*That is an empty list, not a missing one\./.test(CODE),
+    "the 'empty not missing' line is still unconditional");
+  assert.ok(!/Every figure here is counted from real rows\. <strong>/.test(CODE),
+    "the 'real rows' line is still unconditional");
+});
+
+test("the chart heading says 'loaded', not 'all time'", () => {
+  /* PERIOD_ALL means every row the page managed to READ. On a short read those
+   * are very different sentences, and the chart heading was making the stronger
+   * one. Found by an adversarial review, Aug 30 2026. */
+  assert.ok(CODE.includes('return "over everything loaded"'), "the chart still says 'all time'");
+  assert.ok(!/PERIOD_ALL\) return "all time"/.test(CODE), "the old wording is back");
+});
+
+test("periodWords has no silent default", () => {
+  /* Returning "right now" for anything unrecognised would label an all-time
+   * figure as live the day somebody typos a period. */
+  assert.ok(/PERIOD_NOW\) return "right now"/.test(CODE), "PERIOD_NOW is not checked explicitly");
+  assert.ok(/return "";\s*\n\}/.test(CODE), "an unknown period still falls through to a real label");
+});
+
+test("the no-winner sentence has a branch for nobody, not just for one", () => {
+  /* The first version read `only {measured === 1 ? "one rep has" : "no reps have"}
+   * this number, and best of one is not a comparison` — so a metric nobody has
+   * printed "only no reps have this number, and best of one is not a
+   * comparison". Caught by loading the page and reading it, not by a test, which
+   * is why this one is here now. */
+  assert.ok(PAGE.includes("r.measured === 0"), "there is no branch for nobody having the number");
+  assert.ok(!PAGE.includes("no reps have"), "the broken sentence is back");
+});
+
+test("the page never tells the owner a read FAILED when the number is merely absent", () => {
+  /* A rate is null both when the read failed AND when nobody has been emailed
+   * yet — no denominator. The first version of the chart footer said "a number
+   * this page could not read for them" for every unmeasured row, which on a
+   * quiet week is a false claim about our own systems. Caught by reading the
+   * live page. */
+  assert.ok(!PAGE.includes("could not read for them"), "the overstated sentence is back");
+});
+
+test("the filter chips are real buttons, with a pressed state and a name", () => {
+  /* Scoped to the chip element itself. Grepping the whole file for "<button"
+   * and "aria-pressed" separately would pass on a page whose chips were divs
+   * and whose aria-pressed sat on something else entirely. */
+  const chip = CODE.match(/<button[\s\S]{0,600}?adm-st-chip[\s\S]{0,600}?>/);
+  assert.ok(chip, "the chip is not a <button> carrying the adm-st-chip class");
+  assert.ok(/aria-pressed=/.test(chip[0]), "the chip does not say whether it is the chosen one");
+  assert.ok(/type="button"/.test(chip[0]), "a button with no type submits a form");
+  /* An explanation that lives only in `title` cannot be reached by keyboard and
+   * does not exist on a touch screen. */
+  assert.ok(/aria-label=/.test(chip[0]), "the chip's meaning is only in a hover tooltip");
 });
 
 /* ================================================================== */

@@ -16,6 +16,10 @@ import {
 /* Tags are an append-only event log, so "which tags are on this lead" is a
  * replay rather than a column read. One place decides it. */
 import { currentTags, tagHistory } from "../../../lib/lead-tags.js";
+/* The pipeline's own rules, shared with the sheet's chip and the board's drop
+ * target so a lead dragged onto Won cannot behave differently from one picked
+ * out of a menu. lib/stage-move.js is pure and tests/stage-move attacks it. */
+import { BOARD_STAGES, dropCheck, stageMoveBody, cleanNote } from "../../../lib/stage-move.js";
 /* The rep-by-rep table this page used to open in a modal now has a page of its
  * own — src/components/admin/SalesStats.jsx, reached from Sales → Stats. It
  * calls outreachByRep, lossReasons and repStats there, from the same
@@ -367,19 +371,37 @@ export default function SalesPage({ member, mode = null }) {
   /* Edit a value where it sits. One write, then one reload, so the tiles at
    * the top and the row you just changed can never be counting different
    * snapshots. A failed write says so and changes nothing on screen. */
-  const patchLeadRaw = useCallback(async (lead, patch) => {
+  /* `note` is the optional sentence from the chip picker or the board. It is
+   * NOT a field on the lead — it is a line on that person's timeline, which is
+   * where Ryder asked for it (30 Aug 2026) and the only place it keeps its
+   * date. Nothing on the sheet is overwritten by it.
+   *
+   * RETURNS true / false. The picker reads it: a refused write must not go on
+   * and offer to attach a note to a move that did not happen. */
+  const patchLeadRaw = useCallback(async (lead, patch, note = null) => {
     const res = await upsertLead({ id: lead.id, ...patch });
-    if (!res.ok) { toast.error("Could not save that", res.error); return; }
+    if (!res.ok) { toast.error("Could not save that", res.error); return false; }
     /* A stage move is worth a line on the timeline. Every other field is not —
      * a timeline of "title changed" is a timeline nobody reads. */
     if (patch.stage && patch.stage !== lead.stage) {
       await addLeadActivity({
         leadId: lead.id, actor: member.user_id, type: "status_change",
-        body: `${LEAD_STAGE_LABELS[lead.stage] || lead.stage} → ${LEAD_STAGE_LABELS[patch.stage] || patch.stage}`,
+        body: stageMoveBody(LEAD_STAGE_LABELS[lead.stage] || lead.stage,
+          LEAD_STAGE_LABELS[patch.stage] || patch.stage, note),
+      });
+    } else if (cleanNote(note)) {
+      /* A note with no move behind it still belongs to them. This happens when
+       * the note box is saved a moment after the move it describes — the lead
+       * is already on the new stage by then, so the branch above no longer
+       * fires and the note would otherwise be dropped on the floor. */
+      await addLeadActivity({
+        leadId: lead.id, actor: member.user_id, type: "note",
+        body: cleanNote(note),
       });
     }
 
     await load();
+    return true;
   }, [load, member.user_id]);
 
   /* WON MEANS WON — through the one path every Won button uses.
@@ -441,15 +463,18 @@ export default function SalesPage({ member, mode = null }) {
   /* What a cell in the sheet actually calls. A Won choice is not an ordinary
    * field edit — it creates a client record — so it goes to winLead and
    * nowhere else. Every other patch goes straight through. */
-  const patchLead = useCallback((lead, patch) => {
+  const patchLead = useCallback((lead, patch, note = null) => {
     /* Won and Lost are not ordinary field edits and never were. Won creates a
      * client record; both of them now require a reason, because "why did we
      * lose" is the most useful question in sales and this database had no answer
      * to it. Picking either one from a dropdown opens the box; every other patch
      * goes straight through. */
-    if (patch.stage === "won" && lead.stage !== "won") return askForReason(lead, "won");
-    if (patch.stage === "lost" && lead.stage !== "lost") return askForReason(lead, "lost");
-    return patchLeadRaw(lead, patch);
+    /* Won and Lost open the reason box and return FALSE — nothing has been
+     * written yet, so the chip picker must not follow up with "moved, add a
+     * note?" for a move that has not happened. The reason box is that note. */
+    if (patch.stage === "won" && lead.stage !== "won") { askForReason(lead, "won"); return false; }
+    if (patch.stage === "lost" && lead.stage !== "lost") { askForReason(lead, "lost"); return false; }
+    return patchLeadRaw(lead, patch, note);
   }, [askForReason, patchLeadRaw]);
 
   /* Put a name in the Sales Owner column. This is a CLAIM, not a text field:
@@ -1209,7 +1234,14 @@ export default function SalesPage({ member, mode = null }) {
       )}
 
       {shownView === "pipeline" && (
-        <PipelineView rows={rows} teamName={teamName} companyById={companyById} onOpen={openLeadById} />
+        <PipelineView
+          rows={rows} teamName={teamName} companyById={companyById} onOpen={openLeadById}
+          /* The board writes through the SAME function the sheet's chip uses,
+             so a lead dragged onto Won creates a client exactly as a lead
+             picked from the menu does. */
+          onMove={(lead, stage, note) => patchLead(lead, { stage }, note)}
+          canEdit={(lead) => canEditLead(lead, member)}
+        />
       )}
 
       {shownView === "firms" && (
@@ -1709,37 +1741,148 @@ function ListsView({
 /* Only the stages a live deal moves through. The parked ones (Skip - 90+,
  * Bad contact info) are real states but they are not steps on a road, and
  * putting them on the board makes the board look full of work it is not. */
-const BOARD_STAGES = ["new", "researching", "contacted", "in_conversation", "follow_up", "meeting", "proposal", "won", "lost"];
+function PipelineView({ rows, teamName, companyById, onOpen, onMove, canEdit }) {
+  /* WHICH COLUMN THE CARD IS OVER, so it can light up. One piece of state, not
+   * one per column: two columns lit at once is a board that has lost track of
+   * where the card would land. */
+  const [over, setOver] = useState(null);
+  const [dragging, setDragging] = useState(null);   // the lead being carried
+  const [moving, setMoving] = useState(null);       // its id while the write runs
+  /* Where the note box hangs, after a drop that landed. */
+  const [noteFor, setNoteFor] = useState(null);     // { lead, stage, anchor }
+  const [note, setNote] = useState("");
 
-function PipelineView({ rows, teamName, companyById, onOpen }) {
+  const drop = async (stage, e) => {
+    e.preventDefault();
+    setOver(null);
+    const lead = dragging;
+    setDragging(null);
+    if (!lead) return;
+
+    /* THE SAME RULES THE CHIP ASKS. A card you can pick up and drag across the
+     * screen, only to have the write refused, is worse than a card that will
+     * not lift — so the check runs here as well as on the draggable itself. */
+    const check = dropCheck({ editable: canEdit(lead), from: lead.stage, to: stage });
+    if (!check.ok) {
+      if (check.why && check.why !== "It is already there.") toast.error("That did not move", check.why);
+      return;
+    }
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMoving(lead.id);
+    let ok = false;
+    try { ok = (await onMove(lead, stage)) !== false; } finally { setMoving(null); }
+
+    /* Won and Lost open the reason box instead and return false. No note box
+     * on top of it — that box IS the note. */
+    if (ok && !check.needsReason) {
+      setNote("");
+      setNoteFor({ lead, stage, anchor: { left: rect.left + 12, top: rect.top, bottom: rect.top + 44 } });
+    }
+  };
+
   return (
-    <div className="adm-board">
-      {BOARD_STAGES.map((stage) => {
-        const col = rows.filter((l) => l.stage === stage);
-        return (
-          <div key={stage} className="adm-board-col">
-            <div className="adm-sl-colhead">
-              <StagePill stage={stage} />
-              <span>{col.length}</span>
-            </div>
-            {col.slice(0, 60).map((l) => {
-              const co = companyById.get(l.company_id);
-              return (
-                <div key={l.id} className="adm-board-card" onClick={() => onOpen(l.id)}>
-                  <div className="adm-sl-bc-t">{l.name || l.company || "—"}</div>
-                  <div className="adm-sl-bc-s">{co?.name || l.company || ""}</div>
-                  <div className="adm-sl-bc-f">
-                    <span>{teamName(l.owner_id) || "on the floor"}</span>
-                    <ScoreChip score={co?.site_score} />
+    <>
+      <div className="adm-board-hint">
+        Drag a card into another column to move that contact. The status on the sheet changes with
+        it, and the move goes on their timeline with the date.
+        {" "}Won and Lost ask for a reason instead of a note.
+      </div>
+
+      <div className="adm-board">
+        {BOARD_STAGES.map((stage) => {
+          const col = rows.filter((l) => l.stage === stage);
+          const lit = over === stage && dragging && dragging.stage !== stage && canEdit(dragging);
+          return (
+            <div
+              key={stage}
+              className={`adm-board-col${lit ? " over" : ""}`}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOver(stage); }}
+              /* `relatedTarget` inside the column means the pointer only crossed
+                 onto a child. Without this the highlight flickers off and on for
+                 every card it passes over. */
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver((c) => (c === stage ? null : c)); }}
+              onDrop={(e) => drop(stage, e)}
+            >
+              <div className="adm-sl-colhead">
+                <StagePill stage={stage} />
+                <span>{col.length}</span>
+              </div>
+
+              {col.slice(0, 60).map((l) => {
+                const co = companyById.get(l.company_id);
+                const mine = canEdit(l);
+                return (
+                  <div
+                    key={l.id}
+                    className={`adm-board-card${mine ? " drag" : " locked"}${moving === l.id ? " busy" : ""}`}
+                    draggable={mine}
+                    onDragStart={(e) => {
+                      if (!mine) { e.preventDefault(); return; }
+                      /* Some browsers refuse to start a drag with no payload,
+                         and the id is the honest thing to carry. */
+                      e.dataTransfer.setData("text/plain", l.id);
+                      e.dataTransfer.effectAllowed = "move";
+                      setDragging(l);
+                    }}
+                    onDragEnd={() => { setDragging(null); setOver(null); }}
+                    onClick={() => onOpen(l.id)}
+                    title={mine
+                      ? "Drag me into another column, or click to open the record."
+                      : "Somebody else holds this lead. You can open it, not move it."}
+                  >
+                    <div className="adm-sl-bc-t">{l.name || l.company || "—"}</div>
+                    <div className="adm-sl-bc-s">{co?.name || l.company || ""}</div>
+                    <div className="adm-sl-bc-f">
+                      <span>{teamName(l.owner_id) || "on the floor"}</span>
+                      <ScoreChip score={co?.site_score} />
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-            {col.length > 60 && <div className="adm-sl-more">+{col.length - 60} more</div>}
+                );
+              })}
+              {col.length > 60 && <div className="adm-sl-more">+{col.length - 60} more</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* The same optional note the chip offers, after a drop that landed. The
+          move is already saved by the time this is on screen, and it says so. */}
+      {noteFor && (
+        <Popover anchor={noteFor.anchor} width={272} onClose={() => setNoteFor(null)}>
+          {/* Same trap as the sheet's picker: a React event bubbles through the
+              React tree, so a click in here would reach the card underneath. */}
+          <div className="adm-cp-panel" onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="adm-cp-done">
+              <strong>Moved to {LEAD_STAGE_LABELS[noteFor.stage] || noteFor.stage}.</strong> That is saved.
+            </div>
+            <textarea
+              className="adm-cp-note" rows={3} maxLength={400} autoFocus
+              placeholder="Add a note? Optional — it goes on their timeline."
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  const t = note;
+                  setNoteFor(null);
+                  if (cleanNote(t)) onMove(noteFor.lead, noteFor.stage, t);
+                }
+                if (e.key === "Escape") { e.preventDefault(); setNoteFor(null); }
+              }}
+            />
+            <div className="adm-cp-actions">
+              <button type="button" className="btn btn-sm" onClick={() => setNoteFor(null)}>No note</button>
+              <button
+                type="button" className="btn btn-sm btn-accent"
+                disabled={!note.trim()}
+                onClick={() => { const t = note; setNoteFor(null); onMove(noteFor.lead, noteFor.stage, t); }}
+              >Save note</button>
+            </div>
           </div>
-        );
-      })}
-    </div>
+        </Popover>
+      )}
+    </>
   );
 }
 

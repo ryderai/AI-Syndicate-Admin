@@ -2640,8 +2640,9 @@ select.adm-input { cursor: pointer; }
   color: var(--ink-dim);
 }
 
-/* The strip above the table: how many rows, which filters are on, and the
-   two switches (group by, columns). */
+/* The strip above the table: which filters are on, and the switches (type of
+   business, filters, group by, columns). The row count and the window note
+   that used to sit on its left were removed on 30 Aug 2026. */
 .adm-sh-bar {
   display: flex;
   align-items: center;
@@ -2651,13 +2652,10 @@ select.adm-input { cursor: pointer; }
   border-bottom: 1px solid var(--rule);
   background: var(--bg-1);
 }
-.adm-sh-count {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-dim);
-}
+/* `.adm-sh-count` and `.adm-sh-window` were deleted on 30 Aug 2026 with the
+   text they styled — Ryder: "remove this text". The row count is on the list
+   tab and the summary card; the 90-day window moved onto the two column
+   headings it is about. */
 .adm-sh-spacer { flex: 1 1 auto; }
 .adm-sh-groupsel {
   display: inline-flex;
@@ -3572,3 +3570,243 @@ select.adm-input { cursor: pointer; }
   .adm-st-name { grid-column: 1 / -1; }
   .adm-st-scale { align-items: flex-start; text-align: left; }
 }
+
+/* ---- Stats · room to breathe -------------------------------------
+   Ryder, 30 Aug 2026: "add a little bit of space around all the borders and
+   cards so that it doesnt look so crowsded."
+
+   SCOPED TO THIS PAGE ON PURPOSE. `.adm-sl-tiles`, `.adm-sl-health` and
+   `.adm-sl-table` are shared with the Sales sheet, and the sheet is a screen
+   somebody WORKS — tight rows mean more leads on screen at once, which is the
+   point there. Stats is a screen somebody READS. Same components, different
+   job, so the padding is set here rather than in the shared rules. */
+
+.adm-st-page .adm-sl-tiles { gap: 16px; margin-bottom: 22px; }
+.adm-st-page .adm-sl-tile { padding: 18px 20px; gap: 4px; }
+
+.adm-st-page .adm-sl-health { padding: 20px 22px; margin-bottom: 0; }
+.adm-st-page .adm-sl-health-t { margin-bottom: 16px; }
+.adm-st-page .adm-sl-health-bars { gap: 18px 24px; }
+.adm-st-page .adm-sl-health-n { margin-top: 16px; }
+
+/* The two warning banners sit above everything and need clearing. */
+.adm-st-page .adm-sl-warn { margin-bottom: 18px; }
+
+.adm-st-page .adm-st-filters { gap: 10px 24px; margin-bottom: 16px; }
+.adm-st-page .adm-st-chart { padding: 22px 24px; }
+.adm-st-page .adm-st-head { margin-bottom: 20px; gap: 24px; }
+.adm-st-page .adm-st-bars { gap: 6px; }
+.adm-st-page .adm-st-row { padding: 11px 12px; gap: 20px; }
+.adm-st-page .adm-st-foot { margin-top: 20px; padding-top: 16px; gap: 8px; }
+
+/* The table is the page's densest block, and it was the tightest. */
+.adm-st-page .adm-sl-table th { padding: 12px 18px; }
+.adm-st-page .adm-sl-table td { padding: 13px 18px; }
+
+.adm-st-page .adm-sl-imp-note { margin: 18px 2px 0; }
+.adm-st-page .adm-sl-modalnote { margin-top: 22px; }
+.adm-st-page .adm-sl-empty-card { padding: 44px 32px; }
+
+/* And a little air under the whole page, so the last line is not flush with
+   the bottom of the scroll area. */
+.adm-st-page { padding-bottom: 12px; }
+
+/* ---- The console's outer margin ----------------------------------
+   Ryder, 30 Aug 2026: "make the space around the outside border of the box
+   larger so it doesnt feel pinched in."
+
+   Set HERE, not in index.css, because index.css is the platform's design system
+   copied in verbatim and the two are kept identical on purpose.
+
+   Applied to every page rather than to Stats alone: a page whose cards start
+   48px from the edge, next to one whose cards start 36px from the edge, reads
+   as a broken layout the moment you click between them.
+
+   The header moves with it. The page title has to sit on the same left edge as
+   the cards under it, or the whole screen looks off-axis.
+
+   THE SIDE PADDING IS THE ONE TO BE CAREFUL WITH. Every pixel added here is a
+   pixel taken off the Sales sheet and the Operations table, both of which are
+   wide and both of which wrap to a second row of controls once they run out.
+   The sheet's control row was measured at ONE line after this change, at the
+   width Ryder actually works at. Re-measure it if this number moves again. */
+.dash-content { padding: 40px 48px 80px; }
+.dash-header { padding: 34px 48px 26px; }
+
+@media (max-width: 1400px) {
+  .dash-content { padding: 32px 36px 64px; }
+  .dash-header { padding: 28px 36px 22px; }
+}
+@media (max-width: 1080px) {
+  .dash-content { padding: 24px 26px 52px; }
+  .dash-header { padding: 22px 26px 18px; }
+}
+
+/* ================================================================== */
+/* THE SHEET, 30 AUG 2026 — one click to open, one click to move      */
+/* ================================================================== */
+/* Ryder: "i want it so that its a normal row that when you click anything that
+   isnt a tag it opens the client card. but on the tages, wgen you click it you
+   get a set of premade tags and then when you click a tag you can add a
+   optional note … one click movement through the pipeline."
+
+   Two kinds of thing on a row now, and they have to LOOK like two kinds of
+   thing or the promise is a lie: a chip you can press, and text you can read.
+   Everything in this block exists to keep that line visible. */
+
+/* ---- a reading cell. Not a button, so the click reaches the row. ---- */
+.adm-sh-plain {
+  display: block;
+  padding: 2px 2px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;          /* it opens the record, like the rest of the row */
+}
+.adm-sh-plain.adm-db-empty { color: var(--ink-faint); }
+
+/* ---- the whole row is the target ---- */
+.adm-sh-open { cursor: pointer; }
+.adm-sh-open:hover { background: var(--bg-2); }
+/* Somebody else's row still opens — it is readable — so it still gets the
+   hover. What it does not get is a live chip; that is handled in the markup. */
+
+/* ---- the preset chip ---- */
+.adm-cp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 5px 3px 3px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.adm-cp-btn:hover { border-color: var(--rule-2); background: white; }
+.adm-cp-btn:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 1px; }
+/* The caret is the whole difference between "a chip" and "a chip you can
+   press", so it is always drawn on a live one and never on a locked one. */
+.adm-cp-caret { font-size: 9px; color: var(--ink-faint); flex: none; }
+.adm-cp-btn.off { cursor: default; }
+.adm-cp-btn.off:hover { border-color: transparent; background: none; }
+
+/* ---- the panel ---- */
+.adm-cp-panel { padding: 6px; max-height: 62vh; overflow-y: auto; }
+.adm-cp-head {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 4px 8px 8px;
+}
+.adm-cp-opt {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  font: inherit;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.adm-cp-opt:hover { background: var(--bg-2); }
+.adm-cp-opt:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: -2px; }
+.adm-cp-opt.on { background: var(--accent-soft); }
+.adm-cp-opt[disabled] { opacity: 0.5; cursor: default; }
+/* What the stage MEANS, beside its name. A status nobody can explain out loud
+   is a status nobody uses. */
+/* THE CHIP MUST NOT BE SQUEEZED. It is the thing you are picking, and flexbox
+   was shrinking it to make room for its own explanation — "In conversation"
+   rendered as "In conversa". Found by looking at the open menu, not by a test. */
+.adm-cp-opt > :first-child { flex: 0 0 auto; }
+.adm-cp-help {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ink-dim);
+}
+.adm-cp-tick { color: var(--accent-deep); font-weight: 800; flex: none; }
+/* A menu with no "new…" in it looks broken until somebody says it is meant to
+   be that way. */
+.adm-cp-foot {
+  padding: 8px 8px 4px;
+  margin-top: 4px;
+  border-top: 1px solid var(--rule);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-faint);
+}
+
+/* ---- the optional note, after the move has already been written ---- */
+.adm-cp-done {
+  padding: 4px 8px 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+.adm-cp-done strong { color: var(--ink); }
+.adm-cp-note {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--rule-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: var(--body);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+.adm-cp-note:focus { border-color: var(--accent); }
+.adm-cp-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 0 2px; }
+
+/* ---- the header row stays put ---- */
+/* The scroll box is bounded so a sticky <th> has something to stick TO. See the
+   comment at the markup — `overflow-x: auto` already made this div the
+   scrolling ancestor, so a header stuck to the page stuck to nothing. */
+.adm-sh-scroll {
+  max-height: calc(100vh - 330px);
+  min-height: 320px;
+  overflow: auto;
+}
+.adm-sh-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  /* Opaque, or 3,663 rows scroll visibly through the header. */
+  background: white;
+  box-shadow: inset 0 -1px 0 var(--rule-2);
+}
+/* The group bars stay readable under the header rather than over it. */
+.adm-sh-scroll .adm-db-group td { position: relative; z-index: 1; }
+
+/* ---- the board: drag a card into another column ---- */
+.adm-board-hint {
+  font-size: 12.5px;
+  color: var(--ink-dim);
+  line-height: 1.55;
+  margin-bottom: 12px;
+  max-width: 80ch;
+}
+.adm-board-col { transition: background 0.14s, border-color 0.14s; }
+/* Where it would land. Deliberately loud: a drop that goes in the wrong column
+   is a lead in the wrong place, and undoing it is another drag. */
+.adm-board-col.over {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.adm-board-card.drag { cursor: grab; }
+.adm-board-card.drag:active { cursor: grabbing; }
+.adm-board-card.locked { cursor: pointer; opacity: 0.72; }
+.adm-board-card.busy { opacity: 0.5; pointer-events: none; }

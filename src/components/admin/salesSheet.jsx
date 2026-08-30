@@ -4,7 +4,7 @@ import {
   FILTERABLE, GROUPABLE,
   CLAIM_LABELS, CLAIM_COLOR,
   columnLabel, facetValue, facetValues, groupRows,
-  nameParts, joinName, splitName, nextSort, sortRowsBy,
+  nameParts, nextSort, sortRowsBy,
   contestedCompanies, companyHeadcount, sheetDate, sheetDateLong,
   /* ---- Aug 27 2026, The Floor ----
    * The filters hold SEVERAL VALUES PER COLUMN now, so every one of these takes
@@ -15,12 +15,13 @@ import {
   SCORE_BANDS, SIZE_BANDS, TOUCH_BANDS, WEBSITE_BANDS,
   readCount,
 } from "../../lib/salesSheet.js";
-import { LEAD_STAGES, LEAD_STAGE_LABELS } from "../../lib/data.js";
+import { LEAD_STAGES, LEAD_STAGE_LABELS, LEAD_STAGE_HELP } from "../../lib/data.js";
+import { ChipPicker } from "./chipPicker.jsx";
 /* The one-text gate, read rather than re-implemented: the row, the drawer and the
  * database function admin_lead_claim_text all have to agree about it. */
 import { textGate } from "../../../lib/sales-rules.js";
 import {
-  Chip, Avatar, Popover, PersonCell, SelectCell, TextCell, PopoutCell,
+  Chip, Avatar, Popover,
 } from "./opsCells.jsx";
 import { ScoreChip, SiteLink } from "./salesParts.jsx";
 
@@ -54,6 +55,15 @@ const BANDS = {
   last_touch: TOUCH_BANDS, website: WEBSITE_BANDS,
 };
 
+/* The Do column, in ONE place. It used to be written twice — 46 in the colgroup
+ * and 210 in the header — and the two disagreed for as long as the sheet has
+ * existed. */
+const DO_COLUMN_WIDTH = 210;
+
+/* The two columns that are counted from a WINDOW rather than from the whole
+ * history. Their heading says so; nothing else on the sheet needs to. */
+const WINDOWED_COLUMNS = ["contacted", "touches"];
+
 const PREFS_KEY = "ais.sales.sheet.v1";
 
 function loadPrefs() {
@@ -81,7 +91,10 @@ function cleanGroupBy(v) {
 }
 
 export default function SalesSheet({
-  rows, allLeads, member, team, lists,
+  /* `team` was dropped from this list on 30 Aug 2026 along with the owner
+   * dropdown — handing a lead to somebody else is done on the card now. The
+   * page still passes it; the sheet no longer needs it. */
+  rows, allLeads, member, lists,
   onPatch, onAssign, onOpen, onRunScore, teamName, activityWindowDays = 90,
   /* ---- added Aug 27 2026 with The Floor ----
    * WHETHER THE SALES OWNER CELL IS A DROPDOWN OF PEOPLE OR A CLAIM BUTTON.
@@ -230,20 +243,12 @@ export default function SalesSheet({
     return n;
   });
 
-  const personOptions = useMemo(
-    () => team.filter((m) => m.active !== false).map((m) => ({ value: m.user_id, label: m.full_name || m.email })),
-    [team],
-  );
-  /* Deactivating somebody does not hand their leads back. If the owner is no
-   * longer pickable, show them anyway and mark them — rendering the cell as
-   * "on the floor" would be the table lying about whose lead it is. */
-  const personOptionsFor = (row) => {
-    const id = row.lead.owner_id;
-    if (!id || personOptions.some((o) => o.value === id)) return personOptions;
-    return [...personOptions, { value: id, label: `${teamName(id) || "Former member"} · inactive` }];
-  };
-
-  const stageOptions = LEAD_STAGES.map((s) => ({ value: s, label: LEAD_STAGE_LABELS[s], color: STAGE_COLOR[s] || "default" }));
+  /* The picker shows what each stage MEANS, not just its name. A status
+   * nobody can explain out loud is a status nobody uses — the help text has
+   * existed in data.js since the drawer was built and the sheet never showed it. */
+  const stageOptions = LEAD_STAGES.map((v) => ({
+    value: v, label: LEAD_STAGE_LABELS[v], color: STAGE_COLOR[v] || "default", help: LEAD_STAGE_HELP[v],
+  }));
   const listOptions = lists.map((l) => ({ value: l.id, label: l.name, color: "default" }));
 
   const filterFor = (key, row) => {
@@ -311,42 +316,62 @@ export default function SalesSheet({
     }
   };
 
+  /* EVERY COLUMN THAT IS NOT A PRESET CHIP IS READ-ONLY ON THE SHEET.
+   *
+   * Ryder, 30 Aug 2026: "i want it so that its a normal row that when you click
+   * anything that isnt a tag it opens the client card … i want everything
+   * simple, one click movement through the pipeline … we have friggin 3000+
+   * leads, we need to be able to do this at scale."
+   *
+   * What this replaced: nine columns you could type into where you sat. It
+   * sounds like less and it is more. A row where every cell is a different kind
+   * of control is a row you have to aim at before you can click it, and the
+   * thing a rep does three hundred times a day — open the person, read them,
+   * move them on — was the thing that took the most aim.
+   *
+   * NOTHING BECAME UNEDITABLE. Name, title, email, phone, city, the next step,
+   * the owner and the stage are all on the client card, which is now one click
+   * from anywhere on the row. This is a move, not a removal.
+   *
+   * These cells do not swallow the click: it passes up to the row, which opens
+   * the record. That is why they are a span and not a button. */
+  const plainCell = (row, key, why) => {
+    const v = plainValue(row, key);
+    const empty = v === "—" || v === "Empty" || v === "In no list";
+    return (
+      <span className={`adm-sh-plain${empty ? " adm-db-empty" : ""}`} title={why || undefined}>
+        {v}
+      </span>
+    );
+  };
+
   /* ---- one cell ---- */
   const cell = (row, key) => {
     const l = row.lead;
 
-    /* ---- THE ROW LOCK, applied to every editable column at once ----
+    /* ---- THE ROW LOCK ----
      *
      * A rep may change a lead they hold or a lead nobody holds. Somebody else's
-     * row is readable and not editable, and that is the whole architecture of
-     * the Floor: visibility wide on purpose, editability not.
+     * row is readable and not editable: visibility wide on purpose, editability
+     * not.
      *
-     * IT IS ONE BRANCH RATHER THAN A CHECK IN EVERY CASE BELOW, deliberately.
-     * Twelve columns each remembering to check would be twelve places for the
-     * next column somebody adds to forget, and the forgotten one is a live
-     * control on a greyed row — which reads as a page that lets you do something
-     * and then refuses. The three columns that were already read-only for
-     * everybody (Contacted?, First Contact, Last Touch) fall through untouched,
-     * and so do the ones that are read-only by nature (Tags is handled in its own
-     * case, Scores, Website, Company, Touches, Company size, Type of business).
+     * IT IS NO LONGER A BRANCH IN FRONT OF THE SWITCH. Since 30 Aug 2026 the
+     * only controls left on a row are the preset chips, so the lock is passed
+     * INTO those two cells as `disabled` — which is what lets a locked row still
+     * show its status in colour, and still say why it cannot be moved, instead
+     * of turning into plain grey text that looks like a different column.
      *
      * This is the POLITE half of the lock. The half that works is migration 0020
      * and the check inside every endpoint that writes a lead. */
-    const col = SHEET_COLUMNS.find((c) => c.key === key);
-    if (col?.edit && key !== "tags" && locked(row)) {
-      return readOnlyCell(
-        row,
-        <span className={plainValue(row, key) === "—" ? "adm-db-empty" : undefined}>{plainValue(row, key)}</span>,
-        `${row.heldBy || "Somebody else holds this lead"} — you can read it, not change it. Click to open the record.`,
-      );
-    }
 
     switch (key) {
       case "owner":
-        /* One press, and it goes through the SAME onAssign path the dropdown
-         * uses — so the claim, the cadence clock and the toast cannot behave
-         * differently depending on which control you touched. */
-        if (claimAs && !l.owner_id) {
+        /* THE ONE ACTION THAT IS STILL A BUTTON ON A ROW, because it is a
+         * one-click act and not a field: taking a lead off the floor. It goes
+         * through the SAME onAssign path every other claim uses, so the claim,
+         * the cadence clock and the toast cannot behave differently depending on
+         * which control you touched. */
+        if (claimAs && !l.owner_id && !locked(row)) {
           const busy = claiming === row.id;
           return (
             <button
@@ -357,8 +382,7 @@ export default function SalesSheet({
               onClick={async (e) => {
                 e.stopPropagation();
                 /* Belt as well as braces: `disabled` is the guard a person
-                 * sees, and this is the one a second event already in the
-                 * queue meets. */
+                 * sees, this is the one a second queued event meets. */
                 if (claiming === row.id) return;
                 setClaiming(row.id);
                 try { await onAssign(row, claimAs); } finally { setClaiming(null); }
@@ -369,30 +393,14 @@ export default function SalesSheet({
             </button>
           );
         }
-        /* THE DROPDOWN IS AN OWNER'S CONTROL. Moving a lead to another person is
-         * something only an owner or an admin may do (migration 0020 refuses it
-         * in the database), so a rep gets the name and not the picker. A control
-         * that is drawn and then refused teaches people to stop reading the
-         * refusals. Aug 27 2026 */
-        if (!canAssign) {
-          return readOnlyCell(
-            row,
-            l.owner_id
-              ? <span>{row.ownerName || "someone"}</span>
-              : <span className="adm-db-empty">On the floor</span>,
-            l.owner_id
-              ? "Only an owner or an admin can move a lead to somebody else. You can hand your own back from the Do menu."
-              : "Nobody has claimed this. Press Claim to take it.",
-          );
-        }
-        return (
-          <PersonCell
-            value={l.owner_id}
-            options={personOptionsFor(row)}
-            onChange={(v) => onAssign(row, v)}
-            filter={filterFor("owner", row)}
-          />
-        );
+        /* HANDING A LEAD TO SOMEBODY ELSE HAPPENS ON THE CARD. It is an owner's
+         * act — migration 0020 refuses it in the database for everybody else —
+         * it is rare, and it is not worth a dropdown on three thousand rows.
+         * The card has the picker. */
+        return plainCell(row, "owner", l.owner_id
+          ? `${row.ownerName || "Someone"} holds this. Open the record to hand it over.`
+          : (canAssign ? "Nobody has claimed this. Open the record to give it to somebody."
+            : "Nobody has claimed this."));
 
       case "contacted": {
         /* READ-ONLY ON PURPOSE. In the sheet this is a dropdown that says the
@@ -412,11 +420,19 @@ export default function SalesSheet({
       }
 
       case "stage":
+        /* THE FAST LANE. One click moves the lead. The note afterwards is
+         * optional and never blocks — see chipPicker.jsx for why that order is
+         * the whole design. Won and Lost hand off to the reason box that has
+         * existed since Aug 27 rather than asking for the same sentence twice. */
         return (
-          <SelectCell
-            label="Sales cycle status" value={l.stage} options={stageOptions} clearable={false}
-            onChange={(v) => onPatch(l, { stage: v })}
-            filter={filterFor("stage", row)}
+          <ChipPicker
+            label="Sales cycle status"
+            value={l.stage}
+            options={stageOptions}
+            disabled={locked(row)}
+            disabledWhy={`${row.heldBy || "Somebody else holds this lead"} — you can read it, not move it.`}
+            onPick={(v) => onPatch(l, { stage: v })}
+            onNote={(v, note) => onPatch(l, { stage: v }, note)}
           />
         );
 
@@ -456,86 +472,20 @@ export default function SalesSheet({
       }
 
       case "next_step":
-        return (
-          <PopoutCell
-            value={l.next_step} placeholder="Add the next step…"
-            title={`Next steps — ${l.name || row.companyName || "this contact"}`}
-            hint="What happens next, and when. This is what your day is built from."
-            onChange={(v) => onPatch(l, { next_step: v })}
-          />
-        );
+        /* Still the widest column and still the first thing a rep reads across
+         * a row. It is written on the card now, where there is room to write a
+         * sentence rather than a cell's worth of one. */
+        return plainCell(row, "next_step", l.next_step || "Nothing planned yet.");
 
       case "first_name":
-      case "last_name": {
-        const parts = nameParts(l);
-        const mine = key === "first_name" ? parts.first : parts.last;
-        return (
-          <TextCell
-            value={mine || ""}
-            placeholder="Empty"
-            title={parts.derived
-              ? `Split from the full name on file: "${l.name || ""}". Correcting this half does NOT change that full name — switch on the Full Name column to edit it.`
-              : undefined}
-            onChange={(v) => {
-              const first = (key === "first_name" ? (v || "") : parts.first).trim();
-              const last = (key === "last_name" ? (v || "") : parts.last).trim();
-              const joined = joinName(first, last);
-
-              /* THE ORIGINAL FULL NAME IS NEVER OVERWRITTEN BY A GUESS.
-               *
-               * On a row whose halves were SPLIT from the full name (nobody has
-               * ever typed them), the other half on screen is a guess. Writing
-               * `name` from edited-half + guessed-half turned "Mary Jo Van Der
-               * Berg" into "Mary Jo Jo Van Der Berg" the moment somebody
-               * corrected the first name — and destroyed the only copy of what
-               * we were actually given. Found by a reviewer.
-               *
-               * So on a derived row both halves are STORED (the guess becomes a
-               * real value a person can now see and fix) and `name` is left
-               * exactly as it was. Once the halves are real, editing either one
-               * rewrites the display name as you would expect.
-               *
-               * `name` is also never set to null: a contact with no name at all
-               * renders as "unnamed" on every screen including My Day. */
-              onPatch(l, {
-                first_name: first || null,
-                last_name: last || null,
-                ...(!parts.derived && joined ? { name: joined } : {}),
-              });
-            }}
-          />
-        );
-      }
-
+      case "last_name":
       case "full_name":
-        return (
-          <TextCell
-            value={l.name} placeholder="No name on file"
-            /* Writing the full name is also the moment the two halves stop
-               being a guess, so they are cleared and re-split from what was
-               just typed. Leaving a stale guessed half next to a corrected
-               full name is how the two disagree in the first place. */
-            onChange={(v) => {
-              const parts = splitName(v || "");
-              onPatch(l, {
-                name: (v || "").trim() || null,
-                first_name: parts.first || null,
-                last_name: parts.last || null,
-              });
-            }}
-          />
-        );
-
       case "title":
-        return <TextCell value={l.title} onChange={(v) => onPatch(l, { title: v })} />;
       case "email":
-        return <TextCell value={l.email} onChange={(v) => onPatch(l, { email: v })} />;
       case "phone":
-        return <TextCell value={l.phone} onChange={(v) => onPatch(l, { phone: v })} />;
       case "city":
-        return <TextCell value={l.city} onChange={(v) => onPatch(l, { city: v })} />;
       case "state":
-        return <TextCell value={l.state} onChange={(v) => onPatch(l, { state: v })} />;
+        return plainCell(row, key);
 
       case "company": {
         /* The firm-level warning the grouped table used to carry. It is on the
@@ -559,51 +509,46 @@ export default function SalesSheet({
           : <span className="adm-db-empty">—</span>;
 
       case "list":
+        /* The same control as the status chip, for the same reason: it is a
+         * fixed list of things somebody already made, and picking one is one
+         * click. No note step — moving a contact between lists is filing, not
+         * a thing that happened to them. */
         return (
-          <SelectCell
-            label="List" value={l.list_id} options={listOptions} placeholder="In no list"
-            onChange={(v) => onPatch(l, { list_id: v })}
-            filter={filterFor("list", row)}
+          <ChipPicker
+            label="List"
+            value={l.list_id}
+            options={listOptions}
+            placeholder="In no list"
+            disabled={locked(row)}
+            disabledWhy={`${row.heldBy || "Somebody else holds this lead"} — you can read it, not change it.`}
+            onPick={(v) => onPatch(l, { list_id: v })}
           />
         );
 
-      /* ---- TAGS. The one multi-valued cell. ----
-       * Chips, read from the event log (replayed in sheetRow, never a column),
-       * and the whole panel behind them is one click away. Locked rows show the
-       * same chips and open the same panel read-only — a rep has to be able to
-       * see that a firm is tagged `hot` before they email into it. */
+      /* ---- TAGS ----
+       * Display only since 30 Aug 2026. Ryder: "i dont want to be able to add
+       * tags." Most of these are applied by rules in lib/sales-rules.js anyway
+       * — a rep hand-adding "Gone quiet" next to a rule that counts it is two
+       * sources for one fact. The dated history, and the few that CAN be put on
+       * by hand, are still one click away in the row's ⋯ menu.
+       *
+       * A plain span, not a button: the click passes up to the row and opens
+       * the record, like every other reading cell. */
       case "tags": {
         const on = row.tags || [];
+        if (!on.length) return <span className="adm-sh-plain adm-db-empty">—</span>;
         return (
-          <button
-            type="button" className="adm-db-btn"
-            title={on.length
-              ? `${on.map((t) => t.label).join(" · ")}. Click to see the whole history.`
-              : "No tags yet. Click to add one, or to work out the automatic ones."}
-            onClick={(e) => { e.stopPropagation(); onTag?.(row); }}
-          >
-            {on.length === 0
-              ? <span className="adm-db-empty">{locked(row) ? "—" : "+ tag"}</span>
-              : (
-                <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
-                  {on.slice(0, 3).map((t) => <Chip key={t.tag_id} label={t.label} color={t.color} />)}
-                  {/* SAID, not hidden. Three chips is what fits; a cell that
-                      quietly stops at three reads as a lead with three tags. */}
-                  {on.length > 3 ? <span className="adm-sh-headn">+{on.length - 3}</span> : null}
-                </span>
-              )}
-          </button>
+          <span className="adm-sh-plain" title={on.map((t) => t.label).join(" · ")}>
+            <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+              {on.slice(0, 3).map((t) => <Chip key={t.tag_id} label={t.label} color={t.color} />)}
+              {/* SAID, not hidden. Three chips is what fits; a cell that quietly
+                  stops at three reads as a lead with three tags. */}
+              {on.length > 3 ? <span className="adm-sh-headn">+{on.length - 3}</span> : null}
+            </span>
+          </span>
         );
       }
 
-      /* ---- THE THREE SCORES A SCAN RETURNS ----
-       * AI Access, ordinary search, and how often an AI names the firm when a
-       * buyer asks. Read from the newest admin_company_reports row for the FIRM.
-       *
-       * A MISSING HALF PRINTS AS A DASH, NEVER AS A ZERO. A firm shown as 0 for
-       * AI Access reads as the worst site anybody has ever seen, which is the
-       * hardest a rep would ever go in — the single most dangerous wrong number
-       * this table could hold. */
       case "scores": {
         const r = row.report;
         if (!r) {
@@ -698,23 +643,28 @@ export default function SalesSheet({
 
   return (
     <div className="adm-db adm-sh">
-      {/* ---- the strip above the table ---- */}
-      <div className="adm-sh-bar">
-        <span className="adm-sh-count">
-          {shown.length === rows.length
-            ? `${rows.length} ${rows.length === 1 ? "person" : "people"}`
-            : `${shown.length} of ${rows.length} shown`}
-        </span>
-        {/* SAID OUT LOUD, because two columns are counted from it. "Contacted?"
-            and "Touches" are read from the last N days of activity, not from
-            the whole history — a person worked hard in the spring and quiet
-            since shows "Yes, older" here and a full timeline inside. Leaving
-            the window unsaid is what made those two columns look like lifetime
-            facts. */}
-        <span className="adm-sh-window" title="Contacted? and Touches are counted from this window. Open a record to read its whole history.">
-          Contacted? and Touches count the last {activityWindowDays} days
-        </span>
+      {/* ---- the strip above the table ----
+          Ryder, 30 Aug 2026, pointing at it: "remove this text".
 
+          WHAT WENT, AND WHERE IT WENT. Two things used to sit on the left of
+          this strip and both were duplicates of something already on screen:
+
+          - the row count, which the list tab above already carries ("Everybody
+            3663") and the summary card above that states in full;
+          - "Contacted? and Touches count the last 90 days", which is a real and
+            important fact — those two columns are counted from a WINDOW, not
+            from the whole history, and a person worked hard in the spring and
+            quiet since reads "Yes, older" here with a full timeline inside.
+
+          That fact is NOT dropped. It moved onto the two column headings it is
+          about, as their tooltip, which is where somebody wondering about that
+          exact column will look. A window left unsaid is what made those two
+          columns look like lifetime facts in the first place.
+
+          The strip still carries everything on its RIGHT — the filter chips,
+          Type of business, Filters, Group by and Columns. Only the left-hand
+          text is gone. */}
+      <div className="adm-sh-bar">
         {/* ---- EVERY FILTER THAT IS ON, AS A REMOVABLE CHIP — Aug 27 2026 ----
             One chip per VALUE, not per column, because a column can hold several
             now: "State: FL" and "State: AL" are two chips and taking one off
@@ -829,11 +779,27 @@ export default function SalesSheet({
       )}
 
       {/* ---- the table ---- */}
-      <div className="adm-db-scroll">
+      {/* THE TABLE IS THE SCROLLER, NOT THE PAGE — 30 Aug 2026.
+          Ryder: "when you scroll down i still need to be able to see the title
+          of the row."
+
+          A sticky <th> sticks to its nearest scrolling ancestor. This div has
+          always had `overflow-x: auto`, which makes it that ancestor in BOTH
+          directions, so a header stuck to the page would have stuck to nothing.
+          Bounding its height turns it into a real scroll box: the headers stay
+          put, and 3,663 rows no longer push the toolbar off the top of the
+          screen every time you look down the list. */}
+      <div className="adm-db-scroll adm-sh-scroll">
         <table className="adm-db-table adm-sh-table">
           <colgroup>
             {visible.map((c) => <col key={c.key} style={{ width: c.width }} />)}
-            <col style={{ width: 46 }} />
+            {/* THE LAST COLUMN WAS 46px WIDE AND ITS HEADER SAID 210.
+                `table-layout: fixed` reads the COLGROUP and ignores the <th>,
+                so the Do column was laid out at 46px and its buttons — Claim,
+                Email, ⋯, ⤢ — were cut off the right-hand edge of every row.
+                Ryder, 30 Aug 2026: "make sure the rows on the end dont get cut
+                off." One number, in two places, disagreeing. */}
+            <col style={{ width: DO_COLUMN_WIDTH }} />
           </colgroup>
           <thead>
             <tr>
@@ -841,6 +807,11 @@ export default function SalesSheet({
                 <th
                   key={c.key}
                   aria-sort={sort && sort.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+                  /* The window that used to be printed above the table. Only
+                     the two columns it is actually about carry it. */
+                  title={WINDOWED_COLUMNS.includes(c.key)
+                    ? `Counted from the last ${activityWindowDays} days of logged activity, not from the whole history. Open a record to read all of it.`
+                    : undefined}
                 >
                   <SheetHead
                     col={c} rows={rows} groupBy={groupBy} sort={sort}
@@ -856,7 +827,7 @@ export default function SalesSheet({
               {/* "Do" rather than a blank header. The column holds the row's
                   buttons now, not just the open arrow, and a column of controls
                   with no name is a column people do not look in. */}
-              <th style={{ width: 210 }}>Do</th>
+              <th style={{ width: DO_COLUMN_WIDTH }}>Do</th>
             </tr>
           </thead>
 
@@ -887,13 +858,29 @@ export default function SalesSheet({
                 {!shut && ordered.map((row) => (
                   <tr
                     key={row.id}
+                    /* THE WHOLE ROW OPENS THE PERSON — Ryder, 30 Aug 2026:
+                       "a normal row that when you click anything that isnt a
+                       tag it opens the client card."
+
+                       It is safe to put on the <tr> because every control left
+                       on a row stops the event itself: the chips, the Claim
+                       button and the three Do buttons all call
+                       stopPropagation, and the reading cells are plain spans
+                       with nothing to swallow the click.
+
+                       Not a keyboard control, deliberately: a <tr> cannot hold
+                       focus without pretending to be something it is not. The
+                       ⤢ button at the end of every row is the keyboard path,
+                       and it is in the tab order already. */
+                    onClick={() => onOpen(row.id)}
+                    title="Open this person's record"
                     /* THREE STATES, READABLE AT A GLANCE. `mine` is an accent
                        edge, `theirs` is dimmed with every control off, and
                        neither means nobody has claimed it. Read off
                        `row.editable`, which sheetRow derived once from
                        canEditLead — not re-derived here. */
                     className={[
-                      "adm-db-row", "adm-sh-row",
+                      "adm-db-row", "adm-sh-row", "adm-sh-open",
                       row.lead.owner_id === member.user_id ? "mine" : "",
                       locked(row) ? "theirs" : "",
                       row.gate.skip ? "skip" : "",

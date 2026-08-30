@@ -1198,7 +1198,15 @@ test("the Floor has a real Claim button, and says what claiming costs you", () =
    * so the person dropdown is not drawn for a rep at all — and assignLead
    * refuses it a second time for the path that does not go through a control. */
   assert.match(SALESPAGE, /canAssign=\{isAdmin\}/);
-  assert.match(SHEET, /if \(!canAssign\) \{/, "a rep gets the name, not the picker");
+  /* NOBODY GETS THE PICKER ON A ROW ANY MORE — 30 Aug 2026. Ryder: "i want it
+   * so that its a normal row that when you click anything that isnt a tag it
+   * opens the client card." Handing a lead to somebody else moved to the card,
+   * where the owner dropdown still is and where migration 0020 still refuses it
+   * for a rep. The rule this line has always been about — a rep must never be
+   * shown a control that will then be refused — is now true of everybody, so it
+   * is asserted the stronger way: the sheet has no person picker at all. */
+  assert.ok(!SHEET.includes("<PersonCell"), "the sheet still has an owner picker on the row");
+  assert.match(SHEET, /Open the record to hand it over/, "and it has to say where handing it over happens");
   assert.match(SALESPAGE, /if \(!isAdmin && userId && userId !== member\.user_id\)/);
 });
 
@@ -1209,8 +1217,14 @@ test("WON AND LOST BOTH ASK WHY, IN FRONT OF THE ONE FUNCTION", () => {
    * exactly the defect that made one of those four permanently block the only
    * one that worked. */
   assert.match(SALESPAGE, /const askForReason = useCallback\(\(lead, kind\)/);
-  assert.match(SALESPAGE, /if \(patch\.stage === "won" && lead\.stage !== "won"\) return askForReason\(lead, "won"\)/);
-  assert.match(SALESPAGE, /if \(patch\.stage === "lost" && lead\.stage !== "lost"\) return askForReason\(lead, "lost"\)/);
+  /* These two used to `return askForReason(...)`, which returned undefined. On
+   * 30 Aug 2026 patchLead started reporting whether it wrote anything, because
+   * the sheet's new chip picker follows a successful move with "moved — add a
+   * note?" — and it must not say that about a move that has not happened yet.
+   * So they now return FALSE explicitly. The rule is unchanged: the reason box
+   * goes in front of the one function, never in front of the four buttons. */
+  assert.match(SALESPAGE, /if \(patch\.stage === "won" && lead\.stage !== "won"\) \{ askForReason\(lead, "won"\); return false; \}/);
+  assert.match(SALESPAGE, /if \(patch\.stage === "lost" && lead\.stage !== "lost"\) \{ askForReason\(lead, "lost"\); return false; \}/);
   const PROFILE = readFileSync(new URL("../../src/components/admin/salesProfile.jsx", import.meta.url), "utf8");
   assert.match(PROFILE, /const doWin = \(\) => doClose\("won"\)/);
   assert.match(PROFILE, /const flipToClient = \(\) => doClose\("won"\)/);
