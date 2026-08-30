@@ -2051,9 +2051,19 @@ select.adm-input { cursor: pointer; }
   font-weight: 600; cursor: pointer;
 }
 .adm-sl-views button.active { background: var(--ink); color: white; }
-.adm-sl-search { flex: 1 1 220px; min-width: 180px; }
+/* `flex-basis: 0`, NOT 220px — and that is what keeps this bar on ONE LINE.
+ *
+ * Flex decides where to wrap from the BASIS, before flex-grow is applied. At
+ * 220px the search claimed its full width up front, the line ran over, and the
+ * actions at the end wrapped onto a second row — leaving a hole beside the
+ * search and putting Add a contact underneath it. With a basis of 0 the search
+ * asks for nothing and then takes whatever is left over, so it is the thing
+ * that gives way and the row stays one row. 30 Aug 2026. */
+.adm-sl-search { flex: 1 1 0; min-width: 150px; }
 .adm-sl-sel { width: 150px; }
-.adm-sl-baractions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+/* `flex-shrink: 0`, so the buttons keep their size and the search gives way
+   instead — a squashed "+ Add a contact" is worse than a shorter search box. */
+.adm-sl-baractions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
 
 /* ---- chips ------------------------------------------------------- */
 .adm-sl-pill {
@@ -3401,3 +3411,164 @@ select.adm-input { cursor: pointer; }
 .adm-aic-rowbtn:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; border-radius: 3px; }
 .adm-aic-table tbody tr:hover { background: var(--bg-2); }
 .adm-aic-state.warn { color: #92400e; cursor: help; }
+
+/* ================================================================== */
+/* SALES · STATS — the by-rep bar chart and its filter chips           */
+/* ================================================================== */
+/* Ryder, 30 Aug 2026: "bar graphs for each rep with filters at the top to
+   click to show different stats to see who performed the best."
+
+   ONE FILTER BAND, ABOVE THE CARD, NOT INSIDE IT. A control that lives inside
+   the thing it changes reads as part of the chart's own furniture, and when a
+   second chart arrives it has to move anyway. It sits above, it scopes what is
+   under it, and there is one of it.
+
+   The bars are thin, the track is one shade off the page, and the only strong
+   colour on the whole chart is the leader's bar. */
+
+.adm-st-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  margin-bottom: 12px;
+}
+.adm-st-fgroup { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.adm-st-fglabel {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-right: 2px;
+}
+.adm-st-chip {
+  font-family: var(--body);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 7px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--rule-2);
+  background: var(--bg-1, #fff);
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.adm-st-chip:hover { border-color: var(--accent); color: var(--accent-deep); }
+.adm-st-chip:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+/* The pressed chip is not colour alone: it is also the only one whose label is
+   repeated as the chart's own heading, one line below it. */
+.adm-st-chip.on {
+  background: var(--accent-deep);
+  border-color: var(--accent-deep);
+  color: #fff;
+}
+
+.adm-st-chart { padding: 16px 18px; }
+.adm-st-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.adm-st-title { font-size: 14.5px; font-weight: 700; color: var(--ink); margin: 0 0 4px; }
+.adm-st-what { font-size: 12.5px; color: var(--ink-dim); line-height: 1.55; margin: 0; max-width: 62ch; }
+.adm-st-scale {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  text-align: right;
+  white-space: nowrap;
+}
+.adm-st-scale-2 { color: var(--ink-faint); text-transform: none; letter-spacing: 0; font-size: 10.5px; }
+
+.adm-st-bars { display: flex; flex-direction: column; gap: 4px; }
+.adm-st-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) 1fr minmax(92px, max-content);
+  align-items: center;
+  gap: 14px;
+  padding: 7px 8px;
+  border-radius: 8px;
+}
+.adm-st-row:hover { background: var(--bg-2); }
+.adm-st-name { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.adm-st-who {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.adm-st-best {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  flex: none;
+}
+.adm-st-track {
+  height: 12px;
+  border-radius: 99px;
+  background: var(--bg-3);
+  overflow: hidden;
+  min-width: 40px;
+}
+.adm-st-fill { height: 100%; border-radius: 99px; transition: width 0.25s ease; }
+.adm-st-val {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
+}
+/* tabular-nums HERE and not on the hero tiles: these numbers stack in a column
+   and have to line up; a big standalone figure looks loose with them on. */
+.adm-st-num {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.adm-st-num.best { color: var(--accent-deep); }
+.adm-st-sub { font-size: 10.5px; color: var(--ink-faint); line-height: 1.35; }
+
+.adm-st-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-dim);
+}
+.adm-st-foot:empty { display: none; }
+
+/* Narrow: the name takes its own line so a long name never squeezes the bar
+   into a stub. The value stays beside the bar, where it is being compared. */
+@media (max-width: 720px) {
+  .adm-st-row {
+    grid-template-columns: 1fr max-content;
+    gap: 6px 12px;
+  }
+  .adm-st-name { grid-column: 1 / -1; }
+  .adm-st-scale { align-items: flex-start; text-align: left; }
+}

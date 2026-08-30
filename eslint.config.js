@@ -4,7 +4,10 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 
 export default [
-  { ignores: ["dist"] },
+  /* `_to_delete` is the graveyard — untracked, never built, and it holds a
+     deliberately broken file from Aug 26 that made `npm run lint` fail for the
+     whole repo. Dead code is not linted. */
+  { ignores: ["dist", "_to_delete"] },
   {
     files: ["**/*.{js,jsx}"],
     languageOptions: {

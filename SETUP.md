@@ -1309,3 +1309,76 @@ can create. Until one exists the page shows METERED with no BILLED column and sa
 **Platform and backend spend.** Anything Andrew's side sends to an AI is not in these numbers until
 it posts to `/api/usage-ingest`. The endpoint is ready and takes a dedupe key now, so a retry
 cannot double-count. Its request shape is documented at the top of `api/usage-ingest.js`.
+
+
+## Migration 0025 — everything the sheet holds (added Aug 30 2026)
+
+**What it is for.** Five columns the outreach sheet has and the console had nowhere to put. Each
+one was being read off the spreadsheet and then dropped, on every import.
+
+**You do not have to run this before importing.** The import asks once whether these columns
+exist. If they do not, it leaves those five fields out, imports everything else, and says so on
+the result screen. Running it later and dropping the file in again fills them.
+
+Do this:
+
+1. Open **https://supabase.com/dashboard** and sign in.
+2. In the left sidebar click your project (the AI Syndicate one).
+3. In the left sidebar click **SQL Editor**.
+4. Click the green **New query** button, top right.
+5. Open the file `supabase/migrations/0025_sheet_columns.sql` in Cursor.
+6. Select all of it (**Cmd + A**), copy it (**Cmd + C**).
+7. Click into the big empty box in the SQL Editor and paste (**Cmd + V**).
+8. Click **Run**, bottom right of that box.
+9. You should see **Success. No rows returned.** That is the correct result — this migration adds
+   columns, it does not return any.
+
+If it says something else, copy the whole message and send it to me. Do not run it a second time
+to see if it works — it is safe to re-run, but a second error tells you nothing the first did not.
+
+**To check it worked:** in the SQL Editor, new query, paste this and Run:
+
+```sql
+select column_name from information_schema.columns
+where table_name = 'admin_leads' and column_name in ('address','country')
+union all
+select column_name from information_schema.columns
+where table_name = 'admin_companies' and column_name in ('alias','keywords','total_funding');
+```
+
+You should get **five rows back**: address, country, alias, keywords, total_funding.
+
+
+## Migration 0026 — repair the function grants (added Aug 30 2026)
+
+**Run this if you ever see "permission denied for function …" anywhere in the console.**
+
+It happened on Start over (`admin_clear_import`) on Aug 30, and on sign-in (`admin_is_member`) on
+Aug 29. Same cause both times: the migration that made the function has a
+`grant execute … to authenticated` line, and on this database that line never ran. The function
+exists; nobody signed in is allowed to call it.
+
+**It cannot break anything.** It only grants. It does not revoke, drop, alter or delete, it touches
+no table and no row, and granting something that is already granted does nothing. Run it as many
+times as you like.
+
+Do this:
+
+1. Open **https://supabase.com/dashboard** and sign in.
+2. In the left sidebar click your project.
+3. In the left sidebar click **SQL Editor**.
+4. Click the green **New query** button, top right.
+5. Open `supabase/migrations/0026_grants_repair.sql` in Cursor.
+6. Select all of it (**Cmd + A**), copy it (**Cmd + C**).
+7. Click into the big empty box and paste (**Cmd + V**).
+8. Click **Run**, bottom right.
+
+**What you should see.** A table, one row per function, with **`true`** in the `can_execute`
+column for every row. That is the answer — every function the console calls is now callable.
+
+Under the table, or in the **Messages** tab beside **Results**, there is also a line reading
+`Granted execute to authenticated on 11 function(s).` If it instead says some are `NOT FOUND on
+this database`, copy that whole line and send it to me — it means a migration older than 0026
+never finished, and the missing ones name which.
+
+9. Go back to the console and reload the page (**Cmd + R**). Start over works now.

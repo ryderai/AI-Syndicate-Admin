@@ -753,6 +753,7 @@ export default function SalesSheet({
           labelFor={labelFor}
           onFacet={toggleFacet}
           onClearColumn={dropFacet}
+          onClearAll={clearAllFacets}
         />
 
         <label className="adm-sh-groupsel">
@@ -1136,83 +1137,189 @@ function allRowFor(allLeads, companyId) {
  * cannot be reached at all. That was a real shipped bug on the Operations table,
  * and facetValues() carries the same warning.
  */
-function FilterMenuBar({ rows, facets, labelFor, onFacet, onClearColumn }) {
-  const [open, setOpen] = useState(null);   // { key, anchor }
+/* THE ONE COLUMN THAT STAYS OUT ON THE BAR.
+ *
+ * Ryder, 30 Aug 2026: "its important to be abel to filter by type of business,
+ * and the pipeline is basically where you can filter them by stage." So Type of
+ * business keeps its own button and everything else moves behind Filters —
+ * including stage, which has a whole view of its own for exactly that job.
+ *
+ * A list rather than a single value because the next one he names should be a
+ * one-word change, not a refactor. */
+const PINNED_FILTERS = ["vertical"];
+
+/**
+ * EVERY FILTER, BEHIND ONE BUTTON.
+ *
+ * There were fourteen of these across two rows above the table, permanently, on
+ * a page whose job is the table. Ryder, 30 Aug 2026: "everything seems really
+ * complex and jumbled, i want to simplify it all."
+ *
+ * Nothing is removed. The button says how many filters are on, the panel lists
+ * every column with its own count, and picking one shows that column's values.
+ *
+ * ONE POPOVER, TWO LEVELS — not a popover opened from inside another popover.
+ * That nesting is what made the cell menus close themselves the instant they
+ * opened back in August: the outer one closes on any outside click, and the
+ * inner one's own button is an outside click. So the panel swaps its contents
+ * instead, with a Back that returns to the column list.
+ */
+function FilterMenuBar({ rows, facets, labelFor, onFacet, onClearColumn, onClearAll }) {
+  const [open, setOpen] = useState(null);       // the anchor rect, or null
+  const [column, setColumn] = useState(null);   // which column the panel is showing
   const cols = SHEET_COLUMNS.filter((c) => c.filterable);
+  const pinned = cols.filter((c) => PINNED_FILTERS.includes(c.key));
+  const rest = cols.filter((c) => !PINNED_FILTERS.includes(c.key));
+
+  /* How many COLUMNS are filtered, not how many values. "Filters · 2" over two
+   * columns holding four values between them is the number a person is
+   * actually asking for — how many things are narrowing this list. */
+  const onCount = cols.filter((c) => facets[c.key]?.size).length;
+
+  const close = () => { setOpen(null); setColumn(null); };
+
+  /* One column's values. Shared by the pinned buttons and the panel, so a
+   * column cannot behave one way on the bar and another inside the menu. */
+  const valueList = (key) => {
+    const values = facetValues(rows, key);
+    if (!values.length) return <div className="adm-db-pop-none">No rows to filter.</div>;
+    /* Capped, and the cap SAYS SO. A city column on the real sheet has hundreds
+     * of values, and a menu that quietly stops at forty reads as a list of
+     * every city we hold. */
+    const CAP = 40;
+    return (
+      <>
+        {values.slice(0, CAP).map(([v, n]) => {
+          const ticked = Boolean(facets[key]?.has(v));
+          return (
+            <button
+              key={v} type="button" role="menuitemcheckbox" aria-checked={ticked}
+              className={`adm-db-pop-item${ticked ? " on" : ""}`}
+              /* The menu STAYS OPEN, unlike the header's single-value one.
+               * Picking three states means three clicks, and closing after each
+               * would mean re-opening twice. */
+              onClick={() => onFacet(key, v)}
+            >
+              <span>{ticked ? "✓ " : ""}{labelFor(key, v)}</span>
+              <span className="adm-db-count">{n}</span>
+            </button>
+          );
+        })}
+        {values.length > CAP ? (
+          <div className="adm-db-pop-none">
+            Showing the {CAP} commonest of {values.length}. Search above the table to reach
+            the rest.
+          </div>
+        ) : null}
+      </>
+    );
+  };
+
+  const shownCol = column ? cols.find((c) => c.key === column) : null;
 
   return (
     <>
-      {cols.map((c) => {
+      {/* ---- the columns that stay out ---- */}
+      {pinned.map((c) => {
         const on = facets[c.key]?.size || 0;
         return (
           <button
-            key={c.key}
-            type="button"
+            key={c.key} type="button"
             className={on ? "adm-sh-chipbtn" : "btn btn-sm"}
             aria-haspopup="menu"
             title={on
               ? `${c.label}: ${on} value${on === 1 ? "" : "s"} on. Click to change.`
               : `Filter by ${c.label}. More than one value at a time is allowed.`}
-            onClick={(e) => setOpen({ key: c.key, anchor: e.currentTarget.getBoundingClientRect() })}
+            onClick={(e) => {
+              setColumn(c.key);
+              setOpen(e.currentTarget.getBoundingClientRect());
+            }}
           >
             {c.label}{on ? ` · ${on}` : ""} <span aria-hidden="true">▾</span>
           </button>
         );
       })}
 
+      {/* ---- and everything else, behind one ---- */}
+      <button
+        type="button"
+        className={onCount ? "adm-sh-chipbtn" : "btn btn-sm"}
+        aria-haspopup="menu"
+        title={onCount
+          ? `${onCount} column${onCount === 1 ? " is" : "s are"} filtering this list. Click to change or clear.`
+          : "Filter by any column — Sales Owner, Contacted?, Status, Claim, Last Touch, Tags, Company, City, State, Company size, Site Score, Website or List."}
+        onClick={(e) => {
+          setColumn(null);
+          setOpen(e.currentTarget.getBoundingClientRect());
+        }}
+      >
+        Filters{onCount ? ` · ${onCount}` : ""} <span aria-hidden="true">▾</span>
+      </button>
+
+      {/* A value list needs a little more room than a column list — it just
+          stops the longest city names wrapping onto three lines. */}
       {open && (
-        <Popover anchor={open.anchor} width={266} onClose={() => setOpen(null)}>
-          <div className="adm-db-pop-filter">
-            <div style={{ padding: "6px 10px", fontSize: 12, color: "var(--ink-dim)", lineHeight: 1.45 }}>
-              Tick as many as you like. Inside one column they are
-              {" "}<strong>or</strong>; across columns they are <strong>and</strong>.
-            </div>
-            {facets[open.key]?.size ? (
-              <button
-                type="button" className="adm-db-pop-item plain"
-                onClick={() => { onClearColumn(open.key); setOpen(null); }}
-              >
-                Clear this column
-              </button>
-            ) : null}
-          </div>
-          <div className="adm-db-pop-list" role="menu">
-            {(() => {
-              const values = facetValues(rows, open.key);
-              if (!values.length) return <div className="adm-db-pop-none">No rows to filter.</div>;
-              /* Capped, and the cap SAYS SO. A city column on the real sheet has
-               * hundreds of values, and a menu that quietly stops at forty reads
-               * as a list of every city we hold. */
-              const CAP = 40;
-              const shown = values.slice(0, CAP);
-              return (
-                <>
-                  {shown.map(([v, n]) => {
-                    const ticked = Boolean(facets[open.key]?.has(v));
-                    return (
-                      <button
-                        key={v} type="button" role="menuitemcheckbox" aria-checked={ticked}
-                        className={`adm-db-pop-item${ticked ? " on" : ""}`}
-                        /* The menu STAYS OPEN, unlike the header's single-value
-                         * one. Picking three states means three clicks, and
-                         * closing after each would mean re-opening twice. */
-                        onClick={() => onFacet(open.key, v)}
-                      >
-                        <span>{ticked ? "✓ " : ""}{labelFor(open.key, v)}</span>
-                        <span className="adm-db-count">{n}</span>
-                      </button>
-                    );
-                  })}
-                  {values.length > CAP ? (
-                    <div className="adm-db-pop-none">
-                      Showing the {CAP} commonest of {values.length}. Search above the table to reach
-                      the rest.
-                    </div>
-                  ) : null}
-                </>
-              );
-            })()}
-          </div>
+        <Popover anchor={open} width={shownCol ? 266 : 250} onClose={close}>
+          {shownCol ? (
+            <>
+              <div className="adm-db-pop-filter">
+                {/* Back, not a second popover. See the note on the component. */}
+                {PINNED_FILTERS.includes(shownCol.key) ? null : (
+                  <button
+                    type="button" className="adm-db-pop-item plain"
+                    onClick={() => setColumn(null)}
+                  >
+                    ‹ All filters
+                  </button>
+                )}
+                <div style={{ padding: "6px 10px", fontSize: 12, color: "var(--ink-dim)", lineHeight: 1.45 }}>
+                  <strong>{shownCol.label}</strong> — tick as many as you like. Inside one column
+                  they are <strong>or</strong>; across columns they are <strong>and</strong>.
+                </div>
+                {facets[shownCol.key]?.size ? (
+                  <button
+                    type="button" className="adm-db-pop-item plain"
+                    onClick={() => { onClearColumn(shownCol.key); setColumn(null); }}
+                  >
+                    Clear this column
+                  </button>
+                ) : null}
+              </div>
+              <div className="adm-db-pop-list" role="menu">{valueList(shownCol.key)}</div>
+            </>
+          ) : (
+            <>
+              <div className="adm-db-pop-filter">
+                <div style={{ padding: "6px 10px", fontSize: 12, color: "var(--ink-dim)", lineHeight: 1.45 }}>
+                  Pick a column to filter by. A number beside one means it is already
+                  narrowing this list.
+                </div>
+                {onCount ? (
+                  <button
+                    type="button" className="adm-db-pop-item plain"
+                    onClick={() => { onClearAll(); close(); }}
+                  >
+                    Clear all {onCount} filter{onCount === 1 ? "" : "s"}
+                  </button>
+                ) : null}
+              </div>
+              <div className="adm-db-pop-list" role="menu">
+                {rest.map((c) => {
+                  const on = facets[c.key]?.size || 0;
+                  return (
+                    <button
+                      key={c.key} type="button" role="menuitem"
+                      className={`adm-db-pop-item${on ? " on" : ""}`}
+                      onClick={() => setColumn(c.key)}
+                    >
+                      <span>{c.label}</span>
+                      <span className="adm-db-count">{on ? `${on} on` : "›"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </Popover>
       )}
     </>

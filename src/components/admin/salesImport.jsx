@@ -1,560 +1,646 @@
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
-  insertLeadsBatch, insertCompaniesBatch, findExistingCompanies, findExistingLeadKeys,
-  upsertLeadList, findLeadListByTab, upsertLeadSource, addLeadActivity, logActivity,
+  insertLeadsBatch, insertCompaniesBatch, findExistingCompanyRows, findExistingLeadRows,
+  applyLeadUpdates, applyCompanyUpdates, probeSheetColumns,
+  upsertLeadList, findLeadListByTab, upsertLeadSource, listLeadSources, addLeadActivity, addImportNotesBatch, logActivity,
   startImportBatch, finishImportBatch,
 } from "../../lib/data.js";
 import { toast } from "../../lib/toast.js";
 import { parseXlsxAllTabs, readSheetFile, readPasted, hasUnzipSupport } from "../../lib/sheet.js";
 import { dedupeKey } from "../../lib/leadIntakeBrowser.js";
 import {
-  SALES_FIELDS, guessHeaderRow, buildImportPlan, looksLikeLeadTab,
+  autoMapTab, buildImportPlan, looksLikeLeadTab, mergeLead, mergeCompany, SALES_FIELDS,
 } from "../../../lib/sales-import.js";
-import { Modal, Field, TextInput, Select } from "./shared.jsx";
+import { Modal } from "./shared.jsx";
 
-/* IMPORTING CJ's OUTREACH SHEET.
+/* DROPPING THE OUTREACH SHEET IN.
  *
- * WHY THIS IS NOT THE OLD IMPORTER
- * The Aug 20 importer reads ONE tab and maps nine fields. CJ's sheet has eight
- * lead tabs plus a rules tab, twenty-seven columns, and six of those columns
- * are months of hand-typed work — who claimed what, when they first emailed,
- * what the next step is. An import that drops those six is not an import, it
- * is a reset, and the team would rightly refuse to move.
+ * WHAT CHANGED, AND WHY                                     Aug 30 2026
+ * This used to be four screens: choose the file, tick the tabs, check
+ * twenty-seven columns on each of eight tabs, read the plan. Ryder asked for
+ * one: "make it extremely easy to transfer everything and make it as few
+ * clicks as possible … receive this file without asking any questions,
+ * deleting any data, and filling in all the rows."
  *
- * So this one:
- *   · reads every tab in the workbook at once, and skips the rules tab,
- *   · maps each tab on its own, because the Apollo columns genuinely differ
- *     between tabs (Luxury Agents has "# Employees" where Car Dealership has
- *     "Departments" and "Industry"),
- *   · matches "Brandon R" to Brandon Roberts and says which rule it used,
- *   · folds the rows of one firm together so four ACME people are one firm,
- *   · and shows the whole plan — including everything it could NOT read —
- *     before a single row is written.
+ * So it is one click now. Pick the file and it goes. Every question the old
+ * screens asked is answered by lib/sheet-columns.js, which reads each column's
+ * VALUES rather than trusting the heading row — and it has to, because on the
+ * real workbook the heading row is wrong on three tabs out of eight and
+ * missing on a fourth:
  *
- * Four steps: choose the file → tick the tabs → check the columns → look at
- * the plan and import.
+ *   · Luxury Agents has no heading row. 821 people the old importer skipped
+ *     in silence, every time, because it recognised nothing in row 1.
+ *   · Jewelry has three columns in the data the heading row does not have, so
+ *     the heading said "Website" over a LinkedIn address.
+ *   · Car Dealership slides three columns from 23 on, so the heading said
+ *     "Company Address" over the contact's own town.
+ *
+ * NOTHING IS DELETED, EVER. Somebody already on file is topped up rather than
+ * skipped or replaced — lib/sales-import.js#mergeLead decides field by field
+ * and refuses to blank a value, move a stage backwards, reopen a closed deal
+ * or take a lead off the rep working it. An import is still one undoable
+ * thing: Sales → Start over lists this run with an undo beside it.
+ *
+ * AND IT STILL SHOWS ITS WORKING. The plan screen is gone, so everything the
+ * reader had to decide is on the RESULT screen instead — including, by name,
+ * every column whose heading disagreed with what was in it. An importer that
+ * reports only successes is an importer nobody can check.
  */
 
-const FIELD_OPTIONS = [
-  ["", "— leave this column out —"],
-  ...SALES_FIELDS.map((f) => [f.key, `${f.label}${f.where === "company" ? " (firm)" : f.where === "work" ? " (the work)" : ""}`]),
-];
+const LABEL = Object.fromEntries(SALES_FIELDS.map((f) => [f.key, f.label]));
 
 export function SalesImportModal({ member, team, onClose, reload }) {
-  const [step, setStep] = useState("choose");   // choose → tabs → map → plan
-  const [tabs, setTabs] = useState([]);         // [{ name, rows, use, mapping, hasHeader, verdict }]
-  const [active, setActive] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [label, setLabel] = useState("");
-  const [pasteText, setPasteText] = useState("");
-  const [result, setResult] = useState(null);
-  /* Kept so the import record can name the file it came from. Without it,
-     "Outreach sheet" is the only clue three imports later about which download
-     produced which rows. */
-  const [fileName, setFileName] = useState(null);
   const [progress, setProgress] = useState("");
+  const [result, setResult] = useState(null);
+  const [pasteText, setPasteText] = useState("");
   const fileRef = useRef(null);
 
-  /* One clock for the life of this modal, taken once. A Date.now() read during
-   * render changes between renders, so the plan a person is reading could
-   * quietly recompute under them — and React's purity rule rightly refuses it. */
-  const [now] = useState(() => Date.now());
-
-  /* ---- reading the file ---- */
-
-  const acceptTabs = (raw, sourceLabel) => {
-    const prepared = raw.map((t) => {
-      const verdict = looksLikeLeadTab(t.name, t.rows);
-      const { mapping, clashes } = guessHeaderRow(t.rows[0] || []);
-      return { ...t, use: verdict.yes, verdict, mapping, clashes, hasHeader: true };
-    });
-    if (!prepared.some((t) => t.verdict.yes)) {
-      toast.error("Nothing importable in that file",
-        prepared.map((t) => `${t.name}: ${t.verdict.why}`).join(" · ").slice(0, 200));
-      return;
-    }
-    setTabs(prepared);
-    setActive(prepared.findIndex((t) => t.use));
-    setLabel(sourceLabel);
-    setStep("tabs");
-  };
+  /* ---- reading, then straight into it ---- */
 
   const onFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 25 * 1024 * 1024) {
       toast.error("That file is too big", "Keep it under 25 MB. Split the workbook if you need to.");
+      if (fileRef.current) fileRef.current.value = "";
       return;
     }
     setBusy(true);
     try {
-      setFileName(file.name || null);
       const name = (file.name || "").toLowerCase();
-      if (name.endsWith(".xlsx") || name.endsWith(".xlsm")) {
-        const all = await parseXlsxAllTabs(await file.arrayBuffer());
-        acceptTabs(all.filter((t) => !t.empty), file.name.replace(/\.[^.]+$/, ""));
-      } else {
-        // One-tab formats still work — CSV, TSV, and the old .xls message.
-        const one = await readSheetFile(file);
-        acceptTabs([{ name: file.name, rows: one.rows, empty: false }], file.name.replace(/\.[^.]+$/, ""));
-      }
+      const raw = (name.endsWith(".xlsx") || name.endsWith(".xlsm"))
+        ? (await parseXlsxAllTabs(await file.arrayBuffer())).filter((t) => !t.empty)
+        : [{ name: file.name, rows: (await readSheetFile(file)).rows }];
+      await run(raw, file.name.replace(/\.[^.]+$/, ""), file.name);
     } catch (err) {
       toast.error("Could not read that file", err?.message || "Unknown problem.");
-    } finally {
       setBusy(false);
+      setProgress("");
+    } finally {
       if (fileRef.current) fileRef.current.value = "";
     }
   };
 
-  const onPaste = () => {
+  const onPaste = async () => {
     if (!pasteText.trim()) { toast.warn("Paste the rows in first"); return; }
+    setBusy(true);
     try {
       const r = readPasted(pasteText);
-      acceptTabs([{ name: "Pasted rows", rows: r.rows, empty: false }], `Pasted — ${new Date().toISOString().slice(0, 10)}`);
+      await run([{ name: "Pasted rows", rows: r.rows }], `Pasted — ${new Date().toISOString().slice(0, 10)}`, null);
     } catch (err) {
       toast.error("Could not read that", err?.message || "Unknown problem.");
+      setBusy(false);
+      setProgress("");
     }
   };
 
-  /* ---- the plan for every ticked tab ---- */
+  /* ---- the whole thing, start to finish ---- */
 
-  const plans = useMemo(() => {
-    return tabs.filter((t) => t.use).map((t) => ({
+  const run = async (rawTabs, label, fileName) => {
+    /* ONE CLOCK, taken once, for the whole run. Every claim stamped at import
+     * time, every "imported today" line and every list record share it, so a
+     * run that straddles midnight cannot date half its rows to yesterday. */
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+
+    setProgress("Reading the columns…");
+
+    /* Ask ONCE whether migration 0025 has run. If it has not, five fields are
+     * left out and the run still works; without this the whole insert is
+     * rejected on the first row and a person who has just dropped in four
+     * thousand contacts gets nothing and no reason. */
+    const cols = await probeSheetColumns();
+    const NEW_LEAD = ["address", "country"];
+    const NEW_FIRM = ["alias", "keywords", "total_funding"];
+    /* PER TABLE, not one answer for both. The first version keyed off a single
+     * `cols.ok`, so a failure reading the LEADS columns also stripped three
+     * perfectly good columns from the firms table. Found 30 Aug 2026. */
+    const have = { [NEW_LEAD.join()]: cols.leads !== false, [NEW_FIRM.join()]: cols.companies !== false };
+    const trim = (row, keys) => {
+      if (have[keys.join()]) return row;
+      const out = { ...row };
+      for (const k of keys) delete out[k];
+      return out;
+    };
+
+    /* Each tab read ONCE and the answer carried, rather than mapped here and
+     * mapped again inside buildImportPlan. Two reads of the same tab are two
+     * chances to disagree, and the person would be shown whichever one the
+     * screen happened to print. */
+    const read = rawTabs.map((t) => {
+      const mapped = autoMapTab(t.rows || []);
+      return { ...t, mapped, verdict: looksLikeLeadTab(t.name, t.rows || [], mapped) };
+    });
+    const use = read.filter((t) => t.verdict.yes);
+    const skipped = read.filter((t) => !t.verdict.yes).map((t) => ({ name: t.name, why: t.verdict.why }));
+
+    if (!use.length) {
+      toast.error("Nothing importable in that file",
+        skipped.map((t) => `${t.name}: ${t.why}`).join(" · ").slice(0, 220));
+      setBusy(false); setProgress("");
+      return;
+    }
+
+    const plans = use.map((t) => ({
       tab: t,
       plan: buildImportPlan(t.rows, {
-        mapping: t.mapping, hasHeader: t.hasHeader, team, listName: t.name, now,
+        mapping: t.mapped.mapping, hasHeader: t.mapped.hasHeader,
+        team, listName: t.name, now,
       }),
     }));
-    // `now` is captured once per modal on purpose — a plan that changes under
-    // the person while they read it is a plan they cannot check.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabs, team]);
 
-  const totals = useMemo(() => plans.reduce((acc, { plan }) => ({
-    usable: acc.usable + plan.counts.usable,
-    companies: acc.companies + plan.counts.companies,
-    claimed: acc.claimed + plan.counts.claimed,
-    blank: acc.blank + plan.counts.blank,
-    alreadyWorked: acc.alreadyWorked + plan.counts.alreadyWorked,
-    warnings: acc.warnings + plan.warnings.length,
-  }), { usable: 0, companies: 0, claimed: 0, blank: 0, alreadyWorked: 0, warnings: 0 }), [plans]);
-
-  /* ---- the duplicate check, before anything is written ---- */
-
-  const [dupes, setDupes] = useState(null);
-
-  /* THE CHECK HAS TO DECIDE SOMETHING, NOT JUST COUNT.
-   *
-   * The first version of this computed the duplicate counts, printed them —
-   * "412 already in the pipeline · 412 rows dropped" — and then imported every
-   * row anyway, because the import read `plan.leads` rather than the checked
-   * set. Importing the same sheet twice doubled the pipeline while the screen
-   * said it had not. The check now produces `skip`, a Set of the exact rows
-   * that will not be written, and doImport reads it. */
-  const runCheck = async () => {
-    setBusy(true);
-    setProgress("Checking for people already in the pipeline…");
-
-    const all = plans.flatMap(({ plan }) => plan.leads);
-    const skip = new Set();
-    const seenKeys = new Map();
-
-    // Same person twice inside the file(s) — the first one is kept.
-    for (const entry of all) {
-      const k = dedupeKey(entry.lead);
-      if (!k) continue;
-      if (seenKeys.has(k)) { skip.add(entry); continue; }
-      seenKeys.set(k, entry);
-    }
-    const within = all.filter((e) => skip.has(e)).length;
-
-    // Already in the pipeline.
-    const keys = [...seenKeys.keys()];
-    const existing = await findExistingLeadKeys(keys);
-    let already = 0;
-    for (const [k, entry] of seenKeys) {
-      if (existing.keys.has(k)) { skip.add(entry); already += 1; }
+    /* ---- the same person twice inside the file ---- */
+    setProgress("Looking for people already in the pipeline…");
+    const seen = new Map();
+    let repeatedInFile = 0;
+    let noKey = 0;
+    for (const { plan } of plans) {
+      for (const entry of plan.leads) {
+        const k = dedupeKey(entry.lead);
+        if (!k) { noKey += 1; entry.__key = null; continue; }
+        entry.__key = k;
+        if (seen.has(k)) { entry.__repeat = true; repeatedInFile += 1; continue; }
+        seen.set(k, entry);
+      }
     }
 
-    setDupes({
-      skip,
-      within,
-      already,
-      noKey: all.filter((e) => !dedupeKey(e.lead)).length,
-      willImport: all.length - skip.size,
-      error: existing.error || null,
-      sample: existing.sample,
+    /* ---- and the ones already here ---- */
+    const found = await findExistingLeadRows([...seen.keys()], { withNewColumns: cols.leads !== false });
+    if (found.error) {
+      toast.warn("Could not check the whole pipeline",
+        `${found.error} Anyone this missed would be added a second time, so nothing was written. Try again.`);
+      setBusy(false); setProgress("");
+      return;
+    }
+    const existingLeads = found.rows;
+
+    /* ---- open the batch BEFORE a single row is written ---- */
+    setProgress("Recording this import…");
+    const batch = await startImportBatch({
+      label: label.trim() || "Outreach sheet",
+      sourceFile: fileName || null,
+      tabs: plans.map(({ tab }) => tab.name),
+      counts: {
+        planned: plans.reduce((a, { plan }) => a + plan.counts.usable, 0),
+        firms: plans.reduce((a, { plan }) => a + plan.counts.companies, 0),
+      },
+      userId: member.user_id,
+    });
+    const batchId = batch.ok ? batch.id : null;
+    if (!batch.ok) {
+      toast.warn("This import will not be undoable",
+        "The import record could not be saved, most likely because migration 0016 has not been run. Everything still imports — but Start over will not be able to find these rows later.");
+    }
+
+    /* ONE SOURCE ROW PER SHEET, not one per press. upsertLeadSource with no
+     * id always inserts, so every import added another row called "Outreach
+     * sheet" — and the comment below claims the column map is kept "so a
+     * person asking six weeks later what the console thought column 23 was has
+     * an answer", which is not true of a pile of identical rows. Found 30 Aug
+     * 2026. */
+    const sourceLabel = label.trim() || "Outreach sheet";
+    const priorSources = await listLeadSources();
+    const existingSource = (priorSources.rows || []).find(
+      (x) => x.kind === "import" && x.label === sourceLabel,
+    );
+    const src = await upsertLeadSource({
+      ...(existingSource ? { id: existingSource.id } : { created_by: member.user_id }),
+      label: sourceLabel,
+      kind: "import", provider: null, assign_to: [],
+      last_run_at: nowIso,
+      last_run_found: plans.reduce((a, { plan }) => a + plan.counts.usable, 0),
+      last_run_new: 0,
+      /* The columns this run decided on, stored WITH the source, so a person
+       * asking six weeks later what the console thought column 23 was has an
+       * answer that does not depend on re-reading a file nobody kept. */
+      query: {
+        column_map: Object.fromEntries(plans.map(({ tab }) => [tab.name, tab.mapped.mapping])),
+        read_at: nowIso,
+      },
+    });
+    const sourceId = src.ok ? src.row?.id || null : null;
+
+    setProgress("Matching firms already on file…");
+    const companyRows = await findExistingCompanyRows();
+    /* If the firms could not be read, EVERY firm looks new and the import
+     * makes a second copy of all of them — silently, under a headline that
+     * says "2,764 new firms". Better to stop than to double the firm list.
+     * Found 30 Aug 2026 by an adversarial reviewer. */
+    if (companyRows.error) {
+      toast.error("Could not read the firms already on file",
+        `${companyRows.error} Importing now would make a second copy of every firm, so nothing was written. Try again.`);
+      setBusy(false); setProgress("");
+      return;
+    }
+
+    const totals = {
+      added: 0, updated: 0, unchanged: 0,
+      firmsAdded: 0, firmsUpdated: 0,
+      repeatedInFile, noKey, noteProblems: 0, updateFailures: 0,
+    };
+    const perTab = [];
+    const notes = [];
+
+    for (const { tab, plan } of plans) {
+      setProgress(`Importing ${tab.name}…`);
+
+      const existingList = await findLeadListByTab(tab.name);
+      /* AN EXISTING LIST IS ADDED TO, NOT REWRITTEN.
+       *
+       * This used to send name, vertical and source_id unconditionally. On a
+       * list that already existed that meant: a rename anybody had made was
+       * undone, `vertical` was set to NULL whenever the first firm on the tab
+       * happened to have none, and `source_id` was set to null whenever the
+       * source record had failed to save. Three filled-in values emptied, on
+       * the one screen that promises in writing that nothing is emptied.
+       * Found 30 Aug 2026 by an adversarial reviewer. */
+      const vertical = plan.companies.find((c) => c.vertical)?.vertical || null;
+      const list = await upsertLeadList(existingList
+        ? {
+          id: existingList.id,
+          sheet_tab: tab.name,
+          ...(existingList.name ? {} : { name: tab.name }),
+          ...(existingList.vertical || !vertical ? {} : { vertical }),
+          ...(existingList.source_id || !sourceId ? {} : { source_id: sourceId }),
+          ...(existingList.import_batch_id || !batchId ? {} : { import_batch_id: batchId }),
+        }
+        : {
+          created_by: member.user_id,
+          name: tab.name, vertical, sheet_tab: tab.name, source_id: sourceId,
+          ...(batchId ? { import_batch_id: batchId } : {}),
+        });
+      const listId = list.ok ? list.row?.id || null : null;
+
+      /* ---- firms first, so the people can point at them ---- */
+      const fresh = [];
+      const firmPatches = [];
+      for (const c of plan.companies) {
+        const already = companyRows.byKey[c.key];
+        if (!already) { fresh.push(c); continue; }
+        const { patch, changed } = mergeCompany(already, c);
+        if (changed) firmPatches.push({ id: already.id, patch: trim(patch, NEW_FIRM) });
+      }
+
+      const saved = await insertCompaniesBatch(fresh.map((c) => trim({
+        key: c.key, name: c.name, domain: c.domain, phone: c.phone, address: c.address,
+        city: c.city, state: c.state, country: c.country, vertical: c.vertical,
+        employees: c.employees, annual_revenue: c.annual_revenue,
+        /* Added Aug 30 2026 with migration 0025. Each was already being read
+         * off the sheet and dropped for want of a column. */
+        alias: c.alias, keywords: c.keywords, total_funding: c.total_funding,
+        linkedin_url: c.linkedin_url, facebook_url: c.facebook_url, twitter_url: c.twitter_url,
+        /* site_score is deliberately NOT passed. See groupIntoCompanies in
+         * lib/sales-import.js: a score is something we measured, and a number
+         * out of a spreadsheet must never sit in the same field. */
+        created_by: member.user_id,
+        ...(batchId ? { import_batch_id: batchId } : {}),
+      }, NEW_FIRM)));
+      if (!saved.ok) {
+        toast.error(`Firms failed on ${tab.name}`, saved.error);
+        setBusy(false); setProgress("");
+        setResult({ ...totals, perTab, failed: tab.name, error: saved.error, skipped, plans });
+        await reload();
+        return;
+      }
+      totals.firmsAdded += saved.count;
+
+      const firmUpd = await applyCompanyUpdates(firmPatches.filter((f) => Object.keys(f.patch).length));
+      totals.firmsUpdated += firmUpd.count;
+      totals.updateFailures += firmUpd.failed.length;
+
+      /* Ids for the firms just written, folded into the same lookup the
+       * existing ones live in, so the next tab reuses them rather than making
+       * a second copy of a firm that appears on two tabs. */
+      const idByKey = {};
+      for (const [k, c] of Object.entries(companyRows.byKey)) idByKey[k] = c.id;
+      for (const [k, id] of Object.entries(saved.idByKey)) {
+        idByKey[k] = id;
+        const c = fresh.find((x) => x.key === k);
+        if (c) companyRows.byKey[k] = { ...c, id };
+      }
+
+      /* ---- the people ---- */
+      const toInsert = [];
+      const toUpdate = [];
+      let tabUnchanged = 0;
+
+      for (const entry of plan.leads) {
+        if (entry.__repeat) continue;                        // already counted
+        const existing = entry.__key ? existingLeads[entry.__key] : null;
+        if (!existing) { toInsert.push(entry); continue; }
+        /* The KIND of match is handed to the merge. `e:` is an email and is
+         * certain; `p:`, `d:` and `c:` are a shared phone, a shared website or
+         * a shared company+town, which colleagues have in common — so the
+         * merge leaves the fields that say WHO somebody is alone on those. */
+        const { patch, changes, spare, changed } = mergeLead(existing, entry.lead, {
+          keyKind: String(entry.__key || "").slice(0, 1),
+        });
+        /* The list and the firm are filled in whatever else changed, so a
+         * contact who arrived from a hand-typed row before the sheet existed
+         * still ends up under the right tab and the right firm. */
+        if (!existing.list_id && listId) patch.list_id = listId;
+        if (!existing.company_id && entry.companyKey && idByKey[entry.companyKey]) {
+          patch.company_id = idByKey[entry.companyKey];
+        }
+        const realChange = changed || !!patch.list_id || !!patch.company_id;
+        /* A row that changes NOTHING is not written at all.
+         *
+         * The first version stamped last_import_at on every existing contact,
+         * which on a second run of this workbook is three and a half thousand
+         * separate update calls to record that nothing happened — minutes of
+         * waiting, and three and a half thousand timeline lines saying
+         * "nothing needed changing". The date an unchanged row was last seen
+         * is not worth that. */
+        if (!realChange && !spare.length) { tabUnchanged += 1; continue; }
+        if (realChange) patch.last_import_at = nowIso;
+        toUpdate.push({ id: existing.id, patch: trim(patch, NEW_LEAD), changes, spare, realChange });
+      }
+
+      const rows = toInsert.map(({ lead, companyKey }) => trim({
+        ...lead,
+        company_id: companyKey ? idByKey[companyKey] || null : null,
+        list_id: listId,
+        source_id: sourceId,
+        last_import_at: nowIso,
+        ...(batchId ? { import_batch_id: batchId } : {}),
+      }, NEW_LEAD));
+
+      const res = await insertLeadsBatch(rows);
+      if (!res.ok) {
+        toast.error(`Import stopped on ${tab.name}`,
+          `${res.error}${res.count ? ` ${res.count} of ${rows.length} rows on this tab were already saved.` : ""}`);
+        setBusy(false); setProgress("");
+        setResult({ ...totals, perTab, failed: tab.name, error: res.error, skipped, plans });
+        await reload();
+        return;
+      }
+      totals.added += res.count;
+
+      setProgress(`Updating people already here — ${tab.name}…`);
+      const upd = await applyLeadUpdates(toUpdate.map(({ id, patch }) => ({ id, patch })));
+      const failedIds = new Set(upd.failed.map((f) => f.id));
+      /* Counted from what LANDED, not from what was planned. A number that
+       * counts intentions is a number that says an import worked when it half
+       * did — the same mistake finishImportBatch was written to avoid. */
+      const reallyUpdated = toUpdate.filter((u) => u.realChange && !failedIds.has(u.id)).length;
+      totals.updated += reallyUpdated;
+      totals.unchanged += tabUnchanged;
+      totals.updateFailures += upd.failed.length;
+
+      /* ---- the timeline ---- */
+      /* ALL AT ONCE. One call per contact meant seven thousand requests on the
+       * real workbook — several minutes of spinner for lines nobody reads
+       * until they need them. */
+      const lines = [];
+      if (res.ids && res.ids.length === toInsert.length) {
+        for (let i = 0; i < toInsert.length; i += 1) {
+          lines.push({ leadId: res.ids[i], actor: member.user_id, body: toInsert[i].importNote });
+        }
+      } else if (toInsert.length) {
+        totals.noteProblems += toInsert.length;
+      }
+
+      /* Somebody who was already here gets a line too — what moved, and
+       * anything the sheet said that was NOT taken because a person had
+       * already typed something. That second half is the only place the
+       * discarded text survives, so it is not optional. */
+      for (const u of toUpdate) {
+        if (failedIds.has(u.id)) continue;
+        const said = [
+          `Seen again in ${tab.name}.`,
+          u.changes.length ? `Updated: ${u.changes.join(", ")}.` : null,
+          ...u.spare,
+        ].filter(Boolean).join(" ");
+        lines.push({ leadId: u.id, actor: member.user_id, body: said });
+      }
+      if (lines.length) {
+        setProgress(`Writing the timeline for ${tab.name}…`);
+        const wrote = await addImportNotesBatch(lines);
+        if (!wrote.ok) totals.noteProblems += lines.length - (wrote.count || 0);
+      }
+
+      perTab.push({
+        name: tab.name,
+        added: res.count,
+        updated: reallyUpdated,
+        unchanged: tabUnchanged,
+        firms: plan.companies.length,
+        hasHeader: tab.mapped.hasHeader,
+        headerWhy: tab.mapped.headerWhy,
+        /* From the plan's own mapping, not the reader's. buildImportPlan drops
+         * any column pointed at a field an earlier column already fills, so
+         * counting the reader's answer reported columns as read that were not
+         * used. Found 30 Aug 2026. */
+        read: (plan.mapping || tab.mapped.mapping).filter(Boolean).length,
+        left: (plan.mapping || tab.mapped.mapping).filter((m) => !m).length,
+        /* THE READER'S OWN NOTES, WHICH WERE BEING THROWN AWAY.
+         *
+         * buildImportPlan folds them in only when IT does the mapping. This
+         * screen hands it a mapping, so `auto` was null inside it and no note
+         * survived — and the result screen then printed "Every column matched
+         * its heading" on exactly the three tabs where the heading was wrong.
+         * The one thing deleting the plan screen promised to keep was the one
+         * thing it lost. Found 30 Aug 2026 by an adversarial reviewer. */
+        warnings: [...(tab.mapped.notes || []), ...plan.warnings],
+        mapping: tab.mapped.mapping,
+      });
+      notes.push(`${tab.name}: ${res.count} added, ${reallyUpdated} updated`);
+    }
+
+    await finishImportBatch(batchId, {
+      planned: plans.reduce((a, { plan }) => a + plan.counts.usable, 0),
+      firms_planned: plans.reduce((a, { plan }) => a + plan.counts.companies, 0),
+      contacts: totals.added, firms: totals.firmsAdded, skipped: totals.unchanged,
+    });
+
+    await logActivity({
+      actor: member.user_id, kind: "sales_import",
+      title: `Imported ${totals.added} new contacts and updated ${totals.updated} from ${label.trim() || "a sheet"}`,
+      body: notes.join(" · "),
+    });
+
+    setResult({
+      ...totals, perTab, skipped, plans, sample: found.sample,
+      columnGap: cols.ok ? null : cols.why,
+      firmsTruncated: companyRows.truncated || null,
+      listsTruncated: null,
+      deleted: 0,
     });
     setBusy(false);
     setProgress("");
-    setStep("plan");
+    toast.success(`${totals.added} added, ${totals.updated} updated`,
+      `${totals.firmsAdded} new firms across ${perTab.length} list${perTab.length === 1 ? "" : "s"}. Nothing was deleted.`);
+    await reload();
   };
 
-  /* ---- writing it ---- */
-
-  const doImport = async () => {
-    setBusy(true);
-    try {
-      /* THE BATCH IS OPENED FIRST, before a single row is written. A run that
-       * dies half way still leaves a row naming what it was, and those rows are
-       * still clearable — an import with no batch behind it is one nobody can
-       * undo. */
-      setProgress("Recording this import…");
-      const batch = await startImportBatch({
-        label: label.trim() || "Outreach sheet",
-        sourceFile: fileName || null,
-        tabs: plans.map(({ tab }) => tab.name),
-        counts: { planned: totals.usable, firms: totals.companies },
-        userId: member.user_id,
-      });
-      const batchId = batch.ok ? batch.id : null;
-      if (!batch.ok) {
-        toast.warn("This import will not be undoable",
-          "The import record could not be saved, most likely because migration 0016 has not been run. Everything still imports — but Start over will not be able to find these rows later.");
-      }
-
-      setProgress("Saving the list…");
-      const src = await upsertLeadSource({
-        label: label.trim() || "Outreach sheet",
-        kind: "import", provider: null, assign_to: [],
-        created_by: member.user_id,
-        last_run_at: new Date().toISOString(),
-        last_run_found: totals.usable,
-        last_run_new: totals.usable,
-        /* The column mapping is stored WITH the source, so importing the same
-         * sheet again next month does not mean matching 27 columns by hand a
-         * second time. */
-        query: { column_map: Object.fromEntries(plans.map(({ tab }) => [tab.name, tab.mapping])) },
-      });
-      const sourceId = src.ok ? src.row?.id || null : null;
-      if (!src.ok) {
-        toast.warn("The list record was not saved",
-          "The leads still import, but they will not say which file they came from.");
-      }
-
-      setProgress("Matching firms already on file…");
-      const existingCompanies = await findExistingCompanies();
-
-      let leadTotal = 0;
-      let companyTotal = 0;
-      let skippedTotal = 0;
-      let noteProblems = 0;
-      const notes = [];
-
-      for (const { tab, plan } of plans) {
-        setProgress(`Importing ${tab.name}…`);
-
-        /* Look the list up by its tab name first. Importing the same workbook
-         * next month used to make a SECOND "Medspas", splitting that vertical
-         * across two entries in the filter dropdown. */
-        const existingList = await findLeadListByTab(tab.name);
-        const list = await upsertLeadList({
-          ...(existingList ? { id: existingList.id } : { created_by: member.user_id }),
-          name: tab.name, vertical: plan.companies[0]?.vertical || null,
-          sheet_tab: tab.name, source_id: sourceId,
-          ...(batchId ? { import_batch_id: batchId } : {}),
-        });
-        const listId = list.ok ? list.row?.id || null : null;
-
-        /* Firms first, so the people can point at them. A firm that is already
-         * on file is reused rather than duplicated — importing the same sheet
-         * twice must not double every company. */
-        const fresh = plan.companies.filter((c) => !existingCompanies.byKey[c.key]);
-        const saved = await insertCompaniesBatch(fresh.map((c) => ({
-          key: c.key, name: c.name, domain: c.domain, phone: c.phone, address: c.address,
-          city: c.city, state: c.state, country: c.country, vertical: c.vertical,
-          employees: c.employees, annual_revenue: c.annual_revenue,
-          linkedin_url: c.linkedin_url, facebook_url: c.facebook_url, twitter_url: c.twitter_url,
-          site_score: c.site_score, created_by: member.user_id,
-          ...(batchId ? { import_batch_id: batchId } : {}),
-        })));
-        if (!saved.ok) { toast.error(`Firms failed on ${tab.name}`, saved.error); setBusy(false); setProgress(""); return; }
-        companyTotal += saved.count;
-        const idByKey = { ...existingCompanies.byKey, ...saved.idByKey };
-        for (const [k, v] of Object.entries(saved.idByKey)) existingCompanies.byKey[k] = v;
-
-        /* The duplicates decided on the previous screen are dropped HERE, so
-         * what gets written is exactly what the person was shown. */
-        const keep = plan.leads.filter((entry) => !dupes.skip.has(entry));
-        const rows = keep.map(({ lead, companyKey }) => ({
-          ...lead,
-          company_id: companyKey ? idByKey[companyKey] || null : null,
-          list_id: listId,
-          source_id: sourceId,
-          last_import_at: new Date().toISOString(),
-          ...(batchId ? { import_batch_id: batchId } : {}),
-        }));
-        skippedTotal += plan.leads.length - keep.length;
-
-        const res = await insertLeadsBatch(rows);
-        if (!res.ok) {
-          toast.error(`Import stopped on ${tab.name}`,
-            `${res.error}${res.count ? ` ${res.count} of ${rows.length} rows on this tab were already saved.` : ""}`);
-          setBusy(false); setProgress("");
-          setResult({ leadTotal: leadTotal + (res.count || 0), companyTotal, notes, failed: tab.name, error: res.error });
-          await reload();
-          return;
-        }
-        leadTotal += res.count;
-        notes.push(`${tab.name}: ${res.count}`);
-
-        /* The first line of every imported contact's timeline: which file,
-         * which row, and what the sheet said. Written here rather than promised
-         * — the plan screen tells the person this happens, and for a while it
-         * did not, because the note was computed and then thrown away.
-         *
-         * The ids come back from the insert, so this is matched by position
-         * within the chunk the insert reports. If anything is out of step the
-         * notes are skipped rather than attached to the wrong person. */
-        if (res.ids && res.ids.length === keep.length) {
-          setProgress(`Writing the timeline for ${tab.name}…`);
-          for (let i = 0; i < keep.length; i += 1) {
-            await stampImportNote(res.ids[i], member.user_id, keep[i].importNote);
-          }
-        } else if (keep.length) {
-          noteProblems += keep.length;
-        }
-      }
-
-      /* Closed with what ACTUALLY landed, not what was planned. The planned
-       * number is already on the row from the start; overwriting it with the
-       * real one would lose the difference, which is the only evidence that a
-       * run fell short. */
-      await finishImportBatch(batchId, {
-        planned: totals.usable, firms_planned: totals.companies,
-        contacts: leadTotal, firms: companyTotal, skipped: skippedTotal,
-      });
-
-      await logActivity({
-        actor: member.user_id, kind: "sales_import",
-        title: `Imported ${leadTotal} contacts and ${companyTotal} firms from ${label.trim() || "a sheet"}`,
-        body: notes.join(" · "),
-      });
-
-      setResult({ leadTotal, companyTotal, notes, skippedTotal, noteProblems });
-      setBusy(false);
-      setProgress("");
-      toast.success(`${leadTotal} contacts imported`,
-        `${companyTotal} firms across ${plans.length} list${plans.length === 1 ? "" : "s"}${skippedTotal ? `, ${skippedTotal} duplicate${skippedTotal === 1 ? "" : "s"} skipped` : ""}.`);
-      await reload();
-    } catch (err) {
-      setBusy(false);
-      setProgress("");
-      toast.error("The import stopped", err?.message || "Unknown problem.");
-    }
-  };
-
-  /* ---- screens ---- */
-
-  const tab = tabs[active];
+  /* ---- screens: there are two ---- */
 
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={busy ? undefined : onClose}
       kicker="SALES"
-      title={
-        step === "choose" ? "Import the outreach sheet"
-          : step === "tabs" ? "Which tabs do you want"
-            : step === "map" ? `Check the columns — ${tab?.name || ""}`
-              : result ? "Imported" : "Before anything saves"
-      }
+      title={result ? "Imported" : busy ? "Importing…" : "Drop the outreach sheet in"}
       width={860}
-      footer={
-        result ? <button className="btn btn-accent" onClick={onClose}>Done</button>
-          : <>
-            {step !== "choose" && (
-              <button className="btn" onClick={() => setStep(step === "plan" ? "map" : step === "map" ? "tabs" : "choose")} disabled={busy}>
-                Back
-              </button>
-            )}
-            <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
-            {step === "tabs" && (
-              <button className="btn btn-accent" onClick={() => setStep("map")} disabled={busy || !tabs.some((t) => t.use)}>
-                Check the columns
-              </button>
-            )}
-            {step === "map" && (
-              <button className="btn btn-accent" onClick={runCheck} disabled={busy}>
-                {busy ? progress || "Checking…" : "See what will happen"}
-              </button>
-            )}
-            {step === "plan" && (
-              <button className="btn btn-accent" onClick={doImport} disabled={busy || !(dupes?.willImport)}>
-                {busy ? progress || "Importing…" : `Import ${dupes?.willImport ?? 0} contacts`}
-              </button>
-            )}
-          </>
-      }
+      footer={result
+        ? <button className="btn btn-accent" onClick={onClose}>Done</button>
+        : <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>}
     >
-      {step === "choose" && (
+      {!result && (
         <>
           <div className="adm-sl-imp-lead">
-            Pick the workbook and every tab comes in at once — the tabs become lists, the six
-            hand-filled columns come across, and the people at one firm are grouped under that firm.
-            Nothing is written until you have seen exactly what will happen.
+            Pick the file and it goes. Every tab comes in at once, the columns are worked out
+            from what is in them, and the six hand-filled columns come across with the rest.
+            <strong> Nobody is deleted and nothing is emptied</strong> — anyone already here is
+            filled in rather than replaced, and the whole run can be undone from Start over.
           </div>
           <div className="adm-sl-imp-drop">
-            <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.csv,.tsv,.txt" onChange={onFile} disabled={busy} />
+            <input
+              ref={fileRef} type="file" accept=".xlsx,.xlsm,.csv,.tsv,.txt"
+              onChange={onFile} disabled={busy}
+            />
             <div className="adm-sl-imp-hint">
               {hasUnzipSupport()
-                ? "Excel (.xlsx) reads every tab. CSV and TSV read the one sheet they hold."
+                ? "Excel (.xlsx) reads every tab. CSV and TSV read the one sheet they hold. A tab with no heading row is fine."
                 : "This browser cannot open Excel files. In Google Sheets choose File → Download → Comma-separated values, one tab at a time."}
             </div>
           </div>
+          {busy && <div className="adm-sl-imp-note"><strong>{progress || "Working…"}</strong> Leave this open until it finishes.</div>}
           <div className="adm-sl-imp-or">or paste rows straight from the spreadsheet</div>
           <textarea
-            className="adm-input" style={{ minHeight: 110 }}
+            className="adm-input" style={{ minHeight: 90 }}
             placeholder="Select the rows in Sheets, copy, paste here…"
-            value={pasteText} onChange={(e) => setPasteText(e.target.value)}
+            value={pasteText} onChange={(e) => setPasteText(e.target.value)} disabled={busy}
           />
-          <button className="btn" style={{ marginTop: 8 }} onClick={onPaste} disabled={busy}>Read the pasted rows</button>
+          <button className="btn" style={{ marginTop: 8 }} onClick={onPaste} disabled={busy}>
+            Read the pasted rows
+          </button>
         </>
       )}
 
-      {step === "tabs" && (
-        <>
-          <Field label="What is this list called" hint="Shown on every contact so you can always tell where they came from.">
-            <TextInput value={label} onChange={(e) => setLabel(e.target.value)} />
-          </Field>
-          {/* A pasted block often has no header row, and assuming one silently
-              ate the first person on the list. */}
-          <label className="adm-sl-imp-header">
-            <input
-              type="checkbox"
-              checked={tabs.every((t) => t.hasHeader)}
-              onChange={(e) => setTabs(tabs.map((t) => ({ ...t, hasHeader: e.target.checked })))}
-            />
-            <span>The first row is column headings, not a person</span>
-          </label>
-          <div className="adm-sl-imp-tabs">
-            {tabs.map((t, i) => (
-              <label key={t.name + i} className={`adm-sl-imp-tab${t.use ? " on" : ""}`}>
-                <input
-                  type="checkbox" checked={t.use}
-                  onChange={(e) => setTabs(tabs.map((x, j) => (j === i ? { ...x, use: e.target.checked } : x)))}
-                />
-                <div>
-                  <div className="adm-sl-imp-tabn">{t.name}</div>
-                  <div className="adm-sl-imp-tabw">{t.verdict.why}</div>
-                </div>
-                <span className="adm-sl-imp-tabc">{Math.max(0, t.rows.length - 1)} rows</span>
-              </label>
-            ))}
-          </div>
-          <div className="adm-sl-imp-note">
-            Tabs that are instructions rather than lists are unticked to start with. The
-            &ldquo;Rules of Engagement&rdquo; tab is prose — importing it makes a hundred contacts called
-            &ldquo;•&rdquo;.
-          </div>
-        </>
-      )}
-
-      {step === "map" && tab && (
-        <>
-          <div className="adm-sl-imp-tabbar">
-            {tabs.map((t, i) => t.use && (
-              <button key={t.name + i} className={i === active ? "active" : ""} onClick={() => setActive(i)}>{t.name}</button>
-            ))}
-          </div>
-          <div className="adm-sl-imp-note">
-            Each tab is matched on its own, because the columns really are different between them.
-            Anything left out is left out — nothing is guessed at.
-            {tab.clashes?.length > 0 && (
-              <> <strong>{tab.clashes.length} column{tab.clashes.length === 1 ? "" : "s"}</strong> wanted a field
-                another column had already taken ({tab.clashes.map((c) => c.header).join(", ")}), so they are
-                left out rather than silently overwriting it.</>
-            )}
-          </div>
-          <div className="adm-sl-imp-map">
-            {(tab.rows[0] || []).map((h, i) => (
-              <div key={i} className="adm-sl-imp-col">
-                <div className="adm-sl-imp-colh" title={String(h)}>{String(h || `Column ${i + 1}`)}</div>
-                <Select
-                  value={tab.mapping[i] || ""}
-                  onChange={(e) => setTabs(tabs.map((x, j) => (j === active
-                    ? { ...x, mapping: x.mapping.map((m, k) => (k === i ? e.target.value : m)) }
-                    : x)))}
-                  options={FIELD_OPTIONS}
-                />
-                <div className="adm-sl-imp-colv" title={String(tab.rows[1]?.[i] ?? "")}>
-                  {String(tab.rows[1]?.[i] ?? "") || <span className="adm-sl-faint">blank</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {step === "plan" && !result && (
-        <>
-          <div className="adm-sl-imp-nums">
-            <Num n={dupes?.willImport ?? totals.usable} l="will be imported" tone="#006b1a" />
-            <Num n={totals.companies} l="firms" />
-            <Num n={totals.claimed} l="claims carried over" />
-            <Num n={totals.alreadyWorked} l="already worked" />
-            <Num n={dupes?.already ?? 0} l="skipped — already here" tone="var(--ink-dim)" />
-            <Num n={totals.blank + (dupes?.within ?? 0)} l="skipped — blank or repeated" tone="var(--ink-dim)" />
-          </div>
-
-          <div className="adm-sl-imp-note">
-            Dates are read as month/day/year, which is how this sheet writes them.
-            {dupes?.sample && " Preview mode — the duplicate check can only see the sample pipeline."}
-            {dupes?.error && ` The duplicate check could not finish: ${dupes.error}. The counts above may be low.`}
-          </div>
-
-          {plans.map(({ tab: t, plan }) => (
-            <div key={t.name} className="adm-sl-imp-plan">
-              <div className="adm-sl-imp-planh">
-                <strong>{t.name}</strong>
-                <span>{plan.counts.usable} contacts · {plan.counts.companies} firms · {plan.counts.claimed} claimed</span>
-              </div>
-              {plan.warnings.length === 0 ? (
-                <div className="adm-sl-imp-clean">Nothing unreadable on this tab.</div>
-              ) : (
-                <ul className="adm-sl-imp-warns">
-                  {plan.warnings.slice(0, 12).map((w, i) => (
-                    <li key={i}>{w.why}{w.row ? ` (row ${w.row}, ${w.field})` : ""}</li>
-                  ))}
-                  {plan.warnings.length > 12 && <li>…and {plan.warnings.length - 12} more of the same kind.</li>}
-                </ul>
-              )}
-            </div>
-          ))}
-
-          <div className="adm-sl-imp-note">
-            Every contact gets a first timeline line saying which file and row it came from, dated
-            today, so nothing that came out of a spreadsheet can later be mistaken for something we
-            measured.
-          </div>
-        </>
-      )}
-
-      {result && (
-        <>
-          <div className="adm-sl-imp-nums">
-            <Num n={result.leadTotal} l="contacts imported" tone="#006b1a" />
-            <Num n={result.companyTotal} l="firms created" tone="#006b1a" />
-          </div>
-          <div className="adm-sl-imp-note">
-            {result.notes.join(" · ")}
-            {result.skippedTotal ? ` · ${result.skippedTotal} skipped as duplicates.` : ""}
-            {result.noteProblems ? ` · ${result.noteProblems} contacts could not be given a timeline note — the ids did not line up, so none were guessed at.` : ""}
-          </div>
-          {result.failed && (
-            <div className="adm-sl-warn adm-sl-warn-flat">
-              <strong>It stopped on &ldquo;{result.failed}&rdquo;.</strong> {result.error} Everything up to that
-              point was saved. Fix the offending cell and import the remaining tabs again — anything
-              already here will be skipped as a duplicate.
-            </div>
-          )}
-          <div className="adm-sl-imp-note">
-            Claims came across where a name matched an account. Anything that did not match is on
-            the floor for anybody to take — nothing was assigned to the wrong person on a guess.
-          </div>
-        </>
-      )}
+      {result && <Result r={result} />}
     </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* What actually happened                                              */
+/* ------------------------------------------------------------------ */
+
+function Result({ r }) {
+  return (
+    <>
+      <div className="adm-sl-imp-nums">
+        <Num n={r.added} l="new people added" tone="#006b1a" />
+        <Num n={r.updated} l="already here, filled in" tone="#006b1a" />
+        <Num n={r.unchanged} l="already here, nothing to change" tone="var(--ink-dim)" />
+        <Num n={r.firmsAdded} l="new firms" />
+        <Num n={r.firmsUpdated} l="firms filled in" />
+        {/* Counted, not asserted. This was the literal number 0, which reads
+            the same as a real count of nothing — and on a failed run the panel
+            printed zeros it had not measured. */}
+        <Num n={r.deleted ?? 0} l="deleted" tone="var(--ink-dim)" />
+      </div>
+
+      <div className="adm-sl-imp-note">
+        Nothing was deleted and no filled-in value was emptied. Somebody already here keeps
+        their stage, their rep and anything typed into their row; the sheet only fills what was
+        blank and refreshes plain facts like a job title or a phone number. Anything the sheet
+        said that was not taken is written on that person&rsquo;s timeline instead of being thrown
+        away.{" "}
+        {/* THE HONEST VERSION. This said "To undo the whole run: Start over",
+            which is false for every contact the run FILLED IN. Start over
+            deletes rows by import batch, and a row that was already here
+            belongs to no batch — so its field changes stay. That was true by
+            construction while the importer skipped people already on file; the
+            merge made it false and the sentence was not updated. Found 30 Aug
+            2026 by an adversarial reviewer. */}
+        {r.updated > 0
+          ? <><strong>Sales &rarr; Start over</strong> removes the {r.added} people this run
+            added. It cannot undo the {r.updated} it filled in — Start over works by import,
+            and somebody who was already here belongs to no import. Those changes stay, and
+            every one of them is written on that person&rsquo;s own timeline.</>
+          : <>To undo this run: <strong>Sales &rarr; Start over</strong>.</>}
+        {r.sample && " Preview mode — none of this was saved."}
+      </div>
+
+      {r.failed && (
+        <div className="adm-sl-warn adm-sl-warn-flat">
+          <strong>It stopped on &ldquo;{r.failed}&rdquo;.</strong> {r.error} Everything up to that point
+          was saved. Fix the offending cell and drop the file in again — anyone already here will
+          be filled in rather than added twice.
+        </div>
+      )}
+
+      {r.columnGap && (
+        <div className="adm-sl-warn adm-sl-warn-flat">
+          <strong>Five columns were left out.</strong> {r.columnGap}
+        </div>
+      )}
+
+      {r.firmsTruncated && (
+        <div className="adm-sl-warn adm-sl-warn-flat">
+          <strong>Not every firm on file was checked.</strong> {r.firmsTruncated} Firms past that
+          point may have been added a second time.
+        </div>
+      )}
+
+      {r.updateFailures > 0 && (
+        <div className="adm-sl-warn adm-sl-warn-flat">
+          <strong>{r.updateFailures} row{r.updateFailures === 1 ? "" : "s"} could not be updated.</strong> They
+          are unchanged, not lost. Everything else went in.
+        </div>
+      )}
+
+      {r.perTab.map((t) => (
+        <div key={t.name} className="adm-sl-imp-plan">
+          <div className="adm-sl-imp-planh">
+            <strong>{t.name}</strong>
+            <span>
+              {t.added} added · {t.updated} filled in · {t.unchanged} unchanged · {t.firms} firms
+            </span>
+          </div>
+          <div className="adm-sl-faint" style={{ fontSize: 12, marginBottom: 4 }}>
+            {t.read} column{t.read === 1 ? "" : "s"} read
+            {t.left ? `, ${t.left} left out` : ""}
+            {t.hasHeader ? "" : " — no heading row on this tab, so the columns were worked out from the values"}
+            {t.headerWhy ? ` (${t.headerWhy})` : ""}
+          </div>
+          {t.warnings.length === 0 ? (
+            <div className="adm-sl-imp-clean">Every column matched its heading.</div>
+          ) : (
+            <ul className="adm-sl-imp-warns">
+              {t.warnings.slice(0, 14).map((w, i) => (
+                <li key={i}>{w.why}{w.row ? ` (row ${w.row}, ${w.field})` : ""}</li>
+              ))}
+              {t.warnings.length > 14 && <li>…and {t.warnings.length - 14} more of the same kind.</li>}
+            </ul>
+          )}
+        </div>
+      ))}
+
+      {r.skipped?.length > 0 && (
+        <div className="adm-sl-imp-note">
+          <strong>Tabs left out:</strong>{" "}
+          {r.skipped.map((t) => `${t.name} — ${t.why}`).join(" · ")}
+        </div>
+      )}
+
+      {(r.repeatedInFile > 0 || r.noKey > 0) && (
+        <div className="adm-sl-imp-note">
+          {r.repeatedInFile > 0 && `${r.repeatedInFile} row${r.repeatedInFile === 1 ? "" : "s"} matched somebody earlier in the file and ${r.repeatedInFile === 1 ? "was" : "were"} not added again. A row is matched on its email; a row with no email is matched on its phone, website or company and town, which colleagues at the same firm share — so some of these may be different people at one firm. `}
+          {r.noKey > 0 && `${r.noKey} row${r.noKey === 1 ? " had" : "s had"} no email, phone, website or company, so there is nothing to tell them apart by and they came in as new.`}
+        </div>
+      )}
+
+      {r.noteProblems > 0 && (
+        <div className="adm-sl-imp-note">
+          {r.noteProblems} contacts could not be given a first timeline line — the ids did not line
+          up, so none were guessed at. They are saved; only that one line is missing.
+        </div>
+      )}
+    </>
   );
 }
 
@@ -567,9 +653,15 @@ function Num({ n, l, tone }) {
   );
 }
 
-/* Kept out of the modal so the caller can log the same line for a hand-added
- * contact — the first line of a timeline should always say where the record
- * came from, however it arrived. */
+/* ONE note, for a contact added by hand. The import itself uses
+ * addImportNotesBatch — one call per contact meant seven thousand requests on
+ * the real workbook. This stays because the first line of a timeline should
+ * always say where the record came from, however it arrived, and a hand-added
+ * contact arrives one at a time. */
 export async function stampImportNote(leadId, actor, note) {
   return addLeadActivity({ leadId, actor, type: "import", body: note });
 }
+
+/* Exported for the tests, which check that every field the reader can produce
+ * has somewhere to go and a name a person would recognise. */
+export const FIELD_LABELS = LABEL;

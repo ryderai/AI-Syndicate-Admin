@@ -12,6 +12,7 @@ import Invoices from "./admin/Invoices.jsx";
 import AiCost from "./admin/AiCost.jsx";
 import ClientsPage from "./admin/Clients.jsx";
 import SalesPage from "./admin/SalesPage.jsx";
+import SalesStats from "./admin/SalesStats.jsx";
 import Operations from "./admin/Operations.jsx";
 import Inbox from "./admin/Inbox.jsx";
 import Tickets from "./admin/Tickets.jsx";
@@ -191,6 +192,11 @@ export default function AdminDashboard({ go }) {
        * swallow both. */
       case "clients": return <ClientsPage member={member} query={query} />;
       case "sales": return <SalesPage member={member} />;
+      /* Owner and admin only. This case is only ever reached for a role whose
+       * SECTIONS entry lists the id — the switch below is not the gate, the
+       * pageIdsForRole check before it is — so a rep pasting the address lands
+       * on their own landing page instead. Added 30 Aug 2026. */
+      case "sales-stats": return <SalesStats member={member} />;
       /* THE SAME COMPONENT, ONE MODE — Aug 27 2026. `mode="floor"` is the rep's
        * whole lead page: every lead in the company, with a three-state switch
        * over it (Mine / Available / All) instead of two separate pages. No mode

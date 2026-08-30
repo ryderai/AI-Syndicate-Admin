@@ -5553,3 +5553,297 @@ was added.
 
 Run `0024_ai_usage.sql`, deploy. Nothing else, and nobody else. The provider true-up is the only
 thing blocked, on an Admin key an owner creates, and the page is honest about its absence.
+
+
+## §49. THE SHEET GOES IN WITH ONE CLICK — and four bugs that were losing 99% of it — Sat Aug 30 2026 (append-only section)
+
+Ryder: *"make it extremely easy to transfer everything and make it as few clicks as possible and
+also use the exact same rows. so build the admin to be able to receieve this file without asking
+any questions, deleteing any data, and filling in all the rows, clients, and filters correctly …
+just fill in everything we have a row for and leave out the rest. dont mess with the google sheet
+at all."*
+
+And, when asked what a second drop of the same file should do: *"were going to merge everything
+into the admin, so the sheet will be irrelevent once we get it built. but he pulls leads from
+appollo then dumps them into that sheet so instead hell just dump them into our admin but they
+will be dropped in that way."* — so the SHAPE of the drop is permanent, and Apollo's export
+columns change with the search. A reader that depends on a heading row being right is a reader
+that breaks again next month.
+
+### The number that started it
+
+The importer was taking **36 people out of a file that holds 3,663**, and reporting no error.
+Nothing threw. Every count on screen was plausible. It was found by counting what went in against
+what is in the file — which is the only check that catches this class of thing.
+
+### Four bugs, all silent
+
+1. **`src/lib/sheet.js` cut every row at its first empty cell.** The row pattern was
+   `/<row\b[\s\S]*?(?:\/>|<\/row>)/` — "up to the first `/>` or `</row>`". An empty cell is
+   written `<c r="A2" s="7"/>` and that `/>` is the first one inside the row. A short row is a
+   valid row, so nothing complained. The Jewelry tab came back as 3 rows instead of 71.
+   Fixed with `<row…ATTRS/>` or `<row…ATTRS>…</row>`, where ATTRS matches quoted attribute values
+   (`>` is legal unescaped inside one) and an optional namespace prefix (`<x:row>`).
+
+2. **`insertLeadsBatch` threw on every live import.** `const rows = data || []` sat in the same
+   block as `rows.slice(i, i + 200)` two lines above — temporal dead zone, first iteration, every
+   time. Preview mode returns before it, so every test and every demo passed. The throw surfaced
+   in the import screen's catch as **"Could not read that file"**, blaming the spreadsheet, after
+   the firms, the list and the batch record had already been written. ESLint does not flag it:
+   `no-shadow` is off. **This means no live import has ever inserted a contact.**
+
+3. **`toInt` turned "1.0156E7" into 1.** Excel stores a big round number in scientific notation.
+   Stripping everything but digits and dots gave "1.01567". Also `"N/A"` → `0`, and 0/100 is a
+   real site score meaning the site failed everything.
+
+4. **A decimal number matched as a hostname.** `[a-z0-9-]+(\.[a-z0-9-]+)+` matches "42.0", and the
+   reader hands back every whole number with a ".0". The headcount column read as a website and
+   took the field off the real one, on three tabs.
+
+### What the workbook actually is
+
+**3,663 people, 2,764 firms, 7 lead tabs.** Not 451 — that figure in §44 came from the broken
+reader. Luxury Agents 820 · Law Firm 993 · Medspas 603 · Real Estate 546 · Car Dealership 544 ·
+Dental 87 · Jewelry 70.
+
+**Three tabs disagree with their own heading row and a fourth has none.**
+
+- **Luxury Agents — no heading row at all.** 821 people the old importer skipped on every single
+  import, because it read row 1 as headings, recognised nothing, and reported "0 columns could be
+  recognised". An unticked tab is not an error, so nobody ever saw it.
+- **Jewelry** — three columns in the data the heading does not have, so everything from column 13
+  slides. The heading says "Website" over a LinkedIn address and "Annual Revenue" over
+  "Los Angeles".
+- **Car Dealership** — slides three from column 23, and a second record block is pasted from
+  column 45. 84 columns wide.
+- Real Estate, Law Firm, Medspas and Dental line up.
+
+### `lib/sheet-columns.js` — the reader
+
+Every column is scored on **what is in it**. The heading is a hint worth **+0.55**, which is less
+than the gap between a strong content signal and a weak one — so right data beats a wrong heading,
+and a heading still settles what content genuinely cannot (a given name from a surname). Rules
+that must not be broken:
+
+1. **A pair with content behind it beats a header-only pair, always.** An empty column with the
+   right heading must never beat a full column of the real thing. Sorting on score alone let a
+   0.55 empty column beat 0.56 of real firm names.
+2. **City, state and country are decided by which ADDRESS RUN they sit in**, never by their own
+   values — "Larry Pike" scores as a city otherwise. A street address opens the firm's block,
+   every time, because only a firm has one. A run with neither a street address nor a location
+   line beside it is a guess, and says so on screen.
+3. **The six hand-filled columns can only sit LEFT of the contact's name.** Without this, Jewelry's
+   email-verification column — the word "Verified" on all 70 rows — was read as the Sales Owner,
+   and the real Sales Owner column lost and was dropped.
+4. **First name and last name only ever arrive as a pair**, side by side. A lone first-name column
+   with no heading is a column of something else; on a [name, company, town] list it was the town.
+5. **A second street address or location line ends the list. A second EMAIL does not** — a work
+   address and a personal one is normal, and cutting there threw away six real columns.
+6. **When it cannot tell whether row 1 is a heading, it is a PERSON.** The two mistakes do not cost
+   the same: a heading read as a person is one junk row anybody can see and delete; a person read
+   as a heading is deleted, silently, on every import for ever.
+7. **Trust is relative to the tab**: at least 5 values AND at least 2% of the rows. Three emails in
+   900 rows is a typo; three in a three-row paste is the column.
+8. **`site_score` is never written from a spreadsheet**, on insert or update. A number we measured
+   and a number out of a cell must never share a field.
+
+### One click, and nothing deleted
+
+Four screens became one. Pick the file and it goes. Everything the reader had to decide is printed
+on the RESULT screen instead — including, column by column in plain words, every heading that
+disagreed with its own data.
+
+`mergeLead` / `mergeCompany` in `lib/sales-import.js` handle anybody already on file. An empty cell
+never blanks a value. A stage never moves backwards and a closed deal never reopens. A claimed lead
+is never taken off its rep. First contact keeps the earliest date, last touch the latest. A typed
+next step is kept and the sheet's version goes on the timeline instead of being thrown away.
+
+**And the match has a KIND.** `dedupeKey` falls back email → phone → website → company+city, and
+colleagues share the last three (migration 0006 says so in as many words). On anything weaker than
+an email match the fields that say who somebody IS are left alone — otherwise three agents at one
+brokerage take turns overwriting each other's name and the timeline says "name updated".
+
+**Start over cannot undo a row that was FILLED IN.** It deletes by import batch and somebody
+already on file belongs to no batch. That was true by construction while the importer skipped
+existing people; the merge made it false. The result screen now says so.
+
+### Migration 0025 — five columns the sheet had and the console did not
+
+`admin_leads.address`, `admin_leads.country`, `admin_companies.alias`, `.keywords`,
+`.total_funding`. Additive only, `add column if not exists`, nothing dropped or renamed. Each was
+being read off the sheet and thrown away on every import. **If 0025 has not been run the import
+still works** — `probeSheetColumns` asks once, those five fields are left out, and the screen says
+which and why. A missing migration costs five columns, not the run.
+
+### Proof (Aug 30 2026)
+
+lint 0 across `lib src api tests` · build clean at 157 modules · `tests/sheet-columns` **52 checks**
+pinning all 200 columns of the seven real tabs plus every rule above and all four bugs · every
+other suite unchanged (sales 110, sales-sheet 139, floor-scoping 231, ai-cost 324, lead-tags 220,
+outreach-stats 177, and the rest).
+
+**The real workbook driven through the built bundle, twice.** First run: 3,663 people, 2,764 firms,
+8 seconds, one click. Second run, the same file on top of itself: **5 added, 0 new firms, 3,658
+unchanged, 0 deleted.**
+
+**Two adversarial agents found 26 defects in this work**, all fixed — including the result screen
+printing "Every column matched its heading" on the three tabs where it did not, because the
+reader's notes were computed and then thrown away; and a test that asserted `undefined ===
+undefined` and proved nothing while the path it claimed to guard was wide open.
+
+### The five lessons
+
+1. **Count what went in against what is in the source.** Four bugs, no exception, every number on
+   screen plausible.
+2. **A comment that describes behaviour the code does not have is worse than no comment.** A
+   checker found six.
+3. **Write the test against the behaviour you want, not the behaviour you have.** One of mine
+   asserted the wrong thing and would have forced the wrong fix into the code it was checking.
+4. **Delete each rule on purpose and see whether a test notices.** Six rules with named, specific
+   justifications had no test at all.
+5. **When two mistakes are not equally expensive, pick the cheap one deliberately, and write down
+   why.** That is the whole argument for reading row 1 as a person.
+
+### Blocked until
+
+1. Run `0025_sheet_columns.sql` in Supabase.
+2. Deploy.
+
+
+## §50. THE 1,000-ROW CEILING, A LOST GRANT, AND THE SALES PAGE SIMPLIFIED — Sun Aug 30 2026 (append-only section)
+
+Three separate things, same day, all on the Sales side. §49 is the sheet importer; this is
+everything after it.
+
+### 1. Supabase answers ONE request with at most 1,000 rows, and says nothing
+
+Ryder, reading the screen: *"this says 999 leads, when i think we have 3000+."* He was right.
+
+The giveaway was in the tab counts: Medspas 299 · Car Dealership 544 · Jewelry 70 · Dental 87 —
+**exactly 1,000**, and exactly the four tabs imported last. Sorted newest-first, stopped after one
+page, so Luxury Agents, Real Estate and Law Firm all read **0**.
+
+**Five readers had a warning for this and none of them could fire.** Each did:
+
+```js
+selectAll("admin_leads", { limit: LEAD_FETCH_CAP + 1 })   // asks for 2001
+if (rows.length > LEAD_FETCH_CAP) { …warn we capped… }    // fires above 2000
+```
+
+The server capped the answer at 1,000. `1000 > 2000` is never true, so five carefully worded
+sentences about missing data were unreachable code.
+
+| reader | claimed cap | actually got | what it cost |
+|---|---|---|---|
+| `listLeads` | 2,000 | 1,000 | the Sales page showed 1,000 of 3,663 |
+| **`listCompanies`** | 2,000 | 1,000 | **the sheet importer's duplicate check** |
+| `listAllLeadActivity` | 4,000 | 1,000 | the cadence counts touches from these |
+| `listLeadTagState` | 12,000 | 1,000 | tags, and the tag filters' counts |
+| `listCompanyReports` | 2,000 | 1,000 | the Firms tab's scan history |
+
+**`listCompanies` was the expensive one.** It is how the importer decides which firms it already
+has. With 2,761 firms on file it could see 1,000, so the next drop of the sheet would have made a
+second copy of the other 1,761 and reported them as new. Caught the same day, before that import
+ran.
+
+**The fix: `lib/paging.js#fetchPaged`.** Pages of 1,000 via `.range()` until a short page comes
+back, and REPORTS its ceiling rather than silently applying it. `selectAll` pages automatically for
+any `limit > 1000`, so every future caller is covered without having to remember.
+
+**ORDER ON THE COLUMN AND THEN ON `id`.** `created_at` is not unique — one import statement writes
+two hundred rows sharing a timestamp — and Postgres gives no stable order inside a tie across two
+range queries. Without the tiebreak, page 2 hands back rows page 1 already had while others never
+come back. That trades a visible undercount for an invisible, non-repeatable one, which is worse.
+
+Also: `companies` was missing from the Sales board's `truncated` list, so the one cap that mattered
+most was the one the page could not have told you about. Added.
+
+**Proved end to end**, not just unit-tested: a live Postgres with 3,663 rows (200 sharing a
+timestamp), behind a server enforcing max-rows=1000, driven by the real `@supabase/supabase-js`:
+
+```
+ONE REQUEST asking for 50,000 : 1000 rows   <- what the Sales page was doing
+PAGED reader                  : 3663 rows
+unique ids                    : 3663 (no repeats)
+rows missing                  : none
+```
+
+`tests/paging` — 11 checks. Mutation-checked: remove the `id` tiebreak and one fails; stop after
+one page and seven fail.
+
+**The rule: never write `.limit(n)` where n > 1000.** And a round number on a screen is a bug until
+proved otherwise.
+
+### 2. A lost GRANT has now broken two pages in two days
+
+Start over returned `permission denied for function admin_clear_import`. Every function the console
+calls has a `grant execute … to authenticated` line in the migration that created it — all eleven
+checked, all present. **The files are right and the database is not.**
+
+The wording of the error is the whole diagnosis:
+
+| the error says | it means |
+|---|---|
+| `permission denied for function X` | the function EXISTS, the grant is missing |
+| `Could not find the function … in the schema cache` | the function does not exist, or the argument names/types do not match the call |
+| the function's own message ("only an owner or admin") | the grant is fine; the internal check refused |
+
+Aug 29 it was `admin_is_member` and the whole console said "you're not on the team".
+
+**`0026_grants_repair.sql`** re-asserts the grant on all eleven, prints a `can_execute` table, and
+is guarded with `to_regprocedure` so a function that does not exist is SKIPPED and NAMED rather
+than throwing — which is the most likely way the original grants were lost. It only grants: no
+revoke, no drop, no table touched, safe to re-run. Tested on a real Postgres: 11 of 11 flipped from
+denied to allowed, a second run a clean no-op.
+
+**A migration file being correct is not evidence that the database matches it.** Ask the database.
+
+### 3. The Sales page, simplified — and Stats got a page
+
+*"everything seems really complex and jumbled, i want to simplify it all."* Seven bands of chrome
+above the first row of data became four.
+
+`summary → one row of controls → list tabs → table`
+
+- **Six tiles off the sheet.** They stay on My Day; the team's version of all six is on Stats.
+- **One control row**: view tabs · search · stage · owner · `⋯` · Add a contact. `⋯` holds Stats,
+  Where leads come from, Import a sheet, Start over.
+- **Fourteen filter dropdowns became two**: `Type of business` (pinned — his ask) and `Filters · N`,
+  which counts COLUMNS not values and clears them all.
+- The SAMPLE/LIVE badge moved beside the numbers it describes.
+
+Four things not to break:
+
+1. **A pressed tile becomes a chip on the toolbar.** A filter that is ON with no control on screen
+   is one nobody can find or turn off. The chip calls `pressTile` again — one act, one function.
+2. **The Filters panel is ONE popover with two levels.** A popover opened from inside another
+   closes itself instantly: the outer closes on any outside click and the inner button is one.
+3. **`.adm-sl-search` is `flex: 1 1 0`.** Flex wraps from the BASIS, before grow. At `1 1 220px`
+   the row ran over and the actions wrapped.
+4. **`PINNED_FILTERS`** in salesSheet.jsx is the list that stays out on the bar.
+
+**`src/components/admin/SalesStats.jsx`** — sidebar `["sales", "Sales", [["sales-stats", "Stats"]]]`,
+a child using the Finance → Invoices mechanism. Owner/admin only, and the menu is not the gate:
+AdminDashboard refuses to route to an id the role's list does not carry, and `tests/sales` asserts
+a rep cannot open it.
+
+**NOT ONE NUMBER ON IT IS NEW.** Same `repStats` / `outreachByRep` / `lossReasons`, same
+`getSalesBoard()` read. **`RepNumbersModal` is DELETED** — two screens working the same answer out
+twice is how they come to disagree. The team line is counted over every lead rather than by summing
+the reps, because 3,650 of 3,663 have no owner and a deal won-then-released has none either.
+
+### Proof for all three
+
+lint 0 across `lib src api tests` · build clean · **2,102 checks across 21 suites, all passing**
+(`tests/auth-gate` and `tests/inbox` do not run on the Mac bridge — playwright missing and a bad
+relative import; both predate this work) · the sheet, the Filters panel, the `⋯` menu and Stats all
+driven in a browser with the order read off the live DOM, and the control row measured at one line.
+
+Measuring a flex row by each child's `top` reports the wrong number of lines —
+`align-items: center` gives items of different heights different tops on the same line. Group by
+vertical centre, or read the container height.
+
+### Blocked until
+
+1. `0026_grants_repair.sql` run in Supabase (0025 is already run). Clicks in SETUP.md.
+2. Deployed. Nothing in §49 or §50 is pushed.

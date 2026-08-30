@@ -7,6 +7,7 @@ const SECTION_TITLES = {
   finance: { kicker: "Command", title: "Finance · in, out, projected" },
   invoices: { kicker: "Command", title: "Invoices · billed, paid, owed" },
   "ai-cost": { kicker: "Command", title: "AI Cost · what every AI call cost us" },
+  "sales-stats": { kicker: "Sales", title: "Stats · how the team is doing" },
   clients: { kicker: "Command", title: "Clients · everyone we work with and everyone who pays" },
   sales: { kicker: "Sales", title: "Sales · the pipeline" },
   /* THE REP'S OWN PAGES — Aug 27 2026. `leads` and `mine` are gone as page ids

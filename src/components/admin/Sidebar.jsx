@@ -8,6 +8,10 @@ const Icon = {
   work: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r="1" fill="currentColor" /></svg>,
   overview: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></svg>,
   finance: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>,
+  /* Stats, under Sales. A child with no icon renders as a blank square where
+     every one of its siblings has a mark, which reads as a page that failed to
+     load rather than one that has no icon. A bar chart, matching the page. */
+  "sales-stats": <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>,
   invoices: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16l3-2 2 2 2-2 2 2 3-2V8z" /><line x1="8" y1="9" x2="14" y2="9" /><line x1="8" y1="13" x2="12" y2="13" /></svg>,
   /* A person, not a dollar sign. The page stopped being "everyone who pays"
    * on Aug 24 2026 and became "everyone we deal with", so the money symbol was
@@ -104,8 +108,22 @@ const SECTIONS = [
    * role-aware item list: sectionsForRole filters BEFORE anything is drawn, so
    * exactly one of these ever reaches the menu and the group name can never
    * appear twice. */
+  /* SALES OPENS, and Stats is under it — Ryder, 30 Aug 2026: "when you click
+   * sales a dropdown appears to click to the stats page if you want and then as
+   * an owner you can see the stats by rep."
+   *
+   * Written as a CHILD of `sales` rather than as a second top-level entry,
+   * because the child mechanism already exists (Finance → Invoices, AI Cost)
+   * and it already does the three things this needs: pageIdsForRole() lets the
+   * role open it, parentOf() keeps Sales open while you are on it, and the
+   * group stays one line until you go there.
+   *
+   * A rep's menu is built from a different SECTIONS entry entirely, so `sales`
+   * and `sales-stats` are both absent for them — and AdminDashboard refuses to
+   * route to a page the role's list does not carry, which is the gate that
+   * actually holds. A hidden link is not a permission. */
   { group: "Sales", roles: ["owner", "admin"], items: [
-    ["sales", "Sales"],
+    ["sales", "Sales", [["sales-stats", "Stats"]]],
   ]},
   { group: "Delivery", roles: ["owner", "admin"], items: [
     ["operations", "Operations"],

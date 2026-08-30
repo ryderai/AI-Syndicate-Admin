@@ -19,6 +19,7 @@ import {
   companyClaimWarning, salesQueue, repStats, listHealth,
 } from "../../lib/sales-rules.js";
 import {
+  SALES_FIELDS,
   guessSalesColumn, guessHeaderRow, parseSheetDate, stageFromSheet,
   matchOwner, companyKey, groupIntoCompanies, buildImportPlan, looksLikeLeadTab,
   SALES_FIELD_KEYS,
@@ -124,8 +125,45 @@ test("company columns beat person columns — a switchboard never lands on a dir
   assert.equal(guessSalesColumn("Corporate Phone"), "company_phone");
 });
 
-test("'Keywords' is left alone — it is a paragraph of website tech, not a lead field", () => {
-  assert.equal(guessSalesColumn("Keywords"), "");
+test("'Keywords' now has a column of its own on the FIRM, and never on the person", () => {
+  /* CHANGED Aug 30 2026, deliberately. This used to assert `""` — Keywords was
+   * left unmapped because it is a 400-word paragraph of what the firm does and
+   * what its website runs on, and it was landing in a rep's notes field.
+   *
+   * Ryder's rule is to keep every piece of data we ever touch, and thrown away
+   * this one cannot be got back without re-exporting from Apollo. So migration
+   * 0025 gives it a column on admin_companies. The thing that made it a
+   * problem — it is a paragraph, not a label — is handled by WHERE it goes,
+   * not by dropping it: `where: "company"`, so no lead row can ever render it.
+   */
+  assert.equal(guessSalesColumn("Keywords"), "keywords");
+  assert.equal(guessSalesColumn("Technologies"), "keywords");
+  assert.equal(SALES_FIELDS.find((f) => f.key === "keywords").where, "company");
+});
+
+test("the five columns the sheet had and the console did not now have somewhere to go", () => {
+  /* Each of these was being read off CJ's sheet and then dropped for want of a
+   * column, on every import. Migration 0025. */
+  assert.equal(guessSalesColumn("Address"), "address");
+  assert.equal(guessSalesColumn("Country"), "country");
+  assert.equal(guessSalesColumn("Company Name for Emails"), "company_alias");
+  assert.equal(guessSalesColumn("Total Funding"), "total_funding");
+  assert.equal(guessSalesColumn("Keywords"), "keywords");
+
+  const where = Object.fromEntries(SALES_FIELDS.map((f) => [f.key, f.where]));
+  assert.equal(where.address, "lead", "the contact's own location line belongs to the PERSON");
+  assert.equal(where.country, "lead");
+  assert.equal(where.company_alias, "company");
+  assert.equal(where.total_funding, "company");
+});
+
+test("'Total Funding' is not eaten by the loose revenue rule above it", () => {
+  /* The revenue rule is `\\b(annual revenue|revenue)\\b` with no anchor, so it
+   * matches nothing in "Total Funding" — but the ORDER is what guarantees it
+   * stays that way if either pattern is ever loosened. */
+  assert.equal(guessSalesColumn("Total Funding"), "total_funding");
+  assert.equal(guessSalesColumn("Annual Revenue"), "annual_revenue");
+  assert.notEqual(guessSalesColumn("Total Funding"), guessSalesColumn("Annual Revenue"));
 });
 
 test("'Company Name for Emails' does not fight 'Company Name' for the same field", () => {
@@ -954,16 +992,55 @@ test("a rep lands on their own Overview, because the landing page is the first o
   assert.equal(pageIdsFor("sales")[0], "overview");
 });
 
-test("the owner's menu did not change: one Sales page, and the rep's ids are not in it", () => {
+test("the owner's Sales group is one entry that opens to Sales and Stats", () => {
+  /* CHANGED 30 Aug 2026, deliberately. Ryder: "i would maybe like to add a
+   * stats page in the owner and admin part where when you click sales a
+   * dropdown appears to click to the stats page."
+   *
+   * Written as a CHILD of `sales`, not a second top-level entry, so the group
+   * stays one line until you go there and Sales stays open while you are on
+   * Stats — the mechanism Finance → Invoices already uses. The assertion is on
+   * the exact shape because that shape is what makes parentOf() and
+   * pageIdsForRole() behave. */
   const owner = pageIdsFor("owner");
   assert.ok(owner.includes("sales"), "the owner must keep the four-tab Sales page");
+  assert.ok(owner.includes("sales-stats"), "and must be able to open Stats");
   assert.ok(!owner.includes("floor"), "the Floor is a rep's page, not the owner's");
   assert.ok(!owner.includes("gmail"), "the owner has the shared Inbox, not a rep's own mailbox page");
   assert.ok(owner.includes("work"), "Work is still the owner's page");
   assert.deepEqual(pageIdsFor("owner"), pageIdsFor("admin"), "admin and owner are still the same menu");
   const salesGroup = groupsFor("owner").filter((g) => g.group === "Sales");
   assert.equal(salesGroup.length, 1, "an owner must see exactly one Sales group");
-  assert.deepEqual(salesGroup[0].items, [["sales", "Sales"]]);
+  assert.deepEqual(salesGroup[0].items, [["sales", "Sales", [["sales-stats", "Stats"]]]]);
+});
+
+test("STATS IS OWNER AND ADMIN ONLY, and the menu is not the gate", () => {
+  /* The page shows every rep's numbers beside every other rep's. A rep must not
+   * open it, and "it is not in their menu" is not a permission — AdminDashboard
+   * refuses to route to an id the role's own list does not carry, and that list
+   * is what this asserts. Same shape of gate as the Vault. */
+  assert.ok(!pageIdsFor("sales").includes("sales-stats"),
+    "a rep pasting #/dashboard/sales-stats must land somewhere else");
+  for (const role of ["owner", "admin"]) {
+    assert.ok(pageIdsFor(role).includes("sales-stats"), `${role} must be able to open Stats`);
+  }
+});
+
+test("opening Stats leaves Sales open in the sidebar", () => {
+  /* parentOf() in Sidebar.jsx reads exactly this shape — a child listed under
+   * its parent — so asserting the shape asserts the behaviour. Derived here the
+   * same way rather than imported, because this suite rebuilds SECTIONS itself
+   * and importing the component would drag a browser in with it. */
+  const parentOf = (id) => {
+    for (const g of SECTIONS) {
+      for (const [pid, , kids] of g.items) {
+        if ((kids || []).some(([kid]) => kid === id)) return pid;
+      }
+    }
+    return null;
+  };
+  assert.equal(parentOf("sales-stats"), "sales");
+  assert.equal(parentOf("invoices"), "finance", "the mechanism it borrows still works");
 });
 
 test("a rep cannot reach a page their role does not list", () => {

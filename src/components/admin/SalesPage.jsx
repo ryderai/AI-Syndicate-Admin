@@ -10,16 +10,18 @@ import {
   closeLeadWon, markLeadLost, lostMessage, setLeadTag, syncAutoTags, listLeadTagEvents,
 } from "../../lib/data.js";
 import {
-  salesQueue, claimState, scoreGate, repStats, listHealth, isOpenStage, ROE,
+  salesQueue, claimState, scoreGate, listHealth, isOpenStage, ROE,
   textGate, LOST_REASONS, WON_REASONS, MIN_REASON_NOTE_CHARS, checkCloseReason,
 } from "../../../lib/sales-rules.js";
 /* Tags are an append-only event log, so "which tags are on this lead" is a
  * replay rather than a column read. One place decides it. */
 import { currentTags, tagHistory } from "../../../lib/lead-tags.js";
-/* outreachFor itself is not called here — a rep's own Overview calls it. The
- * owner's table calls outreachByRep, which is outreachFor once per person with
- * the same rows, so the two sides cannot drift. */
-import { outreachByRep, lossReasons, OUTREACH_WINDOW_DAYS } from "../../../lib/outreach.js";
+/* The rep-by-rep table this page used to open in a modal now has a page of its
+ * own — src/components/admin/SalesStats.jsx, reached from Sales → Stats. It
+ * calls outreachByRep, lossReasons and repStats there, from the same
+ * getSalesBoard() read, so the two screens cannot come to disagree about how
+ * many deals somebody won. Nothing on this page counts a rep any more, which is
+ * why none of those three is imported here. 30 Aug 2026 */
 import {
   sheetRows, canEditLead,
   AVAILABILITY, AVAILABILITY_LABELS, AVAILABILITY_HINTS,
@@ -32,13 +34,14 @@ import { useScreenContext } from "../../lib/screenContext.js";
 import { useRoute } from "../../lib/router.js";
 import { toast } from "../../lib/toast.js";
 import { SourceBadge, Modal, Field, TextInput, TextArea, Select, timeAgo, useHealth } from "./shared.jsx";
-import { StagePill, ClaimChip, ScoreChip, LateBox, Tile, MiniBar, SiteLink, money } from "./salesParts.jsx";
+import { StagePill, ClaimChip, ScoreChip, LateBox, Tile, MiniBar, SiteLink } from "./salesParts.jsx";
 /* LogModal is exported from the drawer rather than copied here. The Floor's row
  * can log a touch without opening the record, and a second copy of the one-text
  * gate would be a second copy that stops matching — the whole reason
  * claimTextSend lives in the database. */
 import SalesProfile, { LogModal } from "./salesProfile.jsx";
 import SalesSheet from "./salesSheet.jsx";
+import { Popover } from "./opsCells.jsx";
 import { StartOverPanel } from "./salesStartOver.jsx";
 import { SalesImportModal } from "./salesImport.jsx";
 /* Saved searches and imported-list records. Carried over from the old Leads
@@ -92,6 +95,18 @@ const VIEWS = [["day", "My Day"], ["lists", "The sheet"], ["pipeline", "Pipeline
  * do not have. That is all six, so the row goes. The health card above the
  * table already counts what is on screen.
  */
+/* THE TILES' OWN WORDS, in one place. The chip that stands in for a pressed
+ * tile on the sheet reads from this, so a tile and its chip cannot drift into
+ * saying two different things about the same filter. */
+const TILE_LABELS = {
+  floor: "On the floor",
+  mine: "Yours, open",
+  owed: "Owed a touch today",
+  atRisk: "Claims at risk",
+  meetings: "Meetings + proposals",
+  won: "Won",
+};
+
 const MODES = {
   /* THE FLOOR. One mode where there were two.
    *
@@ -159,7 +174,6 @@ export default function SalesPage({ member, mode = null }) {
   const [openId, setOpenId] = useState(null);
   const [importOpen, setImportOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
-  const [statsOpen, setStatsOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [startOverOpen, setStartOverOpen] = useState(false);
   /* Which lead is mid-claim on My Day, or null. See quickClaim. */
@@ -204,6 +218,9 @@ export default function SalesPage({ member, mode = null }) {
    * Reading the lit state off `tileFilter` and nothing else is what makes the
    * ring honest: it lights only when the tile itself put the filters there. */
   const [tileFilter, setTileFilter] = useState(null);
+  /* Where the ⋯ menu hangs from, or null. A rect, not a boolean — Popover
+   * anchors to the button that opened it. */
+  const [moreMenu, setMoreMenu] = useState(null);
 
   /* Where a tile puts you back when you switch it off. These are the page's
    * OWN opening values, copied from the useState calls above — a rep opens on
@@ -295,12 +312,6 @@ export default function SalesPage({ member, mode = null }) {
    * mean two rows on the same screen disagreeing about what day it is at
    * midnight — rare, and impossible to reproduce when somebody reports it. */
   const [now, setNow] = useState(() => new Date().toISOString());
-  /* THE SAME INSTANT AS `now`, AS A NUMBER. Date.parse is pure, so this is safe
-   * to derive during a render where Date.now() is not — and it means the whole
-   * page, the tiles and the owner's rep table all count from ONE clock. Two rows
-   * on one screen disagreeing about what day it is at midnight is a bug nobody
-   * can reproduce. */
-  const nowMs = useMemo(() => Date.parse(now), [now]);
 
   /* DEEP LINK: #/dashboard/sales?lead=<id>
    *
@@ -309,7 +320,7 @@ export default function SalesPage({ member, mode = null }) {
    * rather than a name to go and search for. Read ONCE and then forgotten —
    * `opened` stops the drawer springing back open every time the board
    * reloads, which it did on the first attempt. */
-  const [route] = useRoute();
+  const [route, go] = useRoute();
   const [linkOpened, setLinkOpened] = useState(false);
   const linkedLeadId = useMemo(() => {
     const q = String(route).split("?")[1] || "";
@@ -929,7 +940,17 @@ export default function SalesPage({ member, mode = null }) {
           that is not on this page is not drawn at all rather than drawn dead.
           The floor gets none, so the row itself goes with them — an empty grey
           strip above the table is a row of switches that does nothing. */}
-      {tileRow.length > 0 && (
+      {/* ---- tiles ----
+          NOT ON THE SHEET any more — Ryder, 30 Aug 2026: "everything seems
+          really complex and jumbled, i want to simplify it all." Six tiles of
+          which four read 0 were the loudest thing on the page and the least
+          used, and the sheet already carries the same numbers a row lower in a
+          form that says what it is counting.
+          They stay on My Day, where "Owed a touch today" is the whole point of
+          the page, and the team's version of all six now has a page of its own
+          at Sales → Stats. Pressing one still lands you on the sheet, and the
+          chip in the toolbar below is what says so once you are there. */}
+      {tileRow.length > 0 && shownView !== "lists" && (
         <div className="adm-sl-tiles">
           {tileRow.includes("floor") && <Tile label="On the floor" value={counts.floor} hint="nobody has claimed" onClick={() => pressTile("floor")} active={tileFilter === "floor"} />}
           {tileRow.includes("mine") && <Tile label="Yours, open" value={counts.mine} hint={member.full_name || member.email} onClick={() => pressTile("mine")} active={tileFilter === "mine"} />}
@@ -937,11 +958,22 @@ export default function SalesPage({ member, mode = null }) {
           {tileRow.includes("atRisk") && <Tile label="Claims at risk" value={counts.atRisk} hint="run out or gone cold" tone={counts.atRisk ? "#92400e" : undefined} onClick={() => pressTile("atRisk")} active={tileFilter === "atRisk"} />}
           {tileRow.includes("meetings") && <Tile label="Meetings + proposals" value={counts.meetings} hint="live conversations" onClick={() => pressTile("meetings")} active={tileFilter === "meetings"} />}
           {/* NOT "all time". This is counted from the leads that were actually
-              loaded, which are capped at the newest 2,000 contacts — and the
-              page says so at the top when it hits the cap. A tile claiming
-              "all time" over a capped read is a small, confident lie. */}
+              loaded. That used to mean the newest 2,000 — in practice the
+              newest 1,000, because Supabase caps one request there and nothing
+              noticed. The reader pages now (lib/paging.js), so it is normally
+              everything; the hint stays honest either way, and the page still
+              says so at the top if the ceiling is ever reached. */}
           {tileRow.includes("won") && <Tile label="Won" value={counts.won} hint="of the contacts loaded" onClick={() => pressTile("won")} active={tileFilter === "won"} />}
         </div>
+      )}
+
+      {/* ---- what is on screen, above the controls ----
+          Only on the sheet, because it counts the rows the sheet is about to
+          draw; My Day, Pipeline and Firms are different shapes with different
+          numbers. And only when there ARE rows — "0 people at 0 firms" over an
+          empty-state card is noise, and the empty card already says it. */}
+      {shownView === "lists" && rows.length > 0 && (
+        <ListHealth rows={rows} now={now} scoreOf={scoreOf} badge={badge} />
       )}
 
       {/* ---- toolbar ---- */}
@@ -992,6 +1024,22 @@ export default function SalesPage({ member, mode = null }) {
           value={q} onChange={(e) => setQ(e.target.value)}
         />
 
+        {/* THE TILE YOU PRESSED, ONCE YOU ARE ON THE SHEET.
+            The tiles do not draw here any more, and a filter that is ON with no
+            control on screen showing it is a filter nobody can find or turn
+            off. So the tile becomes one removable chip. Pressing the ✕ is the
+            same act as pressing the lit tile again — one function, so the two
+            cannot come to mean different things. */}
+        {tileFilter && shownView === "lists" ? (
+          <button
+            type="button" className="adm-sh-chipbtn"
+            onClick={() => pressTile(tileFilter)}
+            title="Take this off and go back to the whole list"
+          >
+            {TILE_LABELS[tileFilter] || tileFilter} <span aria-hidden="true">✕</span>
+          </button>
+        ) : null}
+
         <select className="adm-input adm-sl-sel" data-filter="stage" value={stageFilter} onChange={(e) => handStage(e.target.value)}>
           <option value="open">Open only</option>
           <option value="all">Every stage</option>
@@ -1016,24 +1064,83 @@ export default function SalesPage({ member, mode = null }) {
         )}
 
         <div className="adm-sl-baractions">
-          <SourceBadge mode={badge} />
-          {isAdmin && <button className="btn" onClick={() => setStatsOpen(true)}>Rep numbers</button>}
-          <button className="btn" onClick={() => setSourcesOpen(true)} title="Imported lists and saved searches">
-            Where leads come from{board.sources.some((x) => x.last_run_error) ? " ⚠" : ""}
-          </button>
-          {isAdmin && <button className="btn" onClick={() => setImportOpen(true)}>Import a sheet</button>}
-          {/* Owner/admin only. Hidden rather than shown-and-refused, because
-              this one deletes: a rep who cannot use it does not need to be
-              told twice, and the panel behind it explains itself to anybody
-              who reaches it another way. */}
-          {isAdmin && (
-            <button className="btn" onClick={() => setStartOverOpen(true)} title="Undo an import, or clear everything imported and start fresh">
-              Start over
+
+          {/* FIVE BUTTONS BECAME ONE MENU AND ONE BUTTON.
+              Rep numbers, Where leads come from, Import a sheet and Start over
+              are all occasional — you press them once a week between them — and
+              they were taking a whole row above the table you look at every
+              day. Add a contact stays out because it is the one thing here you
+              do without thinking.
+              Nothing is removed; every entry is one click away, and the warning
+              triangle still reaches the outside of the menu so a broken source
+              cannot hide inside it. */}
+          {board.sources.some((x) => x.last_run_error) ? (
+            <button
+              type="button" className="adm-sh-chipbtn"
+              onClick={() => setSourcesOpen(true)}
+              title="A saved search or import failed the last time it ran"
+            >
+              A list failed ⚠
             </button>
-          )}
+          ) : null}
+
+          <button
+            type="button" className="btn" aria-haspopup="menu"
+            title="Stats, lists, importing and starting over"
+            onClick={(e) => setMoreMenu(e.currentTarget.getBoundingClientRect())}
+          >
+            ⋯
+          </button>
+
           <button className="btn btn-accent" onClick={() => setAddOpen(true)}>+ Add a contact</button>
         </div>
       </div>
+
+      {/* ---- the ⋯ menu ---- */}
+      {moreMenu && (
+        <Popover anchor={moreMenu} width={264} onClose={() => setMoreMenu(null)}>
+          <div className="adm-db-pop-list" role="menu">
+            {isAdmin && (
+              <button
+                type="button" className="adm-db-pop-item" role="menuitem"
+                onClick={() => { setMoreMenu(null); go("#/dashboard/sales-stats"); }}
+              >
+                <span>Stats</span>
+                <span className="adm-db-count">every rep</span>
+              </button>
+            )}
+            <button
+              type="button" className="adm-db-pop-item" role="menuitem"
+              onClick={() => { setMoreMenu(null); setSourcesOpen(true); }}
+            >
+              <span>Where leads come from</span>
+              {board.sources.some((x) => x.last_run_error)
+                ? <span className="adm-db-count">⚠</span> : null}
+            </button>
+            {isAdmin && (
+              <button
+                type="button" className="adm-db-pop-item" role="menuitem"
+                onClick={() => { setMoreMenu(null); setImportOpen(true); }}
+              >
+                <span>Import a sheet</span>
+              </button>
+            )}
+            {/* Owner/admin only. Hidden rather than shown-and-refused, because
+                this one deletes: a rep who cannot use it does not need to be
+                told twice, and the panel behind it explains itself to anybody
+                who reaches it another way. */}
+            {isAdmin && (
+              <button
+                type="button" className="adm-db-pop-item" role="menuitem"
+                onClick={() => { setMoreMenu(null); setStartOverOpen(true); }}
+              >
+                <span>Start over</span>
+                <span className="adm-db-count">undo an import</span>
+              </button>
+            )}
+          </div>
+        </Popover>
+      )}
 
       {/* ---- views ---- */}
       {shownView === "day" && (
@@ -1054,7 +1161,7 @@ export default function SalesPage({ member, mode = null }) {
       {shownView === "lists" && (
         <ListsView
           rows={rows} board={board} now={now} teamName={teamName}
-          companyById={companyById} listById={listById} scoreOf={scoreOf}
+          companyById={companyById} listById={listById}
           onOpen={openLeadById} member={member}
           onPatch={patchLead} onAssign={assignLead} onRunScore={runScore}
           listFilter={listFilter} onListFilter={handList}
@@ -1210,9 +1317,6 @@ export default function SalesPage({ member, mode = null }) {
       {addOpen && (
         <AddContactModal member={member} lists={board.lists} onClose={() => setAddOpen(false)} reload={load} />
       )}
-      {statsOpen && (
-        <RepNumbersModal board={board} now={now} nowMs={nowMs} onClose={() => setStatsOpen(false)} />
-      )}
       {startOverOpen && (
         <Modal
           open onClose={() => setStartOverOpen(false)} kicker="SALES" width={760}
@@ -1354,8 +1458,69 @@ function DayView({ queue, owed, companyById, onOpen, onClaim, showing = "everyth
  * shape of it, and the one-firm-one-rep warning it existed to carry moved onto
  * the Company cell — see src/components/admin/salesSheet.jsx.
  */
+/* WHAT IS ON SCREEN, IN ONE LINE — how many people, at how many firms, and how
+ * much of it has actually been worked.
+ *
+ * MOVED ABOVE THE TOOLBAR, 30 Aug 2026, on Ryder's ask: "move the second stat
+ * section that shows the 820 people at 644 firms and move that up so its above
+ * the search and add." It used to sit under the list tabs, which put the two
+ * sets of numbers on the page — the tiles at the top and this — a whole
+ * toolbar apart. They belong together: numbers first, then the controls, then
+ * the table.
+ *
+ * It reads from `rows`, which is what the table is about to draw — every
+ * filter, tab and search already applied. So it always describes exactly what
+ * is underneath it, whatever the toolbar between them is set to. */
+function ListHealth({ rows, now, scoreOf, badge }) {
+  const health = useMemo(() => listHealth(rows, { now, scoreOf }), [rows, now, scoreOf]);
+
+  /* How many firms are in what is on screen — the one thing the old grouped
+   * header told you that a flat table cannot. A contact with no firm counts as
+   * one of its own, or two hundred unattached people would read as nought
+   * firms. */
+  const firmCount = useMemo(() => {
+    const s = new Set();
+    let loose = 0;
+    for (const l of rows) { if (l.company_id) s.add(l.company_id); else loose += 1; }
+    return s.size + loose;
+  }, [rows]);
+
+  return (
+    <div className="card adm-sl-health">
+      {/* THE BADGE SITS WITH THE NUMBERS, not on the toolbar.
+          It was the last item on a control row that had run out of room — it
+          pushed Add a contact onto a second line — and it was in the wrong
+          place anyway: "where did this come from" is a question about the
+          figures, so it belongs beside them. In preview it was also a second
+          copy of the one already in the page header. 30 Aug 2026. */}
+      <div className="adm-sl-health-t" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span>
+          {health.total} {health.total === 1 ? "person" : "people"} at {firmCount} {firmCount === 1 ? "firm" : "firms"}
+        </span>
+        {badge ? <SourceBadge mode={badge} /> : null}
+      </div>
+      <div className="adm-sl-health-bars">
+        <MiniBar label="Claimed by somebody" n={health.claimed} total={health.total} />
+        {/* "Ever contacted", not "actually contacted". This counts
+            `first_contact_at`, which is set by a logged touch OR carried across
+            from the spreadsheet — so it includes contact we were TOLD about as
+            well as contact we can read. The Contacted? column in the table
+            splits those two apart, and the two lines used to contradict each
+            other on the same screen. */}
+        <MiniBar label="Ever contacted (told or logged)" n={health.touched} total={health.total} tone="#0369a1" />
+        <MiniBar label="Site score run" n={health.scored} total={health.total} tone="#6d28d9" />
+      </div>
+      <div className="adm-sl-health-n">
+        {health.untouched} have no first-contact date at all. {health.stale > 0
+          ? `${health.stale} claim${health.stale === 1 ? " has" : "s have"} gone stale and ${health.stale === 1 ? "is" : "are"} due to go back to the floor.`
+          : "No claims are stale."}
+      </div>
+    </div>
+  );
+}
+
 function ListsView({
-  rows, board, now, teamName, companyById, listById, scoreOf, onOpen, member,
+  rows, board, now, teamName, companyById, listById, onOpen, member,
   listFilter, onListFilter, onClear, onPatch, onAssign, onRunScore,
   /* The set this page is about — the whole board on the owner's page, the
    * floor or one rep's leads on theirs. It decides ONE thing: which empty
@@ -1386,8 +1551,6 @@ function ListsView({
   canAssign = true,
   onTag, onRefreshTags, onLog, onScan, onClose: onCloseDeal, onRelease,
 }) {
-  const health = useMemo(() => listHealth(rows, { now, scoreOf }), [rows, now, scoreOf]);
-
   /* One row object per person, built once. Everything the table sorts,
    * filters, groups and paints comes from the same object, so a row can never
    * be ordered by one value and drawn with another. */
@@ -1453,15 +1616,6 @@ function ListsView({
            there is nothing to tell them to undo. Say that and stop. */
         : "Nothing on this page matches the boxes above the table.";
 
-  /* How many firms are in what is on screen — the one thing the old grouped
-   * header told you that a flat table cannot. */
-  const firmCount = useMemo(() => {
-    const s = new Set();
-    let loose = 0;
-    for (const l of rows) { if (l.company_id) s.add(l.company_id); else loose += 1; }
-    return s.size + loose;
-  }, [rows]);
-
   return (
     <>
       {/* ---- the sheet's tabs ---- */}
@@ -1519,28 +1673,6 @@ function ListsView({
         </div>
       ) : (
         <>
-          <div className="card adm-sl-health">
-            <div className="adm-sl-health-t">
-              {health.total} {health.total === 1 ? "person" : "people"} at {firmCount} {firmCount === 1 ? "firm" : "firms"}
-            </div>
-            <div className="adm-sl-health-bars">
-              <MiniBar label="Claimed by somebody" n={health.claimed} total={health.total} />
-              {/* "Ever contacted", not "actually contacted". This counts
-                `first_contact_at`, which is set by a logged touch OR carried
-                across from the spreadsheet — so it includes contact we were
-                TOLD about as well as contact we can read. The Contacted? column
-                below splits those two apart, and the two lines used to
-                contradict each other on the same screen. */}
-            <MiniBar label="Ever contacted (told or logged)" n={health.touched} total={health.total} tone="#0369a1" />
-              <MiniBar label="Site score run" n={health.scored} total={health.total} tone="#6d28d9" />
-            </div>
-            <div className="adm-sl-health-n">
-              {health.untouched} have no first-contact date at all. {health.stale > 0
-                ? `${health.stale} claim${health.stale === 1 ? " has" : "s have"} gone stale and ${health.stale === 1 ? "is" : "are"} due to go back to the floor.`
-                : "No claims are stale."}
-            </div>
-          </div>
-
           <div className="card adm-sl-tablewrap">
             <SalesSheet
               rows={sheet}
@@ -1745,240 +1877,6 @@ function AddContactModal({ member, lists, onClose, reload }) {
   );
 }
 
-/**
- * REP NUMBERS, AND WHERE DEALS DIE — the owner's half.
- *
- * Aug 27 2026, Ryder's requirement in his own words: *"each reps account
- * seperate because they are independant and they all work independately, but on
- * the owners side and admin side they all have to come together and everything
- * has to flow."*
- *
- * THE ONLY WAY THAT CAN BE TRUE IS ONE SET OF RECORDS. Every figure in the table
- * below comes from `outreachByRep()` in lib/outreach.js, which is the SAME
- * function a rep's own Overview calls, with the SAME rows, for one person at a
- * time. So a cell here and a tile on that rep's page are the same arithmetic on
- * the same snapshot — they cannot drift, because there is nothing to drift
- * between. tests/outreach-stats asserts exactly that from one fixture, and it is
- * the test to run first if anybody ever reports two screens disagreeing.
- *
- * NOTHING HERE IS STORED. There is no `total_won` column and no cached reply
- * count anywhere in this feature. Every number is counted from the rows at read
- * time, which is the whole reason the two sides can agree.
- *
- * The claim-side columns (claimed, open, speed to first contact, close rate, at
- * risk) still come from repStats(), which was already right and already tested.
- * Two functions rather than one because they answer different questions from
- * different columns; both read the same board.
- */
-function RepNumbersModal({ board, now, nowMs, onClose }) {
-  const reps = board.team.filter((t) => t.active);
-  /* `nowMs` comes DOWN from the page, which took one clock reading when it
-   * loaded. It is not read here: Date.now() during a render is impure — two
-   * renders would count two different windows — and this is exactly where a
-   * reader would otherwise reach for it. */
-
-  /* THE SAME FUNCTION A REP'S OWN PAGE CALLS, once per person. */
-  const outreach = useMemo(() => outreachByRep({
-    team: reps,
-    leads: board.leads,
-    activity: board.activity,
-    proposals: board.proposals,
-    nowMs,
-  }), [reps, board.leads, board.activity, board.proposals, nowMs]);
-  const outreachById = useMemo(
-    () => new Map(outreach.map((o) => [o.member.user_id, o.stats])),
-    [outreach],
-  );
-
-  /* A REP APPEARS ONCE THERE IS ANYTHING TO COUNT — including outreach.
-   *
-   * The filter read repStats alone, so a rep who had emailed forty people and
-   * claimed nothing had no row at all and no explanation for its absence. With
-   * Gmail per rep that stops being a corner case: emailing comes first and
-   * claiming follows. Aug 27 2026, after a review. */
-  const stats = reps.map((r) => ({
-    rep: r,
-    s: repStats(board.leads, board.activity, { userId: r.user_id, now }),
-    o: outreachById.get(r.user_id) || null,
-  }))
-    .filter(({ s, o }) => s.claimed > 0 || s.calls > 0 || s.emails > 0
-      || Boolean(o?.emailed) || Boolean(o?.replied) || Boolean(o?.proposalsOut))
-    .sort((a, b) => b.s.won - a.s.won || b.s.meetings - a.s.meetings);
-
-  /* WHERE DEALS DIE, ACROSS EVERYBODY — counted over every lead rather than by
-   * summing the per-rep numbers. A loss on a lead that was released after it was
-   * lost has no owner, so a per-rep sum would silently miss it and the breakdown
-   * would add up to less than the total above it. */
-  const losses = useMemo(() => lossReasons({ leads: board.leads, nowMs }), [board.leads, nowMs]);
-
-  /* One dash function for the whole table. `null` and `0` are different
-   * sentences — "nobody replied" and "we have not measured" are opposite answers
-   * — and printing them the same is the defect this console keeps having to fix. */
-  const n = (v, suffix = "") => (v === null || v === undefined
-    ? <span className="adm-sl-faint">—</span>
-    : <>{v}{suffix}</>);
-
-  return (
-    <Modal onClose={onClose} open kicker="COUNTED FROM THE ROWS" title="Rep numbers" width={1040}>
-      {!stats.length ? (
-        <div className="adm-sl-empty">
-          <strong>Nothing to count yet.</strong>
-          {/* IN STEP WITH THE FILTER ABOVE, which now also lets a rep in on
-              outreach alone. The old sentence named two of the five things that
-              put somebody in this table. */}
-          <div>A rep appears here once they have claimed something, logged a touch, emailed
-            somebody, had a reply, or got a proposal out.</div>
-        </div>
-      ) : (
-        <div className="adm-sl-scroll">
-          <table className="adm-sl-table">
-            <thead>
-              <tr>
-                {/* TWO WINDOWS IN ONE TABLE, AND EVERY COLUMN SAYS WHICH.
-                    The outreach half is the last 30 days. The claim half —
-                    Claimed, Open, Speed, Meetings, Won, Lost, Close rate, At
-                    risk — comes from repStats(), which has NO WINDOW AT ALL: it
-                    is everything ever, over the rows that were loaded. So CJ's
-                    "Won" for a rep is their whole career and the rep's own
-                    Overview "Won" is closes inside 30 days. Same word, two
-                    numbers, and the footnote under this table promises the two
-                    screens cannot disagree — which is only true of the columns
-                    that share a function. Labelling every heading is what makes
-                    the footnote honest. Aug 27 2026, after a review. */}
-                <th>Rep</th>
-                <th title="Leads with their name on them, over every row loaded — not a 30-day figure">Claimed<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
-                <th title="Still open, right now">Open<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>now</span></th>
-                <th title="Business days from claiming to the first logged touch, over every row loaded">Speed to 1st<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
-                {/* ---- the outreach half, all of it from the last 30 days ---- */}
-                <th title={`People they emailed in the last ${OUTREACH_WINDOW_DAYS} days. People, not emails.`}>Emailed<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>30 days</span></th>
-                <th title="Of those people, how many wrote back">Replied<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>30 days</span></th>
-                <th title="Replies divided by people emailed, with dead addresses taken out of the bottom half">Reply rate<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>30 days</span></th>
-                <th title="Bad addresses. Taken out of the reply-rate maths.">Bounced<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>30 days</span></th>
-                <th title="Calls logged in the last 30 days">Calls<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>30 days</span></th>
-                <th title="Leads that reached Meeting, Proposal or Won, over every row loaded">Meetings<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
-                <th title="Sent and not yet decided, right now">Proposals<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>now</span></th>
-                <th title="Over every row loaded, not a 30-day figure">Won<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
-                <th title="Over every row loaded, not a 30-day figure">Lost<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
-                <th title="Won as a share of leads that were decided either way, over every row loaded">Close rate<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>all time</span></th>
-                <th title="Claims that have run out or gone cold, right now">At risk<br /><span className="adm-sl-faint" style={{ fontWeight: 400 }}>now</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.map(({ rep, s }) => {
-                const o = outreachById.get(rep.user_id) || null;
-                return (
-                  <tr key={rep.user_id}>
-                    <td>
-                      <div className="adm-sl-rowname">{rep.full_name || rep.email}</div>
-                      <div className="adm-sl-rowmono">{rep.role.toUpperCase()}</div>
-                    </td>
-                    <td>{s.claimed}</td>
-                    <td>{s.open}</td>
-                    {/* null and 0 are different sentences and must not print the same. */}
-                    <td>{s.speed_days === null
-                      ? <span className="adm-sl-faint">not measured</span>
-                      : <>{s.speed_days}d <span className="adm-sl-faint">({s.speed_sample})</span></>}</td>
-                    <td>{n(o?.emailed)}</td>
-                    <td>{n(o?.replied)}</td>
-                    {/* THREE DIFFERENT REASONS, MORE THAN ONE SENTENCE. This cell
-                        said "nothing sent" for all of them — including the case
-                        where two people WERE emailed and both addresses were dead,
-                        which is a sentence about two sends claiming nothing was
-                        sent. Aug 27 2026, after a review. */}
-                    {/* FOUR REASONS A RATE IS MISSING, four sentences. The
-                        version before this had two, and a FAILED READ got
-                        "nothing sent" — a claim about sends, for a read that
-                        returned nothing. Third review, Aug 27 2026. */}
-                    <td>{o?.replyRate !== null && o?.replyRate !== undefined
-                      ? `${o.replyRate}%`
-                      : <span className="adm-sl-faint">
-                        {o?.emailed === null || o?.emailed === undefined ? "could not read it"
-                          : o.emailed === 0 ? "nothing sent"
-                            : "every address bounced"}
-                      </span>}</td>
-                    <td>{n(o?.bounced)}</td>
-                    <td>{n(o?.logged?.call)}</td>
-                    <td>{s.meetings}</td>
-                    <td>{o?.proposalsOut === null || o?.proposalsOut === undefined
-                      ? <span className="adm-sl-faint">—</span>
-                      /* `!== null`, not truthy. A proposal genuinely priced at
-                         zero is a real figure, and hiding it was the same
-                         null-versus-zero mistake this whole feature is about.
-                         `proposalCents` is already null when NONE of them carries
-                         an amount, which is the case that must print nothing. */
-                      : <>{o.proposalsOut}{o.proposalCents !== null && o.proposalCents !== undefined
-                        ? <span className="adm-sl-faint"> ({money(o.proposalCents)})</span> : null}</>}</td>
-                    <td style={{ color: s.won ? "#006b1a" : undefined, fontWeight: s.won ? 700 : 400 }}>{s.won}</td>
-                    <td>{s.lost}</td>
-                    <td>{s.close_rate === null
-                      ? <span className="adm-sl-faint">nothing decided</span>
-                      : `${s.close_rate}%`}</td>
-                    <td style={{ color: s.at_risk ? "var(--danger)" : undefined }}>{s.at_risk}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* ---- WHERE DEALS DIE ---- */}
-      <div className="label" style={{ margin: "24px 0 8px" }}>
-        Where deals die — everybody, last {losses.window.days} days
-      </div>
-      {losses.rows === null ? (
-        <div className="adm-sl-warn adm-sl-warn-flat" role="alert">
-          <strong>The leads could not be read</strong>, so this is missing rather than empty.
-        </div>
-      ) : losses.total === 0 ? (
-        <div className="adm-sl-empty">
-          <strong>Nothing was marked Lost in the last {losses.window.days} days.</strong>
-          <div>
-            That is an empty list, not a missing one.
-            {losses.undated > 0
-              ? ` ${losses.undated} lost lead${losses.undated === 1 ? " has" : "s have"} no date on the close, so ${losses.undated === 1 ? "it is" : "they are"} in no window at all — every one of those closed before the reason box existed.`
-              : ""}
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="adm-sl-health-bars">
-            {losses.rows.map((r) => (
-              <MiniBar key={r.code || "none"} label={r.label} n={r.count} total={losses.total} tone="#941f1f" />
-            ))}
-          </div>
-          <div className="adm-sl-health-n">
-            {losses.total} lost in the last {losses.window.days} days.
-            {losses.noReason > 0
-              ? ` ${losses.noReason} of them carr${losses.noReason === 1 ? "ies" : "y"} no reason — every one of those closed before the reason box existed, and nothing has been guessed for them.`
-              : " Every one of them has a reason and a note somebody typed."}
-            {losses.undated > 0
-              ? ` A further ${losses.undated} lost lead${losses.undated === 1 ? "" : "s"} ${losses.undated === 1 ? "has" : "have"} no close date at all, so ${losses.undated === 1 ? "it is" : "they are"} not counted above.`
-              : ""}
-          </div>
-        </>
-      )}
-
-      <p className="adm-sl-modalnote">
-        Every figure here is counted from real rows, and the outreach half covers the
-        last {OUTREACH_WINDOW_DAYS} days. <strong>There is no open rate</strong> — Gmail cannot tell
-        anybody whether an email was opened, and the only thing that can is a tracking image that
-        Apple Mail loads for everybody, so the number would not be a measurement. People emailed and
-        replies are both real. A call that was not logged is not counted, and a rep with nothing
-        measured says so rather than showing a zero.
-      </p>
-      <p className="adm-sl-modalnote">
-        Every column marked <strong>30 days</strong> — emailed, replied, reply rate, bounced and
-        calls — plus <strong>proposals</strong> is worked out by the same function that draws that
-        rep&rsquo;s own Overview, from the same rows, so those cannot disagree: if they ever do, one
-        of them is broken rather than out of date, because there is nothing stored in between them.
-        The columns marked <strong>all time</strong> cover every row loaded rather than the last
-        {OUTREACH_WINDOW_DAYS} days, so a rep&rsquo;s own page will show a smaller Won than this
-        table does — that is two different questions, not a disagreement.
-      </p>
-    </Modal>
-  );
-}
 
 /* ================================================================== */
 /* WHY DID IT CLOSE — the box that will not save empty                 */

@@ -9,6 +9,7 @@
  */
 
 import { getSupabase, isConfigured } from "./supabase.js";
+import { fetchPaged, PAGE } from "../../lib/paging.js";
 /* Shared with the server endpoint api/client-standing.js. It is pure (no
  * imports, no database, no fetch) precisely so both sides can use the same
  * counting rules — a client page that counted differently from the saved
@@ -519,6 +520,12 @@ function live() { return isConfigured(); }
 
 async function selectAll(table, { order = "created_at", ascending = false, limit = 500 } = {}) {
   const supabase = getSupabase();
+  /* Anything over one page has to be paged, or the caller gets 1,000 rows and
+   * believes it got everything. Under a page, one request is still one
+   * request. */
+  if (limit > PAGE) {
+    return fetchPaged(() => supabase.from(table).select("*"), { order, ascending, max: limit });
+  }
   const { data, error } = await supabase.from(table).select("*").order(order, { ascending }).limit(limit);
   if (error) return { rows: [], error: error.message, sample: false };
   return { rows: data || [], sample: false };
@@ -651,19 +658,26 @@ export async function upsertWeekly(patch) {
  * tell "exactly 2,000" apart from "2,000 and there are more", and it is what
  * makes the warning on screen possible. Fetching and printing the same number
  * means the page is told it saw everything, every time. */
-export const LEAD_FETCH_CAP = 2000;
-export const ACTIVITY_FETCH_CAP = 4000;
+/* A CEILING, NOT A PAGE SIZE. selectAll/fetchPaged reads in 1,000-row pages
+ * until the table runs out, so this is only the point at which it gives up and
+ * SAYS SO. It was 2,000 while the server was quietly returning 1,000, which
+ * meant the "we only loaded some" warning below could never fire — the count
+ * it compared against was never reachable. Raised to a number no outreach list
+ * will hit soon, and the paging makes it honest. */
+export const LEAD_FETCH_CAP = 50000;
+/* Same as LEAD_FETCH_CAP: a reported ceiling, not a page size. */
+export const ACTIVITY_FETCH_CAP = 50000;
 
 export async function listLeads() {
   if (!live()) return { rows: [...previewStore.leads], sample: true };
-  const res = await selectAll("admin_leads", { order: "created_at", ascending: false, limit: LEAD_FETCH_CAP + 1 });
-  if (res.rows.length > LEAD_FETCH_CAP) {
-    return {
-      ...res,
-      rows: res.rows.slice(0, LEAD_FETCH_CAP),
-      truncated: `Only the ${LEAD_FETCH_CAP} newest contacts were loaded. Everything on this page is counted from those — filter to a list to see the rest.`,
-    };
-  }
+  const res = await selectAll("admin_leads", { order: "created_at", ascending: false, limit: LEAD_FETCH_CAP });
+  /* `truncated` now comes from the reader itself, which knows whether it ran
+   * out of rows or ran out of ceiling. The old check here — comparing the row
+   * count against the cap — was unreachable: the server capped the answer at
+   * 1,000 and the cap was 2,000, so it was never true and the Sales page
+   * silently showed the newest thousand contacts as though they were all of
+   * them. Ryder spotted it on the screen: "this says 999 leads, when i think
+   * we have 3000+". */
   return res;
 }
 
@@ -716,11 +730,46 @@ export async function insertLeadsBatch(rows) {
     const { error, data } = await supabase.from("admin_leads").insert(chunk).select("id, email");
     if (error) return { ok: false, error: error.message, count, ids, partial: count > 0 };
     count += data?.length || 0;
-    const rows = data || [];
-    const aligned = rows.length === chunk.length
-      && rows.every((r, j) => !r.email || !chunk[j].email || r.email === chunk[j].email);
-    if (aligned) ids.push(...rows.map((r) => r.id));
-    else return { ok: true, count, ids: [], shortReturn: true };
+
+    /* `back`, NOT `rows`.
+     *
+     * This line read `const rows = data || []`, in the same block as
+     * `rows.slice(i, i + 200)` two lines above it. A `const` is hoisted into
+     * its block and cannot be read before its declaration, so the FIRST
+     * iteration threw "Cannot access 'rows' before initialization" — every
+     * time, on every live import, before a single contact was written.
+     *
+     * It was invisible for two reasons. Preview mode returns from the branch
+     * above, so every test and every demo passed. And the throw surfaced in
+     * the import screen's catch as "Could not read that file", which blames
+     * the spreadsheet. Meanwhile the firms, the list and the batch record —
+     * all written before this point — had already landed, so the database
+     * disagreed with the message on screen.
+     *
+     * Found 30 Aug 2026 by an adversarial reviewer running the real function
+     * rather than reading it. ESLint does not flag it: no-shadow is off. */
+    const back = data || [];
+    const aligned = back.length === chunk.length
+      && back.every((r, j) => !r.email || !chunk[j].email || r.email === chunk[j].email);
+    if (aligned) { ids.push(...back.map((r) => r.id)); continue; }
+
+    /* The ids did not line up, so no note can be attached safely. That is not
+     * a reason to stop importing the rows after this chunk.
+     *
+     * The old code returned here with ok:true, which abandoned every remaining
+     * row and reported success: a three-thousand-row tab could import two
+     * hundred people, print "200 added", and say nothing about the other two
+     * thousand eight hundred. `shortReturn` was the only signal and no caller
+     * read it. Now the rest are still written and the caller is told, in a
+     * count it has to print, how many lost their timeline line. */
+    ids.length = 0;
+    for (let j = i + 200; j < rows.length; j += 200) {
+      const more = rows.slice(j, j + 200);
+      const res = await supabase.from("admin_leads").insert(more).select("id");
+      if (res.error) return { ok: false, error: res.error.message, count, ids: [], notesLost: count, partial: count > 0 };
+      count += res.data?.length || 0;
+    }
+    return { ok: true, count, ids: [], shortReturn: true, notesLost: count };
   }
   return { ok: true, count, ids };
 }
@@ -738,22 +787,16 @@ export async function listLeadActivity(leadId) {
 export async function listAllLeadActivity(sinceDays = 30) {
   if (!live()) return { rows: [...previewStore.leadActivity], sample: true };
   const since = new Date(Date.now() - sinceDays * 86400000).toISOString();
-  const { data, error } = await getSupabase()
-    .from("admin_lead_activity").select("*").gte("created_at", since)
-    .order("created_at", { ascending: false }).limit(ACTIVITY_FETCH_CAP + 1);
-  if (error) return { rows: [], error: error.message, sample: false };
-  const rows = data || [];
-  if (rows.length > ACTIVITY_FETCH_CAP) {
-    /* This one matters more than it looks: the cadence counts touches from
-     * these rows, so a truncated read makes a lead with all five touches logged
-     * reappear on somebody's day asking for email #1. */
-    return {
-      rows: rows.slice(0, ACTIVITY_FETCH_CAP),
-      sample: false,
-      truncated: `Only the ${ACTIVITY_FETCH_CAP} most recent activity records were loaded, so touch counts and rep numbers below may be low.`,
-    };
-  }
-  return { rows, sample: false };
+  /* PAGED. This one matters more than it looks, and its own comment below says
+   * why: the cadence counts touches from these rows, so a short read makes a
+   * lead with all five touches logged reappear on somebody's day asking for
+   * email #1. It was reading the newest 1,000 and calling it thirty days. */
+  const res = await fetchPaged(
+    () => getSupabase().from("admin_lead_activity").select("*").gte("created_at", since),
+    { order: "created_at", ascending: false, max: ACTIVITY_FETCH_CAP },
+  );
+  if (res.error && !res.partial) return { rows: [], error: res.error, sample: false };
+  return res;
 }
 
 export async function addLeadActivity({ leadId, actor, type, outcome, body }) {
@@ -2298,9 +2341,16 @@ export async function generateClientReportPreview(clientId, { instruction, prese
 
 /* ---- COMPANIES ---------------------------------------------------- */
 
+/* EVERY firm, paged — not the newest thousand.
+ *
+ * This is what findExistingCompanyRows uses to decide which firms the sheet
+ * importer already has. It asked for 2,000 and the server handed back 1,000,
+ * so with 2,761 firms on file the next import would have looked at 1,761 firms
+ * it already had, decided they were new, and made a second copy of every one —
+ * reported on screen as "1,761 new firms". Found 30 Aug 2026. */
 export async function listCompanies() {
   if (!live()) return { rows: [...previewStore.companies], sample: true };
-  return selectAll("admin_companies", { order: "created_at", ascending: false, limit: 2000 });
+  return selectAll("admin_companies", { order: "created_at", ascending: false, limit: 50000 });
 }
 
 export async function upsertCompany(patch) {
@@ -2339,7 +2389,18 @@ export async function insertCompaniesBatch(rows) {
   if (!live()) {
     for (const r of rows) {
       const { key, contacts, ...rest } = r;   // eslint-disable-line no-unused-vars
-      const row = { id: pid("co"), site_score: null, site_score_at: null, created_at: new Date().toISOString(), ...rest };
+      const row = {
+        id: pid("co"), site_score: null, site_score_at: null,
+        created_at: new Date().toISOString(), ...rest,
+        /* THE DATABASE SETS THIS WITH A TRIGGER (migration 0009), and preview
+         * mode has no triggers. Without it, a firm saved here comes back with
+         * no name_key, so a firm with no website never matches itself on the
+         * next import and every re-import made a hundred duplicate firms —
+         * in preview only, which is worse, because preview is where a person
+         * checks whether the import is safe. Same folding as
+         * public.admin_company_name_key. */
+        name_key: String(rest.name ?? "").toLowerCase().replace(/[^a-z0-9]/g, "") || null,
+      };
       previewStore.companies.unshift(row);
       idByKey[key] = row.id;
     }
@@ -2738,7 +2799,11 @@ export async function getSalesBoard() {
     },
     /* Same rule for a cap as for an error: a page that quietly shows half the
      * pipeline is worse than one that says it is showing half. */
-    truncated: [leads.truncated, activity.truncated, proposals.truncated].filter(Boolean),
+    /* COMPANIES IS IN THIS LIST NOW. It was the one reader whose cap was
+     * collected under `failed` but not under `truncated`, so a short firm read
+     * — the exact thing that would make the importer duplicate every firm it
+     * could not see — was the one cap the page could not tell you about. */
+    truncated: [leads.truncated, companies.truncated, activity.truncated, proposals.truncated].filter(Boolean),
   };
 }
 
@@ -3761,28 +3826,23 @@ export async function listLeadTagState() {
    * which an automatic rule writes, not a person. So the cap keeps the most
    * recently CHANGED pairs, and a lead can keep a newer `removed` row (no chip)
    * while losing an older `added` row (a chip). Corrected by the third review. */
-  const { data, error } = await getSupabase()
-    .from("admin_lead_tags_now").select("*")
-    .order("at", { ascending: false })
-    .limit(TAG_STATE_FETCH_CAP + 1);
-  if (error) return { rows: [], error: error.message, sample: false };
-  const rows = data || [];
-  if (rows.length > TAG_STATE_FETCH_CAP) {
-    /* SAID OUT LOUD, AND SAID CORRECTLY ON THE SECOND ATTEMPT.
-     *
-     * The cap is on LEAD-TAG PAIRS, not on leads, so a lead past it does not lose
-     * all of its tags — it loses the pairs that changed longest ago. It therefore
-     * shows FEWER chips than it carries, which is the original wording, and my
-     * "NO tags at all" rewrite was wrong. Either way the tag FILTERS quietly leave
-     * those rows out, which is the part that matters and is now said explicitly.
-     * Corrected by the third review, Aug 27 2026. */
+  /* PAGED. The cap was 12,000 against a server that returns 1,000, so the
+   * careful warning below has never once been shown — and past a thousand
+   * tag records a contact quietly lost chips and dropped out of the tag
+   * filters' counts, which is exactly what that warning exists to say. */
+  const paged = await fetchPaged(
+    () => getSupabase().from("admin_lead_tags_now").select("*"),
+    { order: "at", ascending: false, max: TAG_STATE_FETCH_CAP },
+  );
+  if (paged.error && !paged.partial) return { rows: [], error: paged.error, sample: false };
+  if (paged.truncated) {
     return {
-      rows: rows.slice(0, TAG_STATE_FETCH_CAP),
+      rows: paged.rows,
       sample: false,
-      truncated: `Only ${TAG_STATE_FETCH_CAP} tag records were loaded, so a contact past that shows fewer tags than it carries — and the tag filters leave it out of their counts. Filter to a list to bring it back into range.`,
+      truncated: `Only ${TAG_STATE_FETCH_CAP.toLocaleString()} tag records were loaded, so a contact past that shows fewer tags than it carries — and the tag filters leave it out of their counts. Filter to a list to bring it back into range.`,
     };
   }
-  return { rows, sample: false };
+  return paged;
 }
 
 /** THE WHOLE dated history for ONE lead — every add and every remove, for the
@@ -3815,18 +3875,27 @@ export async function listCompanyReports(companyId = null) {
       : [...previewStore.companyReports];
     return { rows: rows.sort((a, b) => String(b.measured_at).localeCompare(String(a.measured_at))), sample: true };
   }
-  let q = getSupabase().from("admin_company_reports").select("*")
-    .order("measured_at", { ascending: false });
-  if (companyId) q = q.eq("company_id", companyId).limit(60);
-  else q = q.limit(COMPANY_REPORT_FETCH_CAP + 1);
-  const { data, error } = await q;
-  if (error) return { rows: [], error: error.message, sample: false };
-  const rows = data || [];
-  if (!companyId && rows.length > COMPANY_REPORT_FETCH_CAP) {
+  /* One firm's scans is a small list and fits in a single request. EVERY
+   * firm's scans does not, and asking for 2,000 in one go quietly returned
+   * 1,000 — so the warning below could never fire and the Firms tab silently
+   * showed the newest thousand scans as if they were all of them. */
+  if (companyId) {
+    const { data, error } = await getSupabase().from("admin_company_reports").select("*")
+      .eq("company_id", companyId).order("measured_at", { ascending: false }).limit(60);
+    if (error) return { rows: [], error: error.message, sample: false };
+    return { rows: data || [], sample: false };
+  }
+  const paged = await fetchPaged(
+    () => getSupabase().from("admin_company_reports").select("*"),
+    { order: "measured_at", ascending: false, max: COMPANY_REPORT_FETCH_CAP },
+  );
+  if (paged.error && !paged.partial) return { rows: [], error: paged.error, sample: false };
+  const rows = paged.rows;
+  if (paged.truncated) {
     return {
-      rows: rows.slice(0, COMPANY_REPORT_FETCH_CAP),
+      rows,
       sample: false,
-      truncated: `Only the ${COMPANY_REPORT_FETCH_CAP} newest scans were loaded, so an older firm's scan may not show on the rows below.`,
+      truncated: `Only the ${COMPANY_REPORT_FETCH_CAP.toLocaleString()} newest scans were loaded, so an older firm's scan may not show on the rows below.`,
     };
   }
   return { rows, sample: false };
@@ -4323,4 +4392,253 @@ export async function closeLeadWon(lead, {
   }
 
   return { ...res, reason: gate.reason, note: gate.note, problems };
+}
+
+/* ================================================================== */
+/* IMPORTING SOMEBODY WHO IS ALREADY HERE                  Aug 30 2026 */
+/* ================================================================== */
+/*
+ * Ryder, 30 Aug 2026: bring the sheet in "without asking any questions,
+ * deleting any data, and filling in all the rows".
+ *
+ * The old import answered the second half by SKIPPING anybody already on file.
+ * That is safe and it is also why the console drifts further from the sheet on
+ * every run: CJ fixes a job title in Apollo, re-exports, drops it in, and
+ * nothing changes.
+ *
+ * These three read what is already here in FULL — not just the keys — so
+ * lib/sales-import.js#mergeLead can decide field by field what may move. The
+ * rules live there, in a pure function with tests, and nothing in this file
+ * decides anything: it reads, it writes what it is told, and it reports.
+ */
+
+/** Everything about the contacts behind these dedupe keys, keyed by dedupe
+ * key. Only the columns the merge looks at, so a nine-hundred-row import is
+ * not also a nine-hundred-row download of every note in the pipeline. */
+const MERGE_COLUMNS_BASE = [
+  "id", "dedupe_key", "name", "first_name", "last_name", "title", "seniority",
+  "department", "email", "phone", "linkedin_url", "city", "state",
+  "company", "domain", "vertical", "stage", "owner_id", "claimed_at",
+  "cadence_started_at", "imported_owner_name", "first_contact_at",
+  "last_touch_at", "next_step", "notes", "company_id", "list_id",
+];
+/* The two columns migration 0025 adds are asked for SEPARATELY, and only when
+ * the probe says they exist.
+ *
+ * Selecting them unconditionally meant that on a database without 0025 this
+ * read failed — "column admin_leads.address does not exist" — and the import
+ * stopped with "Could not check the whole pipeline", which is the one error
+ * that must abort the run. So probeSheetColumns, whose entire purpose is to
+ * make a missing migration cost five columns instead of the whole import, was
+ * dead on arrival: the very next call hard-failed on the same columns it had
+ * just found missing. Found 30 Aug 2026 by an adversarial reviewer. */
+const NEW_LEAD_COLUMNS = ["address", "country"];
+
+export async function findExistingLeadRows(keys, { withNewColumns = true } = {}) {
+  const MERGE_COLUMNS = (withNewColumns ? MERGE_COLUMNS_BASE.concat(NEW_LEAD_COLUMNS) : MERGE_COLUMNS_BASE).join(", ");
+  const unique = [...new Set((keys || []).filter(Boolean))];
+  if (!unique.length) return { rows: {}, sample: !live() };
+
+  if (!live()) {
+    /* Preview mode has no dedupe_key column, so it is computed here the same
+     * way the browser computes it for the incoming rows. Without this the
+     * preview claims every single row is new, and a person testing the import
+     * is shown a number that the real run will not produce. */
+    /* A Set, not `unique.includes`. With three and a half thousand incoming
+     * rows against three and a half thousand saved ones that is thirteen
+     * million string comparisons, and a second import of the real workbook sat
+     * there for over a minute doing nothing else. */
+    const want = new Set(unique);
+    const rows = {};
+    for (const l of previewStore.leads) {
+      const k = l.dedupe_key || (l.email ? `e:${String(l.email).toLowerCase()}` : null);
+      if (k && want.has(k)) rows[k] = l;
+    }
+    return { rows, sample: true };
+  }
+
+  const supabase = getSupabase();
+  const rows = {};
+  /* Chunked at 100 for the same reason findExistingLeadKeys is: an `in` list
+   * of three thousand keys is a URL long enough to be refused, and the refusal
+   * looks like "nothing is a duplicate", which then doubles the pipeline. */
+  for (let i = 0; i < unique.length; i += 100) {
+    const { data, error } = await supabase
+      .from("admin_leads").select(MERGE_COLUMNS).in("dedupe_key", unique.slice(i, i + 100));
+    if (error) return { rows, error: error.message };
+    for (const r of data || []) if (r.dedupe_key && !rows[r.dedupe_key]) rows[r.dedupe_key] = r;
+  }
+  return { rows };
+}
+
+/** Every firm on file, in full, keyed the way the importer keys them. */
+export async function findExistingCompanyRows() {
+  const res = await listCompanies();
+  const byKey = {};
+  for (const c of res.rows) {
+    const d = normaliseDomain(c.domain);
+    if (d) byKey[`d:${d}`] = c;
+    if (c.name_key && !byKey[`n:${c.name_key}`]) byKey[`n:${c.name_key}`] = c;
+  }
+  /* THE ERROR AND THE CAP ARE HANDED BACK, not dropped.
+   *
+   * This returned only { byKey } and threw `res.error` away. If the read
+   * failed — a permission error, a dropped connection — byKey came back empty,
+   * every firm in the workbook looked new, and the import created a second
+   * copy of all of them while the screen said "2,764 new firms" with no
+   * warning. The same thing happens silently once the table passes
+   * listCompanies' row cap, so the count is handed back too and the caller has
+   * to say so. Found 30 Aug 2026 by an adversarial reviewer. */
+  return { byKey, sample: res.sample, error: res.error || null, seen: res.rows.length, truncated: res.truncated || null };
+}
+
+/**
+ * Apply a batch of `{ id, patch }`. One row at a time, on purpose.
+ *
+ * Postgrest can update many rows in one call only when they all get the SAME
+ * values, and these are all different. Writing them one by one is slower and
+ * it is also the only version where a single bad row fails alone instead of
+ * taking the other eight hundred with it — which is the whole reason
+ * insertLeadsBatch is chunked.
+ *
+ * Nothing here can delete: `update` touches only the keys in the patch, and
+ * lib/sales-import.js#mergeLead never puts an empty value in one.
+ */
+export async function applyLeadUpdates(updates, table = "admin_leads") {
+  const list = (updates || []).filter((u) => u && u.id && u.patch && Object.keys(u.patch).length);
+  if (!list.length) return { ok: true, count: 0, failed: [] };
+
+  if (!live()) {
+    let n = 0;
+    const store = table === "admin_leads" ? previewStore.leads : previewStore.companies;
+    for (const u of list) {
+      const i = store.findIndex((r) => r.id === u.id);
+      if (i >= 0) { store[i] = { ...store[i], ...u.patch }; n += 1; }
+    }
+    return { ok: true, count: n, failed: [], sample: true };
+  }
+
+  const supabase = getSupabase();
+  let count = 0;
+  const failed = [];
+  for (const u of list) {
+    const { error } = await supabase.from(table).update(u.patch).eq("id", u.id);
+    if (error) failed.push({ id: u.id, error: error.message });
+    else count += 1;
+  }
+  /* `ok` stays true with failures in it. A partial update IS the outcome, and
+   * calling it a failure would make the screen throw away the count of what
+   * really did land. The caller prints `failed.length` either way. */
+  return { ok: true, count, failed };
+}
+
+export async function applyCompanyUpdates(updates) {
+  return applyLeadUpdates(updates, "admin_companies");
+}
+
+/**
+ * Do the columns migration 0025 adds actually exist yet?
+ *
+ * The import writes five new fields — the contact's own location line and
+ * country, and the firm's alias, keywords and total funding. If 0025 has not
+ * been run, PostgREST rejects the WHOLE insert with "could not find the
+ * 'address' column", and a person who has just dropped in a four-thousand-row
+ * workbook gets nothing and no idea why.
+ *
+ * So it is asked once, up front, with a select that returns no rows. If the
+ * answer is no, the importer leaves those five fields out and says so on the
+ * result screen. Everything else still imports. A missing migration should
+ * cost five columns, not the whole run.
+ */
+export async function probeSheetColumns() {
+  if (!live()) return { ok: true, sample: true };
+  const supabase = getSupabase();
+  const [lead, firm] = await Promise.all([
+    supabase.from("admin_leads").select("address, country").limit(1),
+    supabase.from("admin_companies").select("alias, keywords, total_funding").limit(1),
+  ]);
+  /* ANSWERED PER TABLE, and the real message is kept.
+   *
+   * The first version returned one yes/no for both tables, so a failure on the
+   * leads probe also stripped three columns from the firms table that were
+   * perfectly fine. And it asserted "migration 0025 has not been run" for any
+   * error at all — a permission problem or a dropped connection produced the
+   * same sentence, naming a cause nobody had checked, with the only useful
+   * evidence thrown away. Both found 30 Aug 2026 by an adversarial reviewer. */
+  const missingColumn = (e) => /column|schema cache|does not exist|PGRST20[34]/i.test(String(e?.message || e?.code || ""));
+  const leadOk = !lead.error;
+  const firmOk = !firm.error;
+  if (leadOk && firmOk) return { ok: true, leads: true, companies: true };
+
+  const parts = [];
+  if (!leadOk) parts.push(`the contact's own location line and country (${lead.error.message})`);
+  if (!firmOk) parts.push(`the firm's name-for-emails, keywords and total funding (${firm.error.message})`);
+  const looksLikeMigration = (!leadOk && missingColumn(lead.error)) || (!firmOk && missingColumn(firm.error));
+
+  return {
+    ok: false,
+    leads: leadOk,
+    companies: firmOk,
+    why: `${parts.join(" and ")} could not be read, so ${leadOk || firmOk ? "those" : "those five"} columns were left out of this import. Everything else went in.`
+      + (looksLikeMigration
+        ? " That usually means migration 0025 has not been run yet — run it and drop the file in again to fill them."
+        : " That is not a missing column, so it is worth looking at before importing again."),
+  };
+}
+
+/**
+ * The import's timeline lines, all at once.
+ *
+ * WHY THIS EXISTS
+ * addLeadActivity writes one row and then updates the lead's last_activity_at,
+ * which is two round trips. The importer writes one of these per contact, and
+ * the real outreach workbook holds three and a half thousand of them — seven
+ * thousand requests, several minutes of a spinner, on the one screen where a
+ * person is already nervous about what is happening to their data.
+ *
+ * AND IT DELIBERATELY DOES NOT TOUCH last_activity_at.
+ *
+ * An import is not a touch. Nobody rang anybody. Stamping last_activity_at
+ * would reset the staleness clock on every contact in the pipeline every time
+ * the sheet is dropped in, so a firm nobody has spoken to since July would
+ * look worked-this-morning and drop off the queue that exists to catch it.
+ * For a contact being CREATED it makes no difference — created_at is now
+ * either way — which is exactly why this was invisible until the import
+ * started updating people who were already here.
+ */
+export async function addImportNotesBatch(notes) {
+  const rows = (notes || []).filter((n) => n && n.leadId && n.body);
+  if (!rows.length) return { ok: true, count: 0 };
+
+  if (!live()) {
+    const now = new Date().toISOString();
+    for (const n of rows) {
+      previewStore.leadActivity.unshift({
+        id: pid("a"), lead_id: n.leadId, actor: n.actor || "preview-user",
+        type: "import", outcome: null, body: n.body, created_at: now,
+      });
+    }
+    return { ok: true, count: rows.length, sample: true };
+  }
+
+  const supabase = getSupabase();
+  let count = 0;
+  let failed = 0;
+  let firstError = null;
+  for (let i = 0; i < rows.length; i += 200) {
+    const chunk = rows.slice(i, i + 200);
+    const { error, data } = await supabase.from("admin_lead_activity").insert(
+      chunk.map((n) => ({ lead_id: n.leadId, actor: n.actor, type: "import", body: n.body })),
+    ).select("id");
+    /* A failed chunk is reported and THE REST STILL GO. These lines are the
+     * record of where a row came from, not the row itself — losing two hundred
+     * of them is worth far less than losing the rest.
+     *
+     * Written as `return` first, which stopped at the first failure while the
+     * comment above it said the opposite. A comment that describes behaviour
+     * the code does not have is worse than no comment. Found 30 Aug 2026. */
+    if (error) { failed += chunk.length; firstError = firstError || error.message; continue; }
+    count += data?.length || 0;
+  }
+  return { ok: failed === 0, count, failed, error: firstError };
 }

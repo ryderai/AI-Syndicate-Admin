@@ -178,12 +178,50 @@ export function colToIndex(ref) {
   return n - 1;
 }
 
+/* MATCHING A TAG THAT CAN CONTAIN OTHER TAGS.
+ *
+ * These two are written the long way — "either a self-closing tag, or an
+ * opening tag through to its closing tag" — and they have to be.
+ *
+ * The obvious version, `<row\b[\s\S]*?(?:\/>|<\/row>)`, reads as "a row up to
+ * the first `/>` or `</row>`". But an EMPTY CELL is written `<c r="A2" s="7"/>`,
+ * and that `/>` is the first one inside the row. So the match ended there, and
+ * every row was silently cut off at its first empty cell.
+ *
+ * It was silent because a short row is a valid row: the columns that survived
+ * still lined up, the count on screen still looked plausible, and the rows that
+ * happened to have no gaps came through perfectly. On CJ's real workbook it
+ * read 36 of 3,673 people and reported no error at all — the Jewelry tab came
+ * back as 3 rows instead of 71, because every row there starts with six empty
+ * cells and so was cut to nothing before the first name.
+ *
+ * `[^>]*` stops at the tag's OWN closing angle bracket, so nothing inside it
+ * can end the match early. Found 30 Aug 2026, by counting the rows that went
+ * in against the rows in the file. Shipped 20 Aug 2026. */
+/* `ATTRS` is "any number of attributes", where an attribute's VALUE is matched
+ * as a quoted string and everything else is matched a character at a time.
+ *
+ * `[^>]*` was the first attempt and it is not enough: `>` is perfectly legal
+ * unescaped inside an XML attribute value, and so is `/>`. A cell written
+ * `<c r="A2" t="str" cm="a/>b"><v>Sabrina</v></c>` matched the self-closing
+ * alternative, ended inside its own attribute, had no <v> left in it, and read
+ * as empty — the same silent truncation, one level down. The same trick on a
+ * <row> attribute swallowed the whole row.
+ *
+ * The optional `[\w.-]+:` is a namespace prefix. Several writers that are not
+ * Excel emit `<x:row><x:c>`, and without it the sheet matched zero rows and
+ * came back as an empty tab rather than an error. Both found 30 Aug 2026 by an
+ * adversarial reviewer. */
+const ATTRS = String.raw`(?:"[^"]*"|'[^']*'|[^>"'])*`;
+const ROW_TAG = new RegExp(`<(?:[\\w.-]+:)?row\\b${ATTRS}/>|<(?:[\\w.-]+:)?row\\b${ATTRS}>[\\s\\S]*?</(?:[\\w.-]+:)?row>`, "g");
+const CELL_TAG = new RegExp(`<(?:[\\w.-]+:)?c\\b${ATTRS}/>|<(?:[\\w.-]+:)?c\\b${ATTRS}>[\\s\\S]*?</(?:[\\w.-]+:)?c>`, "g");
+
 function parseSheet(xml, shared) {
   const rows = [];
-  const rowXml = xml.match(/<row\b[\s\S]*?(?:\/>|<\/row>)/g) || [];
+  const rowXml = xml.match(ROW_TAG) || [];
   for (const r of rowXml) {
     const cells = [];
-    const cellXml = r.match(/<c\b[\s\S]*?(?:\/>|<\/c>)/g) || [];
+    const cellXml = r.match(CELL_TAG) || [];
     for (const c of cellXml) {
       const ref = /\br="([A-Z]+\d+)"/.exec(c);
       const type = /\bt="([^"]+)"/.exec(c);
