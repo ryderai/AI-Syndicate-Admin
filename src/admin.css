@@ -684,6 +684,33 @@ select.adm-input { cursor: pointer; }
    reads as a refusal rather than an empty cell. 31 Aug 2026 */
 .adm-sh-draftbtn { font-size: 12px; white-space: nowrap; }
 .adm-sh-draftbtn[disabled] { opacity: 0.55; cursor: default; }
+/* SCAN SITE LOOKS LIKE SOMETHING YOU CAN DO.
+   It used to be drawn in `adm-db-empty` — the faint grey this sheet uses for
+   "there is nothing here" — the same as "no site" one row below it. An action
+   and a dead end in one colour, on a screen of 3,663 rows. Ryder, 30 Aug 2026:
+   "make the scan site for ones that you can more easy to see its available to
+   scan."
+   A tinted chip, not a full button: the DO column already carries the loud
+   buttons, and a second row of them would fight for the same eye. */
+.adm-sh-scanchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.adm-sh-scanchip::after { content: "\2192"; font-weight: 700; opacity: 0.75; }
+.adm-db-btn:hover .adm-sh-scanchip {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
 .adm-sh-refused {
   font-size: 11.5px;
   font-family: var(--mono);

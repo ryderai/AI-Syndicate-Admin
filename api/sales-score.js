@@ -50,9 +50,30 @@ import { ROE } from "../lib/sales-rules.js";
 import { teamDate } from "../lib/brain-context.js";
 
 const KEY_NAME = "PLATFORM_SCORE_URL";
+const AUTH_NAME = "PLATFORM_SCORE_KEY";
 
+/* READY MEANS BOTH HALVES, NOT JUST THE ADDRESS.
+ *
+ * This asked only for the URL, and on 30 Aug 2026 the URL was filled in while
+ * the key was still blank — a state that had never existed before. The health
+ * check would then have said "scanning is on", the modal would have drawn a
+ * live Scan now button, and every press would have come back "the scanner
+ * answered 401". The modal's own comment says why that is worse than an off
+ * button: "a button that looks live and returns an error is how a rep learns to
+ * distrust the whole page."
+ *
+ * Our scanner is POST /v1/audit and it ALWAYS needs a key, so a URL on its own
+ * is not a working scanner. Both, or off. */
 export function scoreReady() {
-  return Boolean(process.env[KEY_NAME]);
+  return Boolean(process.env[KEY_NAME] && process.env[AUTH_NAME]);
+}
+
+/** Which half is missing, for a message that names it. */
+export function scoreMissing() {
+  const missing = [];
+  if (!process.env[KEY_NAME]) missing.push(KEY_NAME);
+  if (!process.env[AUTH_NAME]) missing.push(AUTH_NAME);
+  return missing;
 }
 
 /* ------------------------------------------------------------------ */
@@ -186,9 +207,39 @@ export function readPromptSim(payload) {
  * reason: it draws as a blank bullet in a pitch, and a blank bullet reads as
  * carelessness.
  */
+/** Our platform's scored categories, as findings. Anything that is not a real
+ * 0-100 with a name is dropped rather than printed as "undefined out of 100".
+ * Returns null — not [] — when there is nothing usable, so readFindings falls
+ * through to its "nothing came back" branch instead of reporting an empty list
+ * as a successful read. */
+function categoriesAsFindings(categories) {
+  if (!Array.isArray(categories)) return undefined;
+  const out = [];
+  for (const c of categories) {
+    if (!c || typeof c !== "object") continue;
+    const label = String(c.label ?? c.key ?? "").trim();
+    const n = Number(c.score);
+    if (!label) continue;
+    if (!Number.isFinite(n) || n < 0 || n > 100) continue;
+    out.push({ title: label, detail: `scored ${Math.round(n)} out of 100`, severity: "" });
+  }
+  return out.length ? out : undefined;
+}
+
 export function readFindings(payload) {
   const p = payload;
-  const candidates = [p?.findings, p?.result?.findings, p?.data?.findings, p?.issues];
+  /* `categories` is what OUR OWN platform returns — POST /v1/audit answers
+   * { score, categories: [{ key, label, score, weight }] }, sorted worst-first,
+   * and its own comment calls that list "doubles as a fix list". Read from the
+   * platform repo on 30 Aug 2026 rather than guessed at.
+   *
+   * It comes LAST, so a scanner that sends real findings keeps them. A category
+   * is a scored AREA, not a defect, so it is turned into a finding that says
+   * exactly that and nothing more — "Schema · scored 12 out of 100". No
+   * threshold is invented to call one a problem, and no remedy text is put in
+   * the rep's mouth: the number is the pitch. */
+  const candidates = [p?.findings, p?.result?.findings, p?.data?.findings, p?.issues,
+    categoriesAsFindings(p?.categories)];
   let list = null;
   let sawSomething = false;
   for (const c of candidates) {
@@ -473,9 +524,11 @@ export default async function handler(req, res) {
   }
 
   if (!scoreReady()) {
+    const missing = scoreMissing();
     return res.status(503).json({
-      error: `Scoring is not wired up yet — ${KEY_NAME} is not set in Vercel. Nothing was saved, and no score was invented. See SETUP.md.`,
-      waitingOnKey: KEY_NAME,
+      error: `Scoring is not wired up yet — ${missing.join(" and ")} ${missing.length > 1 ? "are" : "is"} not set. Nothing was saved, and no score was invented. See SETUP.md.`,
+      waitingOnKey: missing[0],
+      waitingOnKeys: missing,
     });
   }
 
@@ -487,7 +540,19 @@ export default async function handler(req, res) {
         "content-type": "application/json",
         ...(process.env.PLATFORM_SCORE_KEY ? { "x-api-key": process.env.PLATFORM_SCORE_KEY } : {}),
       },
-      body: JSON.stringify({ domain, source: "admin-console-sales" }),
+      /* `pages: false` — SITE-LEVEL CHECKS ONLY, and that is not a shortcut.
+       *
+       * Read against the platform's own POST /v1/audit (30 Aug 2026, from the
+       * platform repo, not guessed): with pages on it crawls up to 20 pages of
+       * the prospect's site. This fetch gives up at 55 seconds, and a rep on a
+       * list of 3,663 firms is not waiting a minute per row. The site-level
+       * pass is what the pitch is made of anyway — robots.txt blocking the AI
+       * crawlers, no llms.txt, no schema, no sitemap — and it is the half that
+       * comes back in seconds.
+       *
+       * A scanner that ignores the flag simply does the fuller thing; nothing
+       * here depends on it being honoured. */
+      body: JSON.stringify({ domain, source: "admin-console-sales", pages: false }),
       signal: AbortSignal.timeout(55000),
     });
     if (!r.ok) {

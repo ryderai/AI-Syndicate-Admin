@@ -735,15 +735,39 @@ export default function SalesSheet({
       case "scores": {
         const r = row.report;
         if (!r) {
+          /* AN ACTION AND A DEAD END MUST NOT LOOK THE SAME — Ryder, 30 Aug 2026:
+           * "make the scan site for ones that you can more easy to see its
+           * available to scan."
+           *
+           * Both states used to render `adm-db-empty`, the faint grey the whole
+           * sheet uses for "there is nothing here". So "Scan site" — a thing a
+           * rep can do right now, on a firm they are about to phone — was drawn
+           * in the same colour as "no site", which is a thing nobody can do
+           * anything about. On a screen of 3,663 rows that is the difference
+           * between a feature being used and never being noticed.
+           *
+           * So: a real chip when there IS a website, faint when there is not.
+           * The chip does not claim the scan will succeed — the modal behind it
+           * still says whether scanning is switched on — it only says "there is
+           * something to click here". */
+          if (!row.domain) {
+            return (
+              <button
+                type="button" className="adm-db-btn"
+                title="No website on file for this firm, so there is nothing to scan. Add one on the firm's record first."
+                onClick={(e) => { e.stopPropagation(); onScan?.({ lead: l, company: row.company }); }}
+              >
+                <span className="adm-db-empty">no site</span>
+              </button>
+            );
+          }
           return (
             <button
               type="button" className="adm-db-btn"
-              title={row.domain
-                ? "Nobody has scanned this site. That is not a bad score — it is no score."
-                : "No website on file for this firm, so there is nothing to scan."}
+              title="Nobody has scanned this site. That is not a bad score — it is no score. Click to open the scan."
               onClick={(e) => { e.stopPropagation(); onScan?.({ lead: l, company: row.company }); }}
             >
-              <span className="adm-db-empty">{row.domain ? "Scan site" : "no site"}</span>
+              <span className="adm-sh-scanchip">Scan site</span>
             </button>
           );
         }

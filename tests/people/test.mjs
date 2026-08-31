@@ -8,7 +8,9 @@
  * completely normal on Operations. Work does not get much more lost than that.
  */
 import { readFileSync } from "node:fs";
-import { personLabel, peopleOptions, labelForUser } from "../../src/lib/people.js";
+import {
+  personLabel, peopleOptions, labelForUser, canDoDeliveryWork, deliveryPeopleOptions,
+} from "../../src/lib/people.js";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => {
@@ -130,6 +132,70 @@ for (const f of FILES) {
     !/return m \? \([a-z]+\.full_name \|\| [a-z]+\.email\)/.test(src));
   ok(`${f} uses src/lib/people.js`, /from "\.\.\/\.\.\/lib\/people\.js"/.test(src));
 }
+
+console.log("\nWHO CAN BE GIVEN DELIVERY WORK");
+
+/* Ryder, 30 Aug 2026: "sales reps dont work with operations or anything."
+ * A rep's console is four pages and Operations is not one of them, so a task
+ * handed to a rep is a task nobody can open — the same black hole as the
+ * same-name bug above, reached a different way. */
+const STAFF = [
+  { user_id: "u-owner", full_name: "Ryder Schilling", email: "ryder@aisyndicate.com", role: "owner", active: true },
+  { user_id: "u-admin", full_name: "Andrew Soncini", email: "andrew@aisyndicate.com", role: "admin", active: true },
+  { user_id: "u-rep", full_name: "Ryder Schilling", email: "ryderschilling@gmail.com", role: "sales", active: true },
+  { user_id: "u-gone", full_name: "Old Teammate", email: "old@aisyndicate.com", role: "admin", active: false },
+];
+
+ok("an owner can be given a task", canDoDeliveryWork(STAFF[0]));
+ok("an admin can", canDoDeliveryWork(STAFF[1]));
+ok("a SALES REP cannot", !canDoDeliveryWork(STAFF[2]));
+ok("a deactivated admin cannot", !canDoDeliveryWork(STAFF[3]));
+ok("a member with no role at all cannot — it fails closed",
+  !canDoDeliveryWork({ user_id: "x", role: undefined, active: true }));
+ok("null does not throw", !canDoDeliveryWork(null));
+
+const pick = deliveryPeopleOptions(STAFF).map((o) => o.value);
+eq("only the owner and the admin are offered", pick.join(","), "u-owner,u-admin");
+ok("the rep is not in the list", !pick.includes("u-rep"));
+ok("the deactivated one is not either", !pick.includes("u-gone"));
+
+/* The half that matters most: filtering the list must NEVER drop a task that is
+ * already on somebody. Rendering the cell as "Unassigned" would be the table
+ * lying about a row the database has an answer for — losing the work a second
+ * way while fixing the first. */
+const held = deliveryPeopleOptions(STAFF, "u-rep");
+ok("a task ALREADY on a rep still shows them", held.some((o) => o.value === "u-rep"));
+ok("...and says why they should not have it",
+  held.find((o) => o.value === "u-rep").label.includes("cannot see this page"),
+  held.find((o) => o.value === "u-rep").label);
+const heldGone = deliveryPeopleOptions(STAFF, "u-gone");
+ok("a task on a deactivated member still shows them, marked",
+  heldGone.find((o) => o.value === "u-gone")?.label.includes("deactivated"));
+eq("holding it does not put anybody else back in the list", heldGone.length, 3);
+eq("an eligible holder adds nobody", deliveryPeopleOptions(STAFF, "u-owner").length, 2);
+eq("nobody holding it adds nobody", deliveryPeopleOptions(STAFF, null).length, 2);
+eq("a user_id nobody has adds nobody", deliveryPeopleOptions(STAFF, "u-ghost").length, 2);
+/* When a task IS held by the rep, both Ryders are on screen together, so both
+ * have to carry their address — worked out in ONE pass over the list actually
+ * being drawn, not two passes over two different lists. */
+const bothRyders = deliveryPeopleOptions(STAFF, "u-rep")
+  .filter((o) => o.label.startsWith("Ryder Schilling"));
+eq("both Ryders are on screen when the rep holds the task", bothRyders.length, 2);
+ok("...and both carry their address", bothRyders.every((o) => o.label.includes("(")),
+  bothRyders.map((o) => o.label).join(" | "));
+ok("...and the two labels differ", bothRyders[0].label !== bothRyders[1].label);
+
+console.log("\nTHE PICKERS THAT WRITE AN ASSIGNMENT USE THAT RULE");
+
+const OPS = readFileSync(new URL("../../src/components/admin/Operations.jsx", import.meta.url), "utf8");
+const TABLE = readFileSync(new URL("../../src/components/admin/opsTable.jsx", import.meta.url), "utf8");
+ok("the task modal's Assigned to uses deliveryPeopleOptions",
+  /f\.assigned_to[\s\S]{0,200}deliveryPeopleOptions/.test(OPS));
+ok("the sheet's assignee cell uses it too", TABLE.includes("deliveryPeopleOptions(team, t?.assigned_to"));
+/* The FILTER at the top of Operations keeps the whole roster on purpose — it is
+ * how you find a task wrongly put on a rep before this rule existed. Narrowing
+ * it would hide the very rows somebody has to go and fix. */
+ok("the Owner FILTER still offers everybody", /assigneeFilter[\s\S]{0,1400}\{peopleOptions\(team\)\.map/.test(OPS));
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

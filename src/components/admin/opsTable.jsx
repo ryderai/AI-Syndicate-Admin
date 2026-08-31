@@ -6,7 +6,7 @@ import {
 /* The sort itself lives in a plain .js module so it can be tested — see
  * src/lib/opsSort.js and tests/ops. */
 import { STATUS_ORDER, sortRowsBy, nextSort } from "../../lib/opsSort.js";
-import { personLabel } from "../../lib/people.js";
+import { personLabel, deliveryPeopleOptions } from "../../lib/people.js";
 import {
   Chip, SelectCell, PersonCell, TextCell, PopoutCell, DateCell, Avatar, todayISO, Popover,
   STATUS_COLOR, PRIORITY_COLOR, PRIORITY_ICON, CATEGORY_COLOR, PHASE_COLOR, clientColor,
@@ -160,19 +160,18 @@ export default function TaskDatabase({
     () => clients.map((c) => ({ value: c.id, label: c.name, color: clientColor(c.name) })),
     [clients],
   );
-  const personOptions = useMemo(
-    () => team.filter((m) => m.active !== false)
-      // Two teammates with the same name must not draw two identical rows.
-      .map((m, _i, list) => ({ value: m.user_id, label: personLabel(m, list) })),
-    [team],
-  );
-  /* Deactivating someone does not un-own their tasks. If the owner is no longer
-   * in the pickable list, show them anyway, marked — rendering the cell as
-   * "Unassigned" would be the table lying about who has it. */
-  const personOptionsFor = (t) => {
-    if (!t.assigned_to || personOptions.some((o) => o.value === t.assigned_to)) return personOptions;
-    return [...personOptions, { value: t.assigned_to, label: `${memberName(t.assigned_to) || "Former member"} · inactive` }];
-  };
+  /* WHO CAN BE GIVEN A TASK — one rule, in src/lib/people.js.
+   * Active owners and admins. NOT a sales rep: Operations is not one of a rep's
+   * four pages, so a task handed to one is a task nobody can open, sitting on
+   * the board with a name on it looking perfectly assigned. Ryder, 30 Aug 2026:
+   * "sales reps dont work with operations or anything."
+   * And not a deactivated member either — this list used to offer them while
+   * the Inbox already filtered them out.
+   *
+   * deliveryPeopleOptions() also keeps whoever ALREADY holds a row, marked with
+   * why they should not, because rendering the cell as "Unassigned" would be
+   * the table lying about a row the database has an answer for. */
+  const personOptionsFor = (t) => deliveryPeopleOptions(team, t?.assigned_to || null);
   const statusOptions = TASK_STATUSES.map((s) => ({ value: s, label: TASK_STATUS_LABELS[s], color: STATUS_COLOR[s] }));
   const priorityOptions = TASK_PRIORITIES.map((p) => ({ value: p, label: `${PRIORITY_ICON[p]} ${TASK_PRIORITY_LABELS[p]}`, color: PRIORITY_COLOR[p] }));
   const categoryOptions = TASK_CATEGORIES.map((c) => ({ value: c, label: c, color: CATEGORY_COLOR[c] }));

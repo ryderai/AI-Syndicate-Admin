@@ -112,3 +112,63 @@ export function labelForUser(userId, team) {
   const m = (team || []).find((x) => x.user_id === userId);
   return m ? personLabel(m, team) : null;
 }
+
+/* ------------------------------------------------------------------ */
+/* WHO CAN BE GIVEN DELIVERY WORK                                      */
+/* ------------------------------------------------------------------ */
+
+/* A SALES REP DOES NOT DO DELIVERY WORK — Ryder, 30 Aug 2026:
+ * "sales reps dont work with operations or anything."
+ *
+ * This is not a preference, it is the same class of bug as two people sharing a
+ * name. A rep's whole console is four pages — Overview, The Floor, Gmail, AI
+ * Brain — and **Operations and Tickets are not among them**. So a task handed to
+ * a rep is a task nobody can open: it is not on their Work page, it is not on
+ * any page they have, and the board shows it sitting there with their name on it
+ * looking perfectly assigned. Work into a black hole, exactly like the one found
+ * an hour earlier in the same dry run.
+ *
+ * A deactivated member is the same story for a different reason — they cannot
+ * sign in at all — and Operations was offering them too, while the Inbox already
+ * filtered them out. One rule now, in one place.
+ *
+ * THE ONE THING THIS MUST NOT DO IS HIDE AN EXISTING ASSIGNMENT.
+ * Filtering the list is easy; filtering it and dropping a task that is ALREADY
+ * on a rep would make the cell read "Unassigned" while the database still says
+ * otherwise, and the work would go missing a second way while we were fixing the
+ * first. So whoever currently holds the row is always in the list, and if they
+ * are not eligible their label says so out loud.
+ */
+export const DELIVERY_ROLES = ["owner", "admin"];
+
+/** May this person be handed an Operations task or a ticket? */
+export function canDoDeliveryWork(member) {
+  return member?.active !== false && DELIVERY_ROLES.includes(member?.role);
+}
+
+/** The pickable people for delivery work, plus whoever already holds this row.
+ *
+ * @param team    the full roster
+ * @param heldBy  user_id currently on the record, or null
+ */
+export function deliveryPeopleOptions(team, heldBy = null) {
+  const roster = team || [];
+  const eligible = roster.filter(canDoDeliveryWork);
+  if (!heldBy || eligible.some((m) => m.user_id === heldBy)) return peopleOptions(eligible);
+
+  /* Already on somebody who cannot open the page. Kept, and SAID — a silent
+   * "Unassigned" would be a lie about a row the database has an answer for. */
+  const holder = roster.find((m) => m.user_id === heldBy);
+  if (!holder) return peopleOptions(eligible);
+
+  /* ONE labelling pass over the eligible list PLUS the holder, not two.
+   * Labelled separately, an eligible "Ryder Schilling" would come out plain
+   * (unique among the eligible) while the held one came out with its email —
+   * two labels worked out against two different lists, which is exactly the
+   * comparison the reader has to make. */
+  const shown = [...eligible, holder];
+  const why = holder.active === false ? "deactivated" : "sales — cannot see this page";
+  return peopleOptions(shown).map((o) => (
+    o.value === holder.user_id ? { ...o, label: `${o.label} · ${why}` } : o
+  ));
+}

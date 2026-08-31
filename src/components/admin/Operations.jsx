@@ -19,7 +19,8 @@ import TaskDatabase, {
 import { Popover, PRIORITY_ICON } from "./opsCells.jsx";
 import { useScreenContext } from "../../lib/screenContext.js";
 import { useRoute } from "../../lib/router.js";
-import { peopleOptions, personLabel } from "../../lib/people.js";
+import { peopleOptions, personLabel, deliveryPeopleOptions } from "../../lib/people.js";
+import { planTaskImport, planSummary } from "../../../lib/notion-merge.js";
 
 /* Operations — the Notion replacement, in Notion's own shape.
  *
@@ -112,6 +113,7 @@ export default function Operations({ member }) {
   const [facets, setFacets] = useState({});
   const [colAnchor, setColAnchor] = useState(null);
   const [taskModal, setTaskModal] = useState(null);   // null | {} | task
+  const [importTasksOpen, setImportTasksOpen] = useState(false);
 
   const loadTasks = useCallback(async () => {
     const t = await listTasks();
@@ -342,6 +344,7 @@ export default function Operations({ member }) {
           {/* Add client and Import clients used to sit here, but only on the
               clients view. They moved to the Clients page with the list they
               belong to. */}
+          <button className="btn btn-sm" onClick={() => setImportTasksOpen(true)}>Bring tasks over from Notion</button>
           <button className="btn btn-accent btn-sm" onClick={() => setTaskModal({})}>+ New task</button>
         </div>
       </div>
@@ -382,7 +385,13 @@ export default function Operations({ member }) {
             <option value="__me">Just mine</option>
             {/* peopleOptions, not full_name: two teammates with the same name
               * drew two identical rows and a task assigned to the wrong one
-              * vanished off the right person's Work page. src/lib/people.js */}
+              * vanished off the right person's Work page. src/lib/people.js
+              *
+              * THE FULL ROSTER HERE, DELIBERATELY — unlike the assignee picker,
+              * which is owners and admins only. This is a FILTER, and filtering
+              * to a sales rep is how you FIND a task that was wrongly put on
+              * one before that rule existed. Narrowing it would hide exactly the
+              * rows somebody needs to go and fix. */}
             {peopleOptions(team).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             <option value="__none">Unassigned</option>
           </select>
@@ -451,6 +460,13 @@ export default function Operations({ member }) {
         <TaskBoard tasks={filtered} clients={clients.rows} team={team} onPatch={patchTask} onOpen={(t) => setTaskModal(t)} />
       ) : (
         <TaskDatabase {...dbProps} />
+      )}
+
+      {importTasksOpen && (
+        <ImportTasksModal
+          member={member} clients={clients.rows} team={team} existing={tasks}
+          onClose={() => setImportTasksOpen(false)} reload={loadAll}
+        />
       )}
 
       {taskModal !== null && (
@@ -813,7 +829,10 @@ export function TaskModal({ task, clients, team, defaultClientId, onClose, reloa
           <Select value={f.client_id} onChange={set("client_id")} options={[["", "No client"], ...clients.map((c) => [c.id, c.name])]} />
         </Field>
         <Field label="Assigned to" hint="Whoever this is shows it on their own Work page.">
-          <Select value={f.assigned_to} onChange={set("assigned_to")} options={[["", "Unassigned"], ...peopleOptions(team).map((o) => [o.value, o.label])]} />
+          {/* deliveryPeopleOptions, not everybody: a sales rep has no Operations
+            * page, so a task handed to one can never be opened by the person it
+            * is on. Whoever already holds it stays in the list, marked. */}
+          <Select value={f.assigned_to} onChange={set("assigned_to")} options={[["", "Unassigned"], ...deliveryPeopleOptions(team, f.assigned_to).map((o) => [o.value, o.label])]} />
         </Field>
         <Field label="Status"><Select value={f.status} onChange={set("status")} options={TASK_STATUSES.map((s) => [s, TASK_STATUS_LABELS[s]])} /></Field>
         <Field label="Priority"><Select value={f.priority} onChange={set("priority")} options={TASK_PRIORITIES.map((p) => [p, `${PRIORITY_ICON[p]} ${TASK_PRIORITY_LABELS[p]}`])} /></Field>
@@ -942,6 +961,128 @@ export function ImportClientsModal({ member, onClose, reload }) {
         {example}
       </div>
       <TextArea value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste the JSON list here…" style={{ minHeight: 140, fontFamily: "var(--mono)", fontSize: 12 }} />
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* BRING THE NOTION TASKS OVER — added 31 Aug 2026                     */
+/* ------------------------------------------------------------------ */
+/* Clients had a paste-JSON path from the first week. Tasks never did, and
+ * project memory has carried "No task-level JSON import — that is what the
+ * real Notion rows need to come over" as an open item since Aug 17.
+ *
+ * This is that path, and it is deliberately a TWO-STEP: press Check first and
+ * read exactly what will happen, then press Bring them over. An import that
+ * writes 108 rows on one click, with no way to see what it is about to do, is
+ * how you find out afterwards. Every rule it follows is in lib/notion-merge.js
+ * where a test can reach it. */
+const MERGE_LINE = { fontSize: 12, lineHeight: 1.6, color: "var(--ink-2)" };
+
+export function ImportTasksModal({ member, clients, team, existing, onClose, reload }) {
+  const [text, setText] = useState("");
+  const [plan, setPlan] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const example = `[
+  { "client": "Shiner Law Group", "name": "Give Joey view-only access",
+    "status": "To Do", "priority": "🔴 High", "category": "Access",
+    "phase": "Onboarding", "due": "2026-08-13",
+    "report": "the one-line status", "description": "the standing brief",
+    "assignees": ["ryder@aisyndicate.com"] }
+]`;
+
+  const check = () => {
+    setResult(null);
+    let list;
+    try { list = JSON.parse(text); }
+    catch { toast.error("That's not valid JSON", "It has to start with [ and end with ]."); return; }
+    setPlan(planTaskImport(list, { clients, team, existing }));
+  };
+
+  const run = async () => {
+    if (!plan) return;
+    setBusy(true);
+    let made = 0, changed = 0;
+    const failures = [];
+    for (const c of plan.create) {
+      const res = await upsertTask(c.row);
+      if (res.ok) made += 1; else failures.push(`${c.clientName} — "${c.row.name}": ${res.error}`);
+    }
+    for (const u of plan.update) {
+      const res = await upsertTask(u.patch);
+      if (res.ok) changed += 1; else failures.push(`${u.clientName} — "${u.name}": ${res.error}`);
+    }
+    setBusy(false);
+    setResult({ made, changed, failures });
+    await logActivity({
+      actor: member.user_id, kind: "tasks_imported",
+      title: `Brought ${made} new and ${changed} updated tasks over from Notion`,
+    });
+    toast.success(`${made} new, ${changed} updated`, failures.length ? `${failures.length} could not be written.` : "Nothing else changed.");
+    reload();
+  };
+
+  return (
+    <Modal open onClose={onClose} kicker="OPERATIONS" title="Bring the tasks over from Notion" width={720}
+      footer={<>
+        <button className="btn" onClick={onClose}>{result ? "Close" : "Cancel"}</button>
+        {!result && (plan
+          ? <button className="btn btn-accent" onClick={run} disabled={busy || (!plan.create.length && !plan.update.length)}>
+              {busy ? "Writing…" : `Bring them over (${plan.create.length + plan.update.length})`}
+            </button>
+          : <button className="btn btn-accent" onClick={check} disabled={!text.trim()}>Check it first</button>)}
+      </>}>
+
+      {result ? (
+        <div>
+          <p style={{ fontSize: 14, marginBottom: 10 }}>
+            <strong>{result.made} created · {result.changed} updated.</strong>
+          </p>
+          {result.failures.length ? (
+            <div className="adm-db-warn" style={{ marginBottom: 10 }}>
+              {result.failures.length} could not be written:
+              <ul style={{ margin: "6px 0 0 16px" }}>{result.failures.map((f, i) => <li key={i}>{f}</li>)}</ul>
+            </div>
+          ) : <div style={MERGE_LINE}>Every row went in. Nothing was deleted — this screen has no way to delete anything.</div>}
+        </div>
+      ) : (
+        <>
+          <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6, marginBottom: 10 }}>
+            Paste the Notion Operations rows as a JSON list. A task is matched on its client plus its
+            name, so pasting the same list twice updates instead of doubling. A row whose client is not
+            in this console is refused by name rather than landing nowhere.
+          </p>
+          <div style={{ padding: 12, borderRadius: 10, background: "var(--bg-2)", border: "1px solid var(--rule)", fontFamily: "var(--mono)", fontSize: 11, lineHeight: 1.6, whiteSpace: "pre", overflowX: "auto", marginBottom: 12 }}>
+            {example}
+          </div>
+          <TextArea value={text} onChange={(e) => { setText(e.target.value); setPlan(null); }}
+            placeholder="Paste the JSON list here…" style={{ minHeight: 130, fontFamily: "var(--mono)", fontSize: 12 }} />
+
+          {plan && (
+            <div style={{ marginTop: 14, padding: 12, borderRadius: 10, border: "1px solid var(--rule)" }}>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{planSummary(plan)}</div>
+              <div style={MERGE_LINE}><strong>{plan.create.length}</strong> will be created.</div>
+              <div style={MERGE_LINE}><strong>{plan.update.length}</strong> already exist here and will be updated. An empty
+                cell in Notion never blanks something already filled in, and a task marked Done here is
+                never dragged back to To Do.</div>
+              <div style={MERGE_LINE}><strong>{plan.unchanged.length}</strong> already say exactly this, so nothing happens to them.</div>
+              {plan.duplicatesInPaste.length ? (
+                <div className="adm-db-warn" style={{ marginTop: 8 }}>
+                  {plan.duplicatesInPaste.map((d, i) => <div key={i}>{d}</div>)}
+                </div>
+              ) : null}
+              {plan.problems.length ? (
+                <div className="adm-db-warn" style={{ marginTop: 8 }}>
+                  <strong>{plan.problems.length} refused or carried over incompletely:</strong>
+                  <ul style={{ margin: "6px 0 0 16px" }}>{plan.problems.map((p, i) => <li key={i}>{p}</li>)}</ul>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </>
+      )}
     </Modal>
   );
 }

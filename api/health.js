@@ -69,7 +69,12 @@ export default async function handler(req, res) {
     clientConnections: hasGoogleClientCredentials() && isVaultConfigured(),
     /* Named because it was missing from both this list and .env.example, so
      * "why is there no score on the client page" had no answer anywhere. */
-    platformScore: Boolean(process.env.PLATFORM_SCORE_URL),
+    /* BOTH HALVES. Our scanner is POST /v1/audit and it always needs a key, so
+     * a URL with no key is not a scanner that works — and a health check that
+     * says otherwise draws a live Scan button that 401s on every press.
+     * Same rule as scoreReady() in api/sales-score.js; if these two ever
+     * disagree, the badge and the endpoint are telling a rep different things. */
+    platformScore: Boolean(process.env.PLATFORM_SCORE_URL && process.env.PLATFORM_SCORE_KEY),
     role: member.membership.role,
   });
 }

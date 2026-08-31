@@ -61,6 +61,7 @@ import SalesProfile, { LogModal } from "./salesProfile.jsx";
 import SalesSheet from "./salesSheet.jsx";
 import { Popover } from "./opsCells.jsx";
 import { StartOverPanel } from "./salesStartOver.jsx";
+import SalesOwnersPanel from "./salesOwners.jsx";
 import { SalesImportModal } from "./salesImport.jsx";
 /* Saved searches and imported-list records. Carried over from the old Leads
  * page rather than rewritten — it already works, and dropping it would have
@@ -251,6 +252,7 @@ export default function SalesPage({ member, mode = null }) {
   const [addOpen, setAddOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [startOverOpen, setStartOverOpen] = useState(false);
+  const [ownersOpen, setOwnersOpen] = useState(false);
   /* Which lead is mid-claim on My Day, or null. See quickClaim. */
   const [claimingId, setClaimingId] = useState(null);
 
@@ -1637,6 +1639,18 @@ export default function SalesPage({ member, mode = null }) {
                 this one deletes: a rep who cannot use it does not need to be
                 told twice, and the panel behind it explains itself to anybody
                 who reaches it another way. */}
+            {/* Added 31 Aug 2026. The sheet is in but the reps who worked it
+                are not, so their claims read as nobody's. This is where they
+                get accounts. It sends no email — lib/sales-owners.js says why. */}
+            {isAdmin && (
+              <button
+                type="button" className="adm-db-pop-item" role="menuitem"
+                onClick={() => { setMoreMenu(null); setOwnersOpen(true); }}
+              >
+                <span>Reps on the sheet</span>
+                <span className="adm-db-count">hand claims back</span>
+              </button>
+            )}
             {isAdmin && (
               <button
                 type="button" className="adm-db-pop-item" role="menuitem"
@@ -1859,6 +1873,14 @@ export default function SalesPage({ member, mode = null }) {
       )}
       {addOpen && (
         <AddContactModal member={member} lists={board.lists} onClose={() => setAddOpen(false)} reload={load} />
+      )}
+      {ownersOpen && (
+        <Modal
+          open onClose={() => setOwnersOpen(false)} kicker="SALES" width={860}
+          title="The reps on the sheet"
+        >
+          <SalesOwnersPanel member={member} />
+        </Modal>
       )}
       {startOverOpen && (
         <Modal

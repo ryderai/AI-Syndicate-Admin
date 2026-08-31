@@ -26,7 +26,7 @@ import { readFileSync } from "node:fs";
 import {
   readScore, readAiAccess, readSeo, readPromptSim, readFindings, readReport,
   effectiveScore, reportKind, leadBelongs, looksLikeId, parkableLeadIds, scoreLine,
-  cleanDomain, scoreReady,
+  cleanDomain, scoreReady, scoreMissing,
 } from "../../api/sales-score.js";
 import { ROE } from "../../lib/sales-rules.js";
 import { readCompanyReport } from "../../src/lib/salesSheet.js";
@@ -347,17 +347,48 @@ t("the endpoint refuses BEFORE it writes anything", () => {
   assert.ok(branch.includes("Nothing was saved"), "and it says so in plain words");
 });
 
-t("with no PLATFORM_SCORE_URL the endpoint is not ready", () => {
-  const had = process.env.PLATFORM_SCORE_URL;
-  delete process.env.PLATFORM_SCORE_URL;
-  assert.equal(scoreReady(), false);
-  process.env.PLATFORM_SCORE_URL = "https://example.com/scan";
-  assert.equal(scoreReady(), true);
-  if (had === undefined) delete process.env.PLATFORM_SCORE_URL; else process.env.PLATFORM_SCORE_URL = had;
+t("ready means BOTH halves — an address with no key is not a scanner", () => {
+  /* WIDENED 30 Aug 2026. This asked only for the URL, and that day the URL was
+   * filled in (POST /v1/audit, read out of the platform repo) while the key was
+   * still blank. Under the old rule the health check would have said scanning
+   * was ON, the modal would have drawn a live "Scan now", and every press would
+   * have come back "the scanner answered 401" — the exact state the modal's own
+   * comment calls worse than an off button. Our scanner always needs a key. */
+  const hadUrl = process.env.PLATFORM_SCORE_URL;
+  const hadKey = process.env.PLATFORM_SCORE_KEY;
+  const restore = () => {
+    if (hadUrl === undefined) delete process.env.PLATFORM_SCORE_URL; else process.env.PLATFORM_SCORE_URL = hadUrl;
+    if (hadKey === undefined) delete process.env.PLATFORM_SCORE_KEY; else process.env.PLATFORM_SCORE_KEY = hadKey;
+  };
+  try {
+    delete process.env.PLATFORM_SCORE_URL;
+    delete process.env.PLATFORM_SCORE_KEY;
+    assert.equal(scoreReady(), false, "neither half");
+    assert.deepEqual(scoreMissing(), ["PLATFORM_SCORE_URL", "PLATFORM_SCORE_KEY"]);
+
+    process.env.PLATFORM_SCORE_URL = "https://example.com/scan";
+    assert.equal(scoreReady(), false, "an address with no key must NOT read as ready");
+    assert.deepEqual(scoreMissing(), ["PLATFORM_SCORE_KEY"], "and the message names the half that is missing");
+
+    delete process.env.PLATFORM_SCORE_URL;
+    process.env.PLATFORM_SCORE_KEY = "k_live_x";
+    assert.equal(scoreReady(), false, "a key with no address is not ready either");
+    assert.deepEqual(scoreMissing(), ["PLATFORM_SCORE_URL"]);
+
+    process.env.PLATFORM_SCORE_URL = "https://example.com/scan";
+    assert.equal(scoreReady(), true, "both halves");
+    assert.deepEqual(scoreMissing(), []);
+  } finally { restore(); }
+});
+
+t("the health check uses the SAME rule, so the badge cannot contradict the endpoint", () => {
+  const HEALTH = readFileSync(new URL("../../api/health.js", import.meta.url), "utf8");
+  assert.match(HEALTH, /platformScore: Boolean\(process\.env\.PLATFORM_SCORE_URL && process\.env\.PLATFORM_SCORE_KEY\)/);
 });
 
 t("the 503 names the variable and the request never names the domain", () => {
-  assert.ok(SRC.includes("waitingOnKey: KEY_NAME"), "the screen has to be able to say which key");
+  assert.ok(SRC.includes("waitingOnKey: missing[0]"), "the screen has to be able to say which key");
+  assert.ok(SRC.includes("waitingOnKeys: missing"), "and both, when both are missing");
   // Prose about it is not the same as code doing it: the check is that NOTHING
   // is ever read out of the request body except the two ids.
   const readsFromBody = CODE.match(/body\??\.[a-zA-Z_]+/g) || [];
