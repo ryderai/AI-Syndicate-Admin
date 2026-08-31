@@ -106,9 +106,26 @@ export default function SalesOwnersPanel({ member }) {
         </div>
       ) : null}
 
+      {state.needsAPerson?.length ? (
+        <div className="adm-db-warn" style={{ marginBottom: 14 }}>
+          <strong>These need you to say yes or no, and nothing happens to them either way:</strong>
+          <ul style={{ margin: "6px 0 0 16px" }}>
+            {state.needsAPerson.map((n) => (
+              <li key={n.label}>
+                The sheet says <strong>&ldquo;{n.label}&rdquo;</strong> ({n.rows} rows). The only person
+                close is <strong>{n.couldBe}</strong>, and only the first name matches — which is not
+                enough to hand somebody a pipeline. No account is made and no row is claimed. If they
+                are the same person, rename the sheet column or add the surname; if they are not, type
+                an email above once this name is offered.
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <div style={{ fontSize: 13, marginBottom: 14 }}>
-        <strong>{Number(state.claimableRightNow || 0).toLocaleString()}</strong> rows can be handed
-        back the moment those accounts exist.{" "}
+        <strong>{Number(state.claimableRightNow || 0).toLocaleString()}</strong> rows will be handed
+        back once those accounts exist — counted against the roster as it WILL be, not as it is today.{" "}
         {state.skipped ? `${Number(state.skipped.alreadyOwned || 0).toLocaleString()} already have an owner and will not be touched.` : null}
       </div>
 
@@ -119,8 +136,17 @@ export default function SalesOwnersPanel({ member }) {
         </div>
       ) : null}
 
-      <button className="btn btn-accent" onClick={run} disabled={busy || !canRun || !state.wouldCreate?.length}>
-        {busy ? "Making the accounts…" : `Make ${state.wouldCreate?.length || 0} accounts and hand the rows back`}
+      {/* ENABLED WHENEVER THERE IS ANYTHING TO DO. Keying this off "accounts to
+          make" alone meant that a run which created the accounts and then failed
+          on the claims came back with nothing to create, a disabled button, and
+          a result panel telling the person to press it again. */}
+      <button className="btn btn-accent" onClick={run}
+        disabled={busy || !canRun || (!state.wouldCreate?.length && !state.claimableRightNow)}>
+        {busy ? "Making the accounts…" : (
+          state.wouldCreate?.length
+            ? `Make ${state.wouldCreate.length} accounts and hand ${Number(state.claimableRightNow || 0).toLocaleString()} rows back`
+            : `Hand ${Number(state.claimableRightNow || 0).toLocaleString()} rows back`
+        )}
       </button>
       {!canRun ? <span style={{ marginLeft: 10, fontSize: 12, color: "var(--ink-2)" }}>Only an owner or an admin can do this.</span> : null}
 
@@ -134,6 +160,23 @@ export default function SalesOwnersPanel({ member }) {
               {done.leadsPlanned - done.leadsClaimed} of the {done.leadsPlanned} planned rows were not
               written. A row that gained an owner between reading and writing is left with that owner
               on purpose. Press the button again to see what is left.
+            </div>
+          ) : null}
+          {done.activityErrors?.length ? (
+            <div className="adm-db-warn" style={{ marginTop: 8 }}>
+              The rows moved, but {done.activityErrors.length} batch(es) of timeline lines could not be
+              written, so some of these hand-overs have no record on the lead itself: {done.activityErrors.join(" · ")}
+            </div>
+          ) : null}
+          {done.claimErrors?.length ? (
+            <div className="adm-db-warn" style={{ marginTop: 8 }}>
+              Some rows could not be written: {done.claimErrors.join(" · ")}
+            </div>
+          ) : null}
+          {done.created?.some((c) => c.reusedExistingAccount) ? (
+            <div style={{ ...{ fontSize: 12, color: "var(--ink-2)" }, marginTop: 8 }}>
+              {done.created.filter((c) => c.reusedExistingAccount).length} of these already had an
+              account and were reused rather than created again.
             </div>
           ) : null}
           {done.failed?.length ? (

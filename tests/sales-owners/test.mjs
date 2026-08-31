@@ -12,8 +12,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  slug, placeholderEmail, isPlaceholderEmail, PLACEHOLDER_DOMAIN,
-  groupOwnerNames, planAccounts, planClaims,
+  slug, placeholderEmail, isPlaceholderEmail, PLACEHOLDER_DOMAIN, CONFIDENT,
+  groupOwnerNames, planAccounts, planClaims, projectedTeam,
 } from "../../lib/sales-owners.js";
 
 let pass = 0, fail = 0;
@@ -91,8 +91,9 @@ console.log("\nSOMEBODY WHO IS ALREADY HERE IS NOT MADE AGAIN");
 {
   const { groups } = groupOwnerNames(SHEET);
   const plan = planAccounts(groups, TEAM, {});
-  ok('"Andrew" matches Andrew Soncini and is NOT created', !plan.create.some((c) => c.fullName === "Andrew"), JSON.stringify(plan.create.map((c) => c.fullName)));
-  ok("...and is listed as already having an account", plan.already.some((a) => a.label === "Andrew"));
+  ok('"Andrew" is NOT quietly treated as Andrew Soncini', !plan.already.some((a) => a.label === "Andrew"), JSON.stringify(plan.already));
+  ok("...it is put in front of a person instead", plan.needsAPerson.some((n) => n.label === "Andrew" && n.couldBe === "Andrew Soncini"), JSON.stringify(plan.needsAPerson));
+  ok("...and no account is made for it either way", !plan.create.some((c) => c.fullName === "Andrew"));
   eq("the other seven are created", plan.create.length, 7);
   ok("every one of them gets an address", plan.create.every((c) => /@/.test(c.email)));
   ok("...all of them placeholders when nothing was typed", plan.create.every((c) => c.placeholder));
@@ -147,16 +148,138 @@ const FULL_TEAM = [...TEAM,
 eq("no leads at all is not an error", planClaims([], FULL_TEAM).claim.length, 0);
 eq("no team at all claims nothing", planClaims([{ id: "l1", owner_id: null, imported_owner_name: "Larry Pike" }], []).claim.length, 0);
 
+console.log("\nA FIRST NAME IS NOT ENOUGH TO HAND SOMEBODY A PIPELINE");
+
+/* THE WORST DEFECT IN THE FIRST VERSION OF THIS FILE, found by an adversarial
+ * checker on 31 Aug: planAccounts accepted ANY truthy matchOwner hit, including
+ * matchOwner's "first" rule, which fires on a shared first name alone. */
+eq("only exact and initial are acted on", CONFIDENT, ["exact", "initial"]);
+{
+  const roster = [{ user_id: "u-aik", email: "troy@x.com", full_name: "Troy Aikman", active: true }];
+  const { groups } = groupOwnerNames([{ name: "Troy Bennett", rows: 40 }, { name: "Troy", rows: 5 }]);
+  const plan = planAccounts(groups, roster, {});
+  ok("Troy Bennett is NOT mistaken for Troy Aikman", !plan.already.some((a) => a.matchedAs === "Troy Aikman"), JSON.stringify(plan.already));
+  ok("...he is put in front of a person", plan.needsAPerson.some((n) => n.label === "Troy Bennett"));
+  eq("...and none of his 45 rows are claimed for the other Troy",
+    planClaims([{ id: "l1", owner_id: null, imported_owner_name: "Troy Bennett" }], roster).claim.length, 0);
+  ok("...and the refusal says only the first name matched",
+    /first name/.test(planClaims([{ id: "l1", owner_id: null, imported_owner_name: "Troy Bennett" }], roster).unresolved[0].how));
+}
+{
+  /* But once his OWN account exists, the same name matches exactly and the rows
+   * go where they belong. The rule refuses a guess, it does not refuse work. */
+  const roster = [{ user_id: "u-aik", email: "troy@x.com", full_name: "Troy Aikman", active: true },
+                  { user_id: "u-ben", email: "b@x.com", full_name: "Troy Bennett", active: true }];
+  const p = planClaims([{ id: "l1", owner_id: null, imported_owner_name: "Troy Bennett" }], roster);
+  eq("the right Troy gets it", p.claim[0].user_id, "u-ben");
+}
+
+console.log("\nTHIS FILE AND matchOwner MUST NEVER DISAGREE");
+
+{
+  /* The grouping screen showed 5 rows as Baker's and the run then handed over
+   * none of them, because this file read the whole surname and matchOwner reads
+   * only the second word. */
+  const names = [{ name: "Mary Jo Baker", rows: 10 }, { name: "Mary Jo B", rows: 5 }, { name: "Mary Ann Cole", rows: 8 }];
+  const { groups } = groupOwnerNames(names);
+  eq("a two-word surname does not fold on this side either", groups.length, 3);
+}
+{
+  /* The property that matters, checked on every spelling: whatever this file
+   * groups, matchOwner must then be able to claim. */
+  const { groups } = groupOwnerNames(SHEET);
+  const plan = planAccounts(groups, TEAM, {});
+  const after = projectedTeam(TEAM, plan.create);
+  const leads = SHEET.map((c, i) => ({ id: `l${i}`, owner_id: null, imported_owner_name: c.name }));
+  const claimed = planClaims(leads, after);
+  const createdLabels = new Set(plan.create.map((c) => c.fullName));
+  const shouldClaim = SHEET.filter((c) => {
+    const g = groups.find((x) => x.spellings.includes(c.name));
+    return g && createdLabels.has(g.label);
+  });
+  eq("every spelling this file makes an account for is then claimable",
+    claimed.claim.length, shouldClaim.length);
+  ok("...and none of them lands on somebody who was already here",
+    claimed.claim.every((c) => String(c.user_id).startsWith("will-be:")), JSON.stringify(claimed.claim));
+}
+
+console.log("\nTHE SCREEN'S NUMBER IS THE NUMBER THE BUTTON WILL DO");
+
+{
+  const { groups } = groupOwnerNames(SHEET);
+  const plan = planAccounts(groups, TEAM, {});
+  const leads = [];
+  for (let i = 0; i < 40; i += 1) leads.push({ id: `l${i}`, owner_id: null, imported_owner_name: "Larry Pike" });
+  const before = planClaims(leads, TEAM).claim.length;
+  const after = planClaims(leads, projectedTeam(TEAM, plan.create)).claim.length;
+  eq("counted against today's roster it would say nothing", before, 0);
+  eq("counted against the roster as it WILL be, it says forty", after, 40);
+  ok("...which is the number the screen has to show", after !== before);
+}
+
+console.log("\nRULES THE FIRST VERSION HAD NO TEST FOR");
+
+{
+  const g = groupOwnerNames([{ name: "Zed", rows: 1 }, { name: "Aaron Smith", rows: 99 }]);
+  eq("the biggest pipeline really is sorted first", g.groups[0].label, "Aaron Smith");
+}
+{
+  const g = groupOwnerNames([{ name: "larry pike", rows: 2 }, { name: "LARRY PIKE", rows: 1 }, { name: "Larry Pike", rows: 3 }]);
+  eq("a case-only clash is one person", g.groups.length, 1);
+  eq("...whose rows all add up", g.groups[0].rows, 6);
+  eq("...and the properly-capitalised spelling is the one shown", g.groups[0].label, "Larry Pike");
+}
+{
+  const g = groupOwnerNames([{ name: "Cameron", rows: 5 }]);
+  eq("a bare first name nobody extends stands on its own", g.groups.length, 1);
+  eq("...and is not reported as ambiguous", g.ambiguous.length, 0);
+}
+{
+  const roster = [{ user_id: "u1", email: "a@x.com", full_name: "Sam Smith", active: true },
+                  { user_id: "u2", email: "b@x.com", full_name: "Sam Smythe", active: true }];
+  const { groups } = groupOwnerNames([{ name: "Sam", rows: 20 }]);
+  const plan = planAccounts(groups, roster, {});
+  ok("a name two roster members answer to makes NO account", !plan.create.length, JSON.stringify(plan.create));
+  ok("...and is reported rather than guessed", plan.already.some((a) => a.how === "ambiguous"));
+}
+
 console.log("\nTHE WRITE ITSELF IS GUARDED");
 {
   const API = src("api/sales-owners.js");
   ok("every claim update also insists the row is STILL unowned", /\.is\("owner_id", null\)/.test(API));
-  ok("the roster is re-read before any row is claimed, rather than assumed",
-    API.indexOf("freshTeam") > API.indexOf("const made = []"));
+  ok("the roster is RE-READ after the accounts are made, rather than assumed",
+    /freshTeam = await readTeam\(admin\)/.test(API) && /planClaims\(leads, freshTeam\)/.test(API));
+  ok("an account that already exists is found before one is created, so a half-finished run can be retried",
+    /findAuthUser/.test(API) && /listUsers/.test(API));
+  ok("the claim carries cadence_started_at as well as claimed_at — one without the other is a cadence that began at the epoch",
+    /cadence_started_at: at/.test(API) && /claimed_at: at/.test(API));
+  ok("the claim date comes from first_contact_at, not from today",
+    /c\.firstContactAt \|\| nowIso/.test(API));
+  ok("a row that changes hands leaves a line on its own timeline",
+    /admin_lead_activity/.test(API) && /type: "assigned"/.test(API));
+  ok("a partial lead read is said out loud rather than swallowed",
+    /if \(out\.error\) \{/.test(API) && /do not treat it as the whole pipeline/.test(API));
+  ok("a typed email is format-checked before anything is created",
+    /EMAIL_OK/.test(API));
+  ok("the endpoint has a time ceiling in vercel.json — it is the heaviest route here",
+    /"api\/sales-owners\.js"/.test(src("vercel.json")));
   ok("only an owner or an admin can reach it", /requireMember\(req, \["owner", "admin"\]\)/.test(API));
   ok("a real run has to be asked for — dry run is the default", /dryRun = body\?\.dryRun !== false/.test(API));
   ok("new accounts are made as sales reps, never admins", /role: "sales"/.test(API) && !/role: "owner"/.test(API));
   ok("leads are read a page at a time, so 3,663 rows are not silently 1,000", /fetchPaged/.test(API));
+}
+
+console.log("\nTHE ENDPOINT ITSELF ANSWERS, RATHER THAN 500-ING");
+{
+  /* START-HERE's trap 1: a new api/ route that throws shows its reason only in
+   * a terminal nobody is reading. So the handler is actually CALLED here, with
+   * no keys and no Authorization header. It must refuse politely. */
+  const { default: handler } = await import("../../api/sales-owners.js");
+  let code = null, payload = null;
+  const res = { status(c) { code = c; return this; }, json(b) { payload = b; return this; }, setHeader() {} };
+  await handler({ method: "GET", headers: {} }, res);
+  eq("no token, no keys — 401, not a crash", code, 401);
+  ok("...and it says so in words", typeof payload?.error === "string" && payload.error.length > 4, JSON.stringify(payload));
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  listClients, upsertClient, listTasks, upsertTask, deleteTask,
+  listClients, upsertClient, listTasks, listAllTasksForImport, upsertTask, deleteTask,
   listWeekly, upsertWeekly, listTeam, logActivity, listClientSites, listEmailThreads,
   CLIENT_STAGES, TASK_STATUSES, TASK_STATUS_LABELS,
   TASK_CATEGORIES, TASK_PHASES, TASK_PRIORITIES, TASK_PRIORITY_LABELS,
@@ -464,7 +464,7 @@ export default function Operations({ member }) {
 
       {importTasksOpen && (
         <ImportTasksModal
-          member={member} clients={clients.rows} team={team} existing={tasks}
+          member={member} clients={clients.rows} team={team}
           onClose={() => setImportTasksOpen(false)} reload={loadAll}
         />
       )}
@@ -979,11 +979,12 @@ export function ImportClientsModal({ member, onClose, reload }) {
  * where a test can reach it. */
 const MERGE_LINE = { fontSize: 12, lineHeight: 1.6, color: "var(--ink-2)" };
 
-export function ImportTasksModal({ member, clients, team, existing, onClose, reload }) {
+export function ImportTasksModal({ member, clients, team, onClose, reload }) {
   const [text, setText] = useState("");
   const [plan, setPlan] = useState(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+  const [readError, setReadError] = useState(null);
 
   const example = `[
   { "client": "Shiner Law Group", "name": "Give Joey view-only access",
@@ -993,12 +994,20 @@ export function ImportTasksModal({ member, clients, team, existing, onClose, rel
     "assignees": ["ryder@aisyndicate.com"] }
 ]`;
 
-  const check = () => {
+  const check = async () => {
     setResult(null);
     let list;
     try { list = JSON.parse(text); }
     catch { toast.error("That's not valid JSON", "It has to start with [ and end with ]."); return; }
-    setPlan(planTaskImport(list, { clients, team, existing }));
+    setBusy(true);
+    /* EVERY existing task is read here, not the page's capped 500. Whether a
+     * task already exists is the ONLY thing standing between one paste and two
+     * copies of 107 rows, so it is never decided off a partial list. */
+    const all = await listAllTasksForImport();
+    setBusy(false);
+    if (all.error && !all.rows.length) { setReadError(all.error); return; }
+    setReadError(all.error || all.truncated || null);
+    setPlan(planTaskImport(list, { clients, team, existing: all.rows }));
   };
 
   const run = async () => {
@@ -1016,10 +1025,12 @@ export function ImportTasksModal({ member, clients, team, existing, onClose, rel
     }
     setBusy(false);
     setResult({ made, changed, failures });
-    await logActivity({
-      actor: member.user_id, kind: "tasks_imported",
-      title: `Brought ${made} new and ${changed} updated tasks over from Notion`,
-    });
+    if (made || changed) {
+      await logActivity({
+        actor: member.user_id, kind: "tasks_imported",
+        title: `Brought ${made} new and ${changed} updated tasks over from Notion`,
+      });
+    }
     toast.success(`${made} new, ${changed} updated`, failures.length ? `${failures.length} could not be written.` : "Nothing else changed.");
     reload();
   };
@@ -1032,7 +1043,7 @@ export function ImportTasksModal({ member, clients, team, existing, onClose, rel
           ? <button className="btn btn-accent" onClick={run} disabled={busy || (!plan.create.length && !plan.update.length)}>
               {busy ? "Writing…" : `Bring them over (${plan.create.length + plan.update.length})`}
             </button>
-          : <button className="btn btn-accent" onClick={check} disabled={!text.trim()}>Check it first</button>)}
+          : <button className="btn btn-accent" onClick={check} disabled={busy || !text.trim()}>{busy ? "Reading what is already here…" : "Check it first"}</button>)}
       </>}>
 
       {result ? (
@@ -1060,6 +1071,14 @@ export function ImportTasksModal({ member, clients, team, existing, onClose, rel
           <TextArea value={text} onChange={(e) => { setText(e.target.value); setPlan(null); }}
             placeholder="Paste the JSON list here…" style={{ minHeight: 130, fontFamily: "var(--mono)", fontSize: 12 }} />
 
+          {readError ? (
+            <div className="adm-db-warn" style={{ marginTop: 10 }}>
+              The list of tasks already here could not be read in full: {readError}. Whether something
+              already exists is decided from that list, so treat &ldquo;new&rdquo; below with suspicion —
+              close this and try again rather than writing on a partial read.
+            </div>
+          ) : null}
+
           {plan && (
             <div style={{ marginTop: 14, padding: 12, borderRadius: 10, border: "1px solid var(--rule)" }}>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{planSummary(plan)}</div>
@@ -1068,6 +1087,31 @@ export function ImportTasksModal({ member, clients, team, existing, onClose, rel
                 cell in Notion never blanks something already filled in, and a task marked Done here is
                 never dragged back to To Do.</div>
               <div style={MERGE_LINE}><strong>{plan.unchanged.length}</strong> already say exactly this, so nothing happens to them.</div>
+
+              {/* WHAT CHANGES, not how many. Agreeing to "12 will be updated"
+                  is agreeing to a number; this is the list. */}
+              {plan.update.length ? (
+                <details style={{ marginTop: 8 }}>
+                  <summary style={{ cursor: "pointer", fontSize: 12 }}>
+                    Show me every field that changes ({plan.update.reduce((n, u) => n + u.changes.length, 0)})
+                  </summary>
+                  <div style={{ maxHeight: 220, overflowY: "auto", marginTop: 6 }}>
+                    {plan.update.map((u, i) => (
+                      <div key={i} style={{ ...MERGE_LINE, padding: "4px 0", borderBottom: "1px solid var(--rule)" }}>
+                        <strong>{u.clientName}</strong> — {u.name}
+                        <ul style={{ margin: "2px 0 0 16px" }}>
+                          {u.changes.map((c, j) => (
+                            <li key={j}>
+                              <code>{c.field}</code>: {c.from === null || c.from === undefined || c.from === "" ? "(empty)" : String(c.from).slice(0, 90)}
+                              {" → "}{String(c.to).slice(0, 90)}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
               {plan.duplicatesInPaste.length ? (
                 <div className="adm-db-warn" style={{ marginTop: 8 }}>
                   {plan.duplicatesInPaste.map((d, i) => <div key={i}>{d}</div>)}

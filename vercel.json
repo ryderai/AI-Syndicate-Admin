@@ -44,6 +44,9 @@
     },
     "api/lead-scrape.js": {
       "maxDuration": 60
+    },
+    "api/sales-owners.js": {
+      "maxDuration": 60
     }
   },
   "crons": [

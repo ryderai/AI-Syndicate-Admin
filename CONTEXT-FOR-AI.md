@@ -6504,3 +6504,372 @@ one it is rather than letting the two look alike.
 1. Deployed. Nothing from §49-§55 is pushed.
 2. An `ANTHROPIC_API_KEY` for the drafter to write rather than skeleton.
 3. The rep view has still never been driven — see §52.
+
+## §56. A DRY RUN THAT LOST A TASK, THREE DATE BUGS, AND THE SCAN WIRED TO OUR OWN PLATFORM — Sun 30 Aug 2026, evening → night (append-only section)
+
+Four asks in one session, in Ryder's words:
+
+1. *"working on the syndicate admin so it can get launched tonight. when i am a lead trying to
+   connect my own email so i can send, receive, and manage my emailed leads individually within my
+   own salesman email."*
+2. *"create a client and some tasks, run it as if we were working on the tasks and managing the
+   client through everything, and make sure everything is working how it should so when we get real
+   clients in there... nothing goes missing, doesnt work, or is broke."*
+3. *"sales reps dont work with operations or anything."*
+4. *"build the feature that allows people to scan the website and company online profile from the
+   lead sheet and get the audit so they can better pitch"* and *"make the scan site for ones that you
+   can more easy to see its available to scan."*
+
+**Local time throughout was Sun 30 Aug, 8–10pm Chicago — already 31 Aug in UTC.** Three of the bugs
+below are invisible at midday and obvious at 9pm. That is not a coincidence, it is the reason they
+were found at all.
+
+---
+
+### 56.1 THE GMAIL SIGN-IN CAME BACK TO A PAGE A REP CANNOT OPEN
+
+`api/gmail-callback.js` ends every Google sign-in with a redirect to
+`#/dashboard/inbox?gmail=connected`. It runs before anything knows who signed in, so it names ONE
+page for everybody — and `inbox` is the **shared team inbox**, owner/admin only. The dashboard
+correctly refused to route a rep there and dropped them on Overview, which does not read `?gmail=`.
+
+**The mailbox was connected. The screen said nothing at all**, and the rep's own Gmail page was two
+clicks away with no reason to think of going there.
+
+**THE LESSON: an endpoint that redirects cannot know who is coming back.** Any server-side bounce
+that names a page is naming it for every role at once, and the role gate on the other side will
+quietly re-aim it. Same family as §52's "hiding rows on a page is not hiding rows".
+
+**The rule moved out of the component.** It was ~50 lines inside `AdminDashboard.jsx` — renames, the
+per-role splits, the fallback, the query — **where no test in this repo could reach it**, which is
+exactly why a wrong answer sat there. It is now `src/lib/pageForAddress.js`, comments and all, with
+`tests/page-for-address` (34 checks). Behaviour did not change in the move. `tests/sales` was
+**repointed, not deleted** — every assertion still guards the same rule against the file that now
+holds it, plus a new one that the dashboard has not grown its own second copy of the maps.
+
+The new split entry is `sales: { ..., inbox: "gmail" }`. The general rule the suite now pins:
+**every `SPLIT_FOR_ROLE` entry must point at a page that role really has** — a split pointing
+somewhere the role's own menu does not carry falls back silently, which is the class of bug this was.
+
+### 56.2 ONLY @aisyndicate.com ACCOUNTS CAN CONNECT A MAILBOX AT ALL
+
+Found the moment 56.1 was fixed. Picking a personal Gmail gives, **on Google's own page, before any
+of our code runs**:
+
+> Access blocked: AI Syndicate Admin can only be used within its organization. **Error 403: org_internal**
+
+Our Google Cloud OAuth app's **Audience is Internal**, so Google only lets an @aisyndicate.com
+Workspace account grant it anything. **The browser is never redirected back**, so there is no
+callback, no `?gmail=error`, and nothing this console can ever catch or report.
+
+Recommendation given (Ryder's decision NOT recorded — check before acting on it): **leave it
+Internal.** Going External to admit personal Gmail puts the app in Google's unverified state while
+asking for `gmail.modify` and `gmail.send`, which are RESTRICTED scopes — a "Google hasn't verified
+this app" warning for every rep, a manually-listed test-user cap, and a verification review that
+needs a paid third-party CASA security assessment and takes weeks. **In "Testing" state Google also
+expires the refresh token after 7 days**, so the quick version means every rep reconnects weekly.
+
+So: **a rep needs an @aisyndicate.com Google Workspace account before they can use the Gmail page.**
+A prerequisite, not a bug to chase.
+
+`src/lib/connectProblem.js` + `tests/connect-problem` (28) came out of this: every reason
+`gmail-callback.js` can send is now a sentence with an action in it instead of `browser_mismatch`,
+an unknown reason is passed through rather than swallowed, and — because `org_internal` can never
+reach us — **the connect screen says which address to use BEFORE the button.**
+
+**THE SECOND LESSON: two different walls can produce the same blank screen.** 56.1 and 56.2 both
+ended with a rep looking at "Connect your work email", and fixing the first proved nothing about the
+second.
+
+---
+
+### 56.3 THE DRY RUN — one fake client, four tasks, worked start to finish
+
+`ZZ TEST — Dry Run Realty` (`9ac5fdef-850c-4e73-81c4-8b7a85760a55`) and four tasks covering
+different shapes: owner-owned and due tomorrow, rep-owned, CJ-owned and overdue, unassigned with no
+date. **All five rows are still in the live database.**
+
+**What was watched working, so nobody re-checks it:** client create + the `?id=` deep link; both ways
+of adding a task (the modal and the inline row, which inherits the client from its group); the status
+chip, the assignee popover and drag-and-drop on the board — **all three survive a full reload**; the
+`n shown · n open · n late` counts matching the rows every time they changed; overdue drawing red
+with a ⚠ while a task due tomorrow did not; "tomorrow" on the Work page; "where this client stands"
+counting 0 done / 4 open / 1 blocked and naming both the blocked and the overdue one; **Generate
+report with no `ANTHROPIC_API_KEY`** — it says so and ships the counted version rather than an empty
+page; Overview's client count and its "what changed lately" feed.
+
+#### THE ONE THAT LOSES WORK
+
+The roster held **two members called "Ryder Schilling"** — `ryder@aisyndicate.com` (owner) and
+`ryderschilling@gmail.com` (the rep test login made that afternoon). Every person picker drew
+`full_name || email`, so **both rows read identically with nothing to tell them apart.**
+
+A task assigned to the second one **looks completely normal on Operations and is not on Ryder's Work
+page**, and nothing anywhere says so. Proven in a browser, not reasoned about.
+
+`src/lib/people.js` + `tests/people` (63). A name is drawn alone only while it is unique **in the
+list being drawn**; the moment it is not, every copy carries the part of the address that tells them
+apart. Two details that matter more than they look:
+
+- **The disambiguator must FIT.** The first version appended the whole email and the sheet cell
+  truncated it to "Ryder Schilling (ry…" — identical again. **Half a fix is the dangerous kind,
+  because it looks disambiguated.** It now uses the local part, falling back to the whole address
+  only when two local parts also match, so shortening can never create a new collision. The cell
+  also carries a `title`.
+- **One labelling pass over the list actually on screen.** Labelled separately, an eligible "Ryder
+  Schilling" came out plain (unique among the eligible) while the held one came out with its email —
+  two labels worked out against two different lists, which is the exact comparison the reader has to
+  make.
+
+#### THE DATE BUGS
+
+**`Clients.jsx` "With us" read a client starting TOMORROW as "1h ago".** `Date.parse("<date>T00:00:00Z")`
+is midnight in London — 7pm the previous evening in Chicago. Now `teamDayStartOf()`.
+
+**`timeAgo()` had no future guard at all.** Its first line was `if (s < 60) return "just now"` and
+**every negative number is less than 60**, so a client starting next month read "just now". It also
+printed the words "Invalid Date" for anything unparseable. Moved to **`src/lib/timeAgo.js`** — it
+was in `shared.jsx`, which node cannot import, so **the one function every page uses to say WHEN had
+no test at all.** Says "in 2h" / "in 21d" now, "—" for junk. `tests/time-ago` (33). `shared.jsx`
+re-exports it so every existing import keeps working.
+
+**`api/client-report.js` headed a CLIENT report with tomorrow's date.** The identical copied line was
+fixed in `api/console-report.js` and `api/rep-report.js` on 26 Aug, **each with a comment explaining
+the trap**, and this one — the report that gets forwarded to a client — was missed.
+**A bug fixed by hand in two files is not fixed.** Also `api/ai-chat.js` (told the assistant "Today
+is <tomorrow>" and then asked it to work "Friday" out from that) and two preview copies in
+`src/lib/data.js`.
+
+**And the same report disagreed with itself.** After the title was fixed the body still read
+"counted … on 2026-08-31", from `facts.takenAt.slice(0, 10)` in `lib/client-report.js`. Two dates for
+one moment, in one document, going to a client. Fixed with a `teamDayOf()` helper. **The line that
+prints "02:06 UTC" is left alone deliberately: it SAYS UTC, so it is not claiming to be the team's
+day. A date with no timezone beside it is.**
+
+#### FOUND AND NOT FIXED
+
+- **A client cannot be deleted from the console.** `deleteClient()` exists in `src/lib/data.js` and
+  **nothing calls it.** A client added by mistake is permanent. Tasks CAN be deleted from the modal.
+- **Overview takes ~30 seconds to load, Work ~15** — with ONE client and four tasks. Both finish and
+  every number is right. Overview is the landing page.
+- `TicketModal` never accepted the `team` prop it is handed, so tickets have no assignee control at
+  all — that prop and the `listTeam()` read behind it are dead weight on that page.
+
+---
+
+### 56.4 A SALES REP CANNOT BE GIVEN DELIVERY WORK
+
+Not a preference — **the same class as 56.3's same-name bug.** A rep's console is four pages
+(§45/§52) and **Operations is not one of them**, so a task handed to a rep is a task nobody can open:
+not on their Work page, not on any page they have, sitting on the board with their name on it looking
+perfectly assigned.
+
+`canDoDeliveryWork()` in `src/lib/people.js` — active, and owner or admin. Applied to the assignee
+picker in the task modal and on the sheet. **Deactivated members are out too**; Operations had been
+offering them while the Inbox already filtered them out.
+
+Two things that make it safe rather than just narrower:
+
+- **It never hides an existing assignment.** Filtering the list and dropping a task ALREADY on a rep
+  would render the cell "Unassigned" while the database says otherwise — **losing the work a second
+  way while fixing the first.** Whoever holds the row stays in the list, marked
+  *"Ryder Schilling (ryderschilling) · sales — cannot see this page"*. Driven in a browser.
+- **The Owner FILTER at the top keeps the whole roster, deliberately.** Filtering to a rep is how you
+  FIND a task wrongly put on one before this rule existed. Narrowing it would hide exactly the rows
+  somebody has to go and fix. `tests/people` pins both halves.
+
+---
+
+### 56.5 THE SCAN WAS NEVER BLOCKED ON ANDREW
+
+The modal said *"the address of our own scanner is not set on the server, and nobody has written down
+what it sends back"*. Ryder: **"i have access to our platform so whatever you need to get it working
+i can grab for you."** So instead of sending him hunting, the platform repo was opened
+(`~/aisyndicate/ai-syndicate-live` — **NOT one of the two connected folders; it needs
+`device_request_folder_access`**) and the contract was **read**:
+
+```
+POST /v1/audit                        ai-syndicate-live/api/v1/audit.js
+auth   X-Api-Key: <key with `write`>  (Authorization: Bearer also works)
+body   { domain, pages, maxPages }
+answer { domain, measured, score, gated, categories, measuredAt,
+         measuredNow, stored, pages:{scored,requested}, notes }
+```
+
+`score` is the AI Access composite 0-100 — which `readAiAccess()` already accepts under the name
+`score`. `categories` is `[{key,label,score,weight}]` **sorted worst-first**, and the platform's own
+comment calls it *"doubles as a fix list"*. That is the pitch material.
+
+**Then production was probed, live.** A same-origin `fetch` run in a browser tab against
+`https://www.aisyndicate.com/api/v1/audit` answers **`401 Missing API key` — NOT `503 the public API
+isn't enabled`. So `ENABLE_PUBLIC_API` is already true in production.** The 401-vs-503 distinction is
+the whole diagnosis and it takes ten seconds.
+
+**THE LESSON: "only Andrew knows" was a note, not a measurement.** The repo was on Ryder's Mac the
+whole time and the endpoint answered a probe from a browser tab. **Read the code and probe the
+endpoint before escalating to a person.** (`.env.local`'s "Andrew is the only one who knows these
+URLs" comment has been corrected in place for the two SCORE lines; PROMPT_SIM and LEADGEN are still
+genuinely unknown.)
+
+#### What changed on our side
+
+- **`PLATFORM_SCORE_URL=https://www.aisyndicate.com/api/v1/audit` — the www host ON PURPOSE.**
+  `aisyndicate.com` redirects to www, and a redirect can turn a POST into a GET and drop the body.
+  Measured: www answers directly; the bare host does not answer without following a redirect first.
+  **The dashboard sign-in link elsewhere uses the BARE domain deliberately, because www has no
+  session. Two opposite rules, both right — check which one you are in.**
+- **`pages: false` is now sent.** With pages on, /v1/audit crawls up to 20 pages; this fetch gives up
+  at 55 seconds and a rep working 3,663 rows is not waiting a minute a row. The site-level pass —
+  robots.txt blocking the AI crawlers, no llms.txt, no schema, no sitemap — is what the pitch is made
+  of anyway, and it returns in seconds.
+- **`categories` is read as findings**, LAST in the candidate list so a scanner sending real
+  `findings` still wins. A category is a scored AREA, not a defect, so it becomes a finding that says
+  exactly that — *"Schema · scored 12 out of 100"*. **No threshold is invented to call one a problem
+  and no remedy text is put in a rep's mouth.** Anything without a name or without a real 0-100 is
+  dropped rather than printed as "undefined out of 100".
+- **`scoreReady()` now requires BOTH the URL and the key, and so does `/api/health`.** Filling in the
+  URL alone — which is the state that had never existed before tonight — would have flipped the badge
+  to "on", drawn a live "Scan now", and 401'd on every press. The modal's own comment says why that
+  is worse than an off button: *"a button that looks live and returns an error is how a rep learns to
+  distrust the whole page."* The 503 now names whichever half is missing.
+
+`tests/platform-scan` (29 checks) is written against the REAL response shape, including that
+**SEO and the buyer-question count come back NULL, never zero** — /v1/audit does not measure them.
+
+#### Two limits before reps are turned loose
+
+- **`AUDIT_RUNS_PER_HOUR = 6`** (`lib/audit-run.js`, platform side), **per workspace** — six scans an
+  hour for the whole team sharing one key, against a list of 3,663 firms. A one-line constant.
+  **That is the real ask for Andrew, not the URL.**
+- Scans of a domain we do not own are **not stored** in our own platform history (`stored: false`).
+  Our audit trail stays ours. Correct, not a failure.
+
+#### The half NOT built
+
+/v1/audit reads the **website**. It says nothing about a firm's Google / AI presence, which is the
+other half of Ryder's ask ("company online profile"). The platform has `brand-serp`, `brand-monitor`,
+`brand-snapshot`, `brand-sentiment`, `reputation` and `agency-prospect-report` — **none were read,
+wired or tested, and nothing is claimed about any of them.** One note on the last: it is
+purpose-built for cold-scanning a prospect, but it is a GET behind `ENABLE_AGENCY_CONSOLE` + a
+dashboard session, and it **deliberately returns only a headline score and red/amber/green bands, no
+issue text** — a teaser for the agency's own customers, not pitch material for us.
+
+### 56.6 THE SCAN CHIP
+
+"Scan site" was drawn in `adm-db-empty` — the faint grey this sheet uses for "there is nothing here",
+**the same as "no site" one row below it.** An action and a dead end in one colour, on 3,663 rows.
+Now `.adm-sh-scanchip`: a tinted chip with an arrow when there is a website, faint grey when there is
+not. A chip and not a full button because the DO column already carries the loud ones.
+
+---
+
+### Files
+
+```
+NEW   src/lib/pageForAddress.js      the whole routing rule, testable at last
+NEW   src/lib/timeAgo.js             past AND future, and never "Invalid Date"
+NEW   src/lib/people.js              one name per person, and who may be given work
+NEW   src/lib/connectProblem.js      why a mailbox did not connect, in words
+NEW   tests/page-for-address (34) · tests/time-ago (33) · tests/people (63)
+      tests/connect-problem (28) · tests/platform-scan (29)
+MOD   AdminDashboard.jsx · Clients.jsx · shared.jsx · opsCells.jsx · opsTable.jsx
+      Operations.jsx · Inbox.jsx · SalesPage.jsx · salesSheet.jsx · admin.css
+      api/sales-score.js · api/client-report.js · api/ai-chat.js · api/health.js
+      lib/client-report.js · src/lib/data.js · .env.local
+MOD   tests/sales (repointed to pageForAddress) · tests/company-report (both-halves rule)
+```
+
+Every suite re-run, nothing failed. `npx eslint src lib api tests` clean.
+
+### Blocked until
+
+1. **Deployed. Nothing from §49–§56 is pushed.**
+2. **`PLATFORM_SCORE_KEY`** — a write-scope key from the platform's own API console
+   (`aisyndicate.com` → Dashboard → **API**, tick "Can verify (write)"). Until then the Scan button
+   is correctly off. **NO SCAN HAS EVER BEEN RUN — the first press after the key goes in is the real
+   test, and it is the first thing to check.**
+3. **A restart of `npm run dev`** before the `lib/client-report.js` date fix can even be seen — a
+   running dev server does not pick up a new function in a `lib/` file (Node caches the module; the
+   vite plugin only cache-busts `api/`). The api/ half of the same fix WAS picked up, which is why
+   the report title changed and the body did not, in the same click.
+4. `AUDIT_RUNS_PER_HOUR` raised, before a rep works a list against six scans an hour.
+5. An @aisyndicate.com Google Workspace account per rep, before any rep can use the Gmail page.
+6. An `ANTHROPIC_API_KEY`, still (§55).
+7. The rep view has still never been driven (§52). Tonight's rep-side Gmail attempt was stopped by
+   `org_internal`, not by our code.
+
+## §57. NOTION MOVES IN, AND THE SHEET'S REPS GET ACCOUNTS — Mon 31 Aug 2026 (append-only section)
+
+Ryder: *"the new admin is ready to imput our clients and also merge our lead sheet so
+everything now runs off of the admin."* Built overnight, no questions asked.
+
+### Done live
+
+Six clients from Notion 🏢 Clients are in the deployed console, through the Clients page's
+existing JSON import: Shiner Law Group · Dahler Group (30A) · Justin Dyar · Michelle Creamer ·
+Jessica Mackrael · Matt McCall. 6 imported, 0 skipped, verified on screen.
+
+Three stages are placeholders and each says so in its own notes, because Notion holds states
+this console has no stage for ("website build", "waiting on IDX", and a Month 2 with no week
+number).
+
+### New files
+
+| Piece | File |
+|---|---|
+| Notion rows → admin_tasks patches, and the plan | `lib/notion-merge.js` |
+| The paste screen | `ImportTasksModal` in `src/components/admin/Operations.jsx` |
+| Sales Owner names → people → accounts → claims | `lib/sales-owners.js` |
+| The endpoint that writes them | `api/sales-owners.js` |
+| The screen | `src/components/admin/salesOwners.jsx` |
+| Tests | `tests/notion-merge` (73) · `tests/sales-owners` (79) |
+| The 107 real rows, ready to paste | `_merge/notion-tasks-2026-08-31.json` |
+
+`src/lib/data.js` gained `listAllTasksForImport()`. `vercel.json` gained a 60s ceiling for
+`api/sales-owners.js`.
+
+### Rules that must not be broken
+
+1. **A task is matched on (client, task name).** There is no Notion id on `admin_tasks`, so
+   that pair is the only stable key across a re-paste. Deciding it off a capped read is how
+   one paste becomes two copies — hence `listAllTasksForImport()`, never `listTasks()`.
+2. **A client is never invented, and never picked between.** No match refuses the row by name;
+   two clients answering to one name also refuses. A task with `client_id` null is invisible
+   everywhere, which is the vanished-task failure from the Aug 30 dry run.
+3. **An empty Notion cell never blanks a value**, and `description` is fill-only — the export
+   carries a link there, and a re-paste must not replace a brief somebody typed here.
+4. **Done never reopens.** Every other field on a done task still updates.
+5. **Assignees match on email, never on a display name** (two members are called "Ryder
+   Schilling"), and a **sales rep is never given an Operations task** — `canDoDeliveryWork`
+   in `src/lib/people.js`, the rule every picker already obeys and which this import was the
+   one remaining door on.
+6. **Only `exact` and `initial` matchOwner hits may be acted on** — `CONFIDENT` in
+   `lib/sales-owners.js`. The `first` rule fires on a shared first name alone, so "Andrew
+   Miller" matches Andrew Soncini and forty rows of one person's work move to another. A
+   first-name-only hit is shown to a person and acted on in neither direction.
+7. **`api/sales-owners.js` never sends an email.** `createUser`, not the invite path.
+   Placeholder addresses live on `sheet.aisyndicate.invalid` (RFC 2606, resolves nowhere).
+   `/api/invite` is untouched and is still how a real person gets a login.
+8. **A claim writes `claimed_at` AND `cadence_started_at`, and neither is "now"** — the date
+   comes from `first_contact_at`, exactly as `lib/sales-import.js` derives it. Every claim
+   update also carries `.is("owner_id", null)`, and every accepted row gets an
+   `admin_lead_activity` line.
+9. **The check screen lists what changes, field by field, old → new.** A screen that shows
+   only counts is asking somebody to agree to a number.
+
+### Two lessons worth carrying anywhere
+
+**Check what is actually listening before believing a browser.** A guard "did not fire" in a
+headless run for an hour. The code was correct throughout; a stale `npx serve` from a build
+two hours old still held the port, and with SPA fallback even a missing asset answered 200.
+
+**A count on a screen must be the count the button will do.** The claimable figure was
+computed against the roster as it IS rather than as it WILL BE, so the screen read "1"
+directly above a button about to move three thousand rows.
+
+### Proof
+
+lint clean · **2,829 checks across 33 suites** (was 2,489 across 25) · build clean at 171
+modules · driven in a real browser against the built bundle. An adversarial checker found 15
+defects in this work and all 15 are fixed; eight rules had no test at all and two more were
+guards that could not fire.

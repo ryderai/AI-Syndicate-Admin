@@ -34,10 +34,11 @@ const CLIENTS = [
   { id: "c3", name: "Matt McCall" },
 ];
 const TEAM = [
-  { user_id: "u-ryder", email: "ryder@aisyndicate.com", full_name: "Ryder Schilling", active: true },
-  { user_id: "u-cj", email: "cj@aisyndicate.com", full_name: "CJ Britton", active: true },
-  { user_id: "u-andrew", email: "andrew@aisyndicate.com", full_name: "Andrew Soncini", active: true },
-  { user_id: "u-old", email: "gone@aisyndicate.com", full_name: "Gone Person", active: false },
+  { user_id: "u-ryder", email: "ryder@aisyndicate.com", full_name: "Ryder Schilling", role: "owner", active: true },
+  { user_id: "u-cj", email: "cj@aisyndicate.com", full_name: "CJ Britton", role: "owner", active: true },
+  { user_id: "u-andrew", email: "andrew@aisyndicate.com", full_name: "Andrew Soncini", role: "admin", active: true },
+  { user_id: "u-old", email: "gone@aisyndicate.com", full_name: "Gone Person", role: "admin", active: false },
+  { user_id: "u-rep", email: "rep@aisyndicate.com", full_name: "A Sales Rep", role: "sales", active: true },
 ];
 
 console.log("\nTHE OPTION LISTS ARE NOTION'S OWN");
@@ -46,10 +47,19 @@ console.log("\nTHE OPTION LISTS ARE NOTION'S OWN");
  * notices. §11 rule 1 says these are copied word for word. */
 {
   const DATA = src("src/lib/data.js");
-  ok("every category this file accepts is in TASK_CATEGORIES",
-    CATEGORIES.every((c) => DATA.includes(`"${c}"`)));
-  ok("every phase this file accepts is in TASK_PHASES",
-    PHASES.every((p) => DATA.includes(`"${p}"`)));
+  /* PINNED TO THE DECLARATION, not to the word appearing anywhere in a
+   * 5,000-line file. "Access", "Technical", "Content", "Billing" and
+   * "Reporting" all occur elsewhere in data.js, so a looser check passed even
+   * with TASK_CATEGORIES deleted outright — a guard that cannot fire. */
+  const constLine = (name) => (DATA.match(new RegExp(`export const ${name} = \\[[^\\]]*\\]`)) || [""])[0];
+  ok("TASK_CATEGORIES still exists as a declaration", constLine("TASK_CATEGORIES").length > 20);
+  ok("every category this file accepts is IN that declaration",
+    CATEGORIES.every((c) => constLine("TASK_CATEGORIES").includes(`"${c}"`)));
+  ok("TASK_PHASES still exists as a declaration", constLine("TASK_PHASES").length > 20);
+  ok("every phase this file accepts is IN that declaration",
+    PHASES.every((p) => constLine("TASK_PHASES").includes(`"${p}"`)));
+  ok("...and the console has no category this importer would silently drop",
+    (constLine("TASK_CATEGORIES").match(/"/g) || []).length / 2 === CATEGORIES.length);
   eq("the three Notion statuses map onto the console's three",
     Object.values(NOTION_STATUS), ["todo", "in_progress", "done"]);
   ok("the priority keys carry Notion's emoji, because that IS the stored value there",
@@ -93,7 +103,7 @@ console.log("\nWHO OWNS IT — matched on EMAIL, never on a display name");
 {
   /* THE AUG 30 TRAP: two members share a display name. Nothing here may ever
    * fall back to a name. */
-  const twoRyders = [...TEAM, { user_id: "u-ryder2", email: "ryder2@aisyndicate.com", full_name: "Ryder Schilling", active: true }];
+  const twoRyders = [...TEAM, { user_id: "u-ryder2", email: "ryder2@aisyndicate.com", full_name: "Ryder Schilling", role: "admin", active: true }];
   const r = mapTask({ client: "Shiner Law Group", name: "t", assignees: ["ryder2@aisyndicate.com"] }, CLIENTS, twoRyders);
   eq("two people with ONE name still resolve, because the key is the address", r.row.assigned_to, "u-ryder2");
   ok("a bare display name is never accepted as an assignee",
@@ -208,6 +218,78 @@ console.log("\nONE BAD ROW DOES NOT STOP THE OTHER HUNDRED");
 eq("something that is not a list is refused with a sentence, not a crash",
   planTaskImport({ client: "x" }, { clients: CLIENTS, team: TEAM, existing: [] }).problems.length, 1);
 eq("an empty list does nothing at all", planSummary(planTaskImport([], { clients: CLIENTS, team: TEAM, existing: [] })), "0 new · 0 updated · 0 already right");
+
+console.log("\nRULES THE FIRST VERSION OF THIS FILE HAD NO TEST FOR");
+
+/* Every check below was written after an adversarial reviewer deleted the rule
+ * it guards and no test noticed. */
+
+{
+  /* THE CLIENT MATCH IS EQUALITY. Loosening it to startsWith put 36 tasks on
+   * the wrong client and the whole suite still passed. */
+  ok("a client name that merely STARTS the real one is refused",
+    mapTask({ client: "Matt", name: "t" }, CLIENTS, TEAM).row === null);
+  ok("...and so is one the real name starts with",
+    mapTask({ client: "Matt McCall Realty", name: "t" }, CLIENTS, TEAM).row === null);
+}
+{
+  /* TWO CLIENTS WITH ONE NAME. Every other matcher here refuses; this one used
+   * to take whichever sorted first. */
+  const dupes = [...CLIENTS, { id: "c99", name: "matt  mccall" }];
+  const r = mapTask({ client: "Matt McCall", name: "t" }, dupes, TEAM);
+  ok("two clients answering to one name refuses the row", r.row === null);
+  ok("...and says to merge or rename them", /more than one client/.test(r.problems[0]), r.problems[0]);
+}
+{
+  /* A REP CANNOT BE HANDED DELIVERY WORK. src/lib/people.js: "a task handed to
+   * a rep is a task nobody can open". The import was the one door left open. */
+  const r = mapTask({ client: "Shiner Law Group", name: "t", assignees: ["rep@aisyndicate.com"] }, CLIENTS, TEAM);
+  ok("a SALES REP is never given an Operations task", r.row.assigned_to === undefined);
+  ok("...and the reason says which console they have", /console/.test(r.problems[0] || ""), r.problems[0]);
+  ok("...and their name is still kept in the brief", /rep@aisyndicate\.com/.test(r.row.description || ""));
+  ok("an owner and an admin both still can", 
+    mapTask({ client: "Shiner Law Group", name: "t", assignees: ["andrew@aisyndicate.com"] }, CLIENTS, TEAM).row.assigned_to === "u-andrew");
+}
+{
+  /* THE ONE-LINE STATUS IS THE POINT OF THE EXPORT. Turning the carry-over off
+   * broke nothing, on a payload where 68 of 107 rows have one. */
+  const r = mapTask({ client: "Shiner Law Group", name: "t", report: "12 of 26 pages done" }, CLIENTS, TEAM);
+  eq("the latest report is carried over", r.row.latest_report, "12 of 26 pages done");
+}
+{
+  /* FILL-ONLY. The export writes a link into description; a re-paste must not
+   * replace a brief somebody typed here with that link. */
+  const existing = [{ id: "t1", client_id: "c1", name: "T", description: "the real brief, typed here" }];
+  const p = planTaskImport([{ client: "Shiner Law Group", name: "T", description: "Copied from Notion. Original: https://..." }], { clients: CLIENTS, team: TEAM, existing });
+  eq("a description already written here is NEVER overwritten", p.update.length, 0);
+  const p2 = planTaskImport([{ client: "Shiner Law Group", name: "T", description: "from Notion" }], { clients: CLIENTS, team: TEAM, existing: [{ id: "t1", client_id: "c1", name: "T" }] });
+  eq("...but an empty one is filled", p2.update[0].patch.description, "from Notion");
+}
+{
+  /* THE CHECK SCREEN HAS TO BE ABLE TO SAY WHAT CHANGES, field by field, or a
+   * person is agreeing to a number rather than to a change. */
+  const existing = [{ id: "t1", client_id: "c1", name: "T", status: "todo", priority: "low" }];
+  const p = planTaskImport([{ client: "Shiner Law Group", name: "T", status: "In Progress", priority: "🔴 High" }], { clients: CLIENTS, team: TEAM, existing });
+  eq("every update lists its fields", p.update[0].changes.map((c) => c.field).sort(), ["priority", "status"]);
+  eq("...with the value it is replacing", p.update[0].changes.find((c) => c.field === "priority").from, "low");
+  eq("...and the value going in", p.update[0].changes.find((c) => c.field === "priority").to, "high");
+}
+{
+  /* THE LENGTH LIMITS. All three could be deleted freely; the longest real
+   * task name is 178 characters, so nothing exercised them. */
+  const long = "x".repeat(30000);
+  const r = mapTask({ client: "Shiner Law Group", name: long, report: long, description: long }, CLIENTS, TEAM);
+  ok("a runaway task name is cut, not sent whole", r.row.name.length === 400);
+  ok("a runaway report is cut", r.row.latest_report.length === 20000);
+  ok("a runaway brief is cut", r.row.description.length === 20000);
+}
+{
+  /* AN EMPTY CELL ARRIVES AS AN ABSENT KEY. This is where rule 3 actually acts;
+   * the line in planTaskImport is the second lock on the same door. */
+  const r = mapTask({ client: "Shiner Law Group", name: "t", status: "", priority: "   ", category: null, phase: undefined, report: "", due: "" }, CLIENTS, TEAM);
+  eq("nothing blank is even put on the patch", Object.keys(r.row).sort(), ["client_id", "name"]);
+  eq("...and a blank is not reported as a problem either", r.problems.length, 0);
+}
 
 console.log("\nTHE KEY ITSELF");
 eq("case and spacing are flattened", nameKey("  Give   JOEY access "), "give joey access");

@@ -729,6 +729,25 @@ export async function listTasks(clientId = null) {
   return { rows: data || [], sample: false };
 }
 
+/* EVERY task, not the first 500.
+ *
+ * The Notion import decides whether a task already exists by looking at what it
+ * was handed, so a capped list means a re-paste sees a partial key set and
+ * creates a second copy of everything it could not see. `listTasks` caps at 500
+ * with no warning — the same shape as the four readers lib/paging.js was
+ * written for on 30 Aug — and 107 tasks land from that import alone.
+ *
+ * A separate reader rather than a change to `listTasks`, because the Operations
+ * table wants the fast capped read and the importer wants the true one, and
+ * quietly making every page read 4,000 rows to fix an import is how a page gets
+ * slow for a reason nobody can find later. */
+export async function listAllTasksForImport() {
+  if (!live()) return { rows: [...previewStore.tasks], sample: true };
+  const supabase = getSupabase();
+  return fetchPaged(() => supabase.from("admin_tasks").select("id, client_id, name, status, priority, category, phase, due_date, latest_report, description, assigned_to"),
+    { order: "created_at", ascending: false, max: 20000 });
+}
+
 export async function upsertTask(patch) {
   if (!live()) {
     if (patch.id) {
