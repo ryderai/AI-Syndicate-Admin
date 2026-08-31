@@ -110,9 +110,25 @@ console.log("\nWHO OWNS IT — matched on EMAIL, never on a display name");
     mapTask({ client: "Shiner Law Group", name: "t", assignees: ["Ryder Schilling"] }, CLIENTS, twoRyders).row.assigned_to === undefined);
 }
 {
+  /* MIGRATION 0028. Until 31 Aug this console held one person per task, so the
+   * import put the first name on the row and the rest into the brief — a name
+   * demoted to prose. Both go on the task now. */
   const r = mapTask({ client: "Shiner Law Group", name: "t", assignees: ["ryder@aisyndicate.com", "cj@aisyndicate.com"] }, CLIENTS, TEAM);
-  eq("the first named person owns it", r.row.assigned_to, "u-ryder");
-  ok("the second is WRITTEN DOWN, not dropped", /cj@aisyndicate\.com/.test(r.row.description || ""), r.row.description);
+  eq("BOTH people go on the task", r.row.assignees, ["u-ryder", "u-cj"]);
+  eq("the first named person is the primary", r.row.assigned_to, "u-ryder");
+  ok("the second is NOT also written into the brief — that would read as a third person",
+    !/cj@aisyndicate\.com/.test(r.row.description || ""), r.row.description);
+  ok("the primary is always inside the list", r.row.assignees.includes(r.row.assigned_to));
+}
+{
+  /* A re-paste must not rewrite 107 rows because two arrays are never ===. */
+  const existing = [{ id: "t1", client_id: "c1", name: "T", assigned_to: "u-ryder", assignees: ["u-ryder", "u-cj"] }];
+  const p = planTaskImport([{ client: "Shiner Law Group", name: "T", assignees: ["ryder@aisyndicate.com", "cj@aisyndicate.com"] }], { clients: CLIENTS, team: TEAM, existing });
+  eq("the same two people is not a change", p.update.length, 0);
+  const p2 = planTaskImport([{ client: "Shiner Law Group", name: "T", assignees: ["cj@aisyndicate.com", "ryder@aisyndicate.com"] }], { clients: CLIENTS, team: TEAM, existing });
+  eq("...but swapping who is primary IS a change", p2.update.length, 1);
+  const p3 = planTaskImport([{ client: "Shiner Law Group", name: "T", assignees: ["ryder@aisyndicate.com"] }], { clients: CLIENTS, team: TEAM, existing: [{ id: "t1", client_id: "c1", name: "T", assigned_to: "u-ryder" }] });
+  eq("a row written before 0028 is read from its single field, not seen as a change", p3.update.length, 0);
 }
 {
   const r = mapTask({ client: "Shiner Law Group", name: "t", assignees: ["stranger@example.com"] }, CLIENTS, TEAM);

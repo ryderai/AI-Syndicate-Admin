@@ -418,15 +418,36 @@ export function SelectCell({ value, options, onChange, placeholder = "Empty", cl
   );
 }
 
-/** Who owns the task. options: [{ value, label }]. */
+/** Who is on the task. `value` is the LIST — primary first (migration 0028).
+ *
+ * Ryder, 31 Aug 2026: "make sure two people can be assigned to the same task."
+ *
+ * The menu ticks everybody who is on it and stays OPEN while you pick, because
+ * putting three people on a task through a menu that shuts after each one is
+ * three round trips for one thought. It closes on Done, on Escape, or on a
+ * click outside — the Popover already owns all three.
+ *
+ * The first name in the list is the primary, which is what the single-slot
+ * screens show. Clicking a name that is already ticked takes them off; clicking
+ * "Make primary" moves them to the front without taking anybody off. */
 export function PersonCell({ value, options, onChange, filter = null }) {
   const [anchor, setAnchor] = useState(null);
-  const opt = options.find((o) => o.value === value) || null;
+  /* Tolerates a bare id as well as a list, because a caller written before 0028
+   * — or a row read before the backfill — still hands one over. */
+  const ids = Array.isArray(value) ? value.filter(Boolean) : (value ? [value] : []);
+  const labelOf = (id) => (options.find((o) => o.value === id) || {}).label || null;
+  const primaryLabel = ids.length ? (labelOf(ids[0]) || "Someone") : null;
+  const shown = ids.length > 1 ? `${primaryLabel} +${ids.length - 1}` : primaryLabel;
+  const everyone = ids.map((id) => labelOf(id) || "Someone").join(", ");
+  const toggle = (id) => onChange(ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]);
+  const opt = primaryLabel ? { label: primaryLabel } : null;
   return (
     <>
       <button
         type="button" className="adm-db-btn" aria-haspopup="listbox"
-        aria-label={`Assigned to ${opt ? opt.label : "nobody"} — click to change`}
+        aria-label={ids.length
+          ? `On this task: ${everyone} — click to change`
+          : "Assigned to nobody — click to change"}
         /* The cell is a fixed width and a disambiguated label —
          * "Ryder Schilling (ryderschilling)", drawn when two teammates share a
          * name — does not fit in it. Truncated to "Ryder Schilling (ry…" the
@@ -435,11 +456,11 @@ export function PersonCell({ value, options, onChange, filter = null }) {
          * choice is made; this puts the whole label one hover away in the row
          * as well, rather than pretending the cut string is readable.
          * 30 Aug 2026. */
-        title={opt ? opt.label : "Unassigned"}
+        title={ids.length ? everyone : "Unassigned"}
         onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
       >
         {opt ? (
-          <span className="adm-db-person"><Avatar name={opt.label} />{opt.label}</span>
+          <span className="adm-db-person"><Avatar name={primaryLabel} />{shown}</span>
         ) : (
           <span className="adm-db-empty">Unassigned</span>
         )}
@@ -447,22 +468,46 @@ export function PersonCell({ value, options, onChange, filter = null }) {
       {anchor && (
         <Popover anchor={anchor} onClose={() => setAnchor(null)}>
           <FilterHead filter={filter} close={() => setAnchor(null)} />
-          <div className="adm-db-pop-list" role="listbox">
-            {options.map((o) => (
-              <button
-                key={String(o.value)} type="button" role="option" aria-selected={o.value === value}
-                className={`adm-db-pop-item${o.value === value ? " on" : ""}`}
-                onClick={() => { setAnchor(null); if (o.value !== value) onChange(o.value); }}
-              >
-                <span className="adm-db-person"><Avatar name={o.label} />{o.label}</span>
-                {o.value === value ? <span className="adm-db-check">✓</span> : null}
-              </button>
-            ))}
-            {value ? (
-              <button type="button" className="adm-db-pop-item plain" onClick={() => { setAnchor(null); onChange(null); }}>
-                Unassign
+          <div className="adm-db-pop-list" role="listbox" aria-multiselectable="true">
+            {ids.length > 1 ? (
+              <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--ink-2)", lineHeight: 1.5 }}>
+                {ids.length} people on this. <strong>{primaryLabel}</strong> is the primary — that is
+                the one name the board and the reports show.
+              </div>
+            ) : null}
+            {options.map((o) => {
+              const on = ids.includes(o.value);
+              const isPrimary = on && ids[0] === o.value;
+              return (
+                <button
+                  key={String(o.value)} type="button" role="option" aria-selected={on}
+                  className={`adm-db-pop-item${on ? " on" : ""}`}
+                  onClick={() => toggle(o.value)}
+                >
+                  <span className="adm-db-person"><Avatar name={o.label} />{o.label}</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {on && !isPrimary ? (
+                      <span
+                        role="button" tabIndex={0}
+                        style={{ fontSize: 10, color: "var(--ink-2)", textDecoration: "underline" }}
+                        onClick={(e) => { e.stopPropagation(); onChange([o.value, ...ids.filter((x) => x !== o.value)]); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); onChange([o.value, ...ids.filter((x) => x !== o.value)]); } }}
+                      >make primary</span>
+                    ) : null}
+                    {isPrimary ? <span style={{ fontSize: 10, color: "var(--ink-2)" }}>primary</span> : null}
+                    {on ? <span className="adm-db-check">✓</span> : null}
+                  </span>
+                </button>
+              );
+            })}
+            {ids.length ? (
+              <button type="button" className="adm-db-pop-item plain" onClick={() => { setAnchor(null); onChange([]); }}>
+                Take everybody off
               </button>
             ) : null}
+            <button type="button" className="adm-db-pop-item plain" onClick={() => setAnchor(null)}>
+              Done
+            </button>
           </div>
         </Popover>
       )}

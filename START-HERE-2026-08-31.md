@@ -1,3 +1,8 @@
+# START HERE (SUPERSEDED — read START-HERE-2026-09-01.md first)
+
+> Superseded on the evening of 31 Aug 2026. Its "nothing is deployed" line is wrong: Ryder
+> deployed that morning and Notion has moved in since. Kept for its traps and its history.
+
 # START HERE — AI Syndicate admin console, handed over Mon 31 Aug 2026
 
 **This replaces `START-HERE-2026-08-30.md`, which is now wrong on the one thing that mattered most:

@@ -7,6 +7,7 @@ import {
  * src/lib/opsSort.js and tests/ops. */
 import { STATUS_ORDER, sortRowsBy, nextSort } from "../../lib/opsSort.js";
 import { personLabel, deliveryPeopleOptions } from "../../lib/people.js";
+import { assigneesOf } from "../../../lib/task-assignees.js";
 import {
   Chip, SelectCell, PersonCell, TextCell, PopoutCell, DateCell, Avatar, todayISO, Popover,
   STATUS_COLOR, PRIORITY_COLOR, PRIORITY_ICON, CATEGORY_COLOR, PHASE_COLOR, clientColor,
@@ -227,18 +228,41 @@ export default function TaskDatabase({
   const cell = (t, key) => {
     switch (key) {
       case "name":
+        /* THE NAME OPENS THE TASK — 31 Aug 2026.
+         *
+         * It was an inline text box. The row is clickable now, but every cell
+         * in this table is filled edge to edge by its own control, so the
+         * "click anywhere that is not a control" rule left literally nowhere to
+         * click: measured on the built bundle, all 11 cells were 100% button.
+         * A row that is clickable and unreachable is worse than one that is
+         * neither, because the cursor says otherwise.
+         *
+         * So the widest cell is the way in, which is also where a person aims.
+         * Renaming moved into the panel, which is what was asked for — "edit
+         * the text and all that there". */
         return (
-          <TextCell
-            value={t.name} required strong strike={t.status === "done"}
-            placeholder="Untitled" onChange={(v) => onPatch(t, { name: v })}
-          />
+          <button
+            type="button"
+            className={`adm-db-btn adm-db-openname${t.status === "done" ? " is-done" : ""}`}
+            title="Open the task"
+            onClick={() => onOpen?.(t)}
+          >
+            <span className={t.status === "done" ? "adm-db-strike" : ""}>
+              {t.name || <span className="adm-db-empty">Untitled</span>}
+            </span>
+          </button>
         );
       case "status":
         return <SelectCell label="Status" value={t.status} options={statusOptions} clearable={false} onChange={(v) => onPatch(t, { status: v })} filter={filterFor("status", t.status, TASK_STATUS_LABELS[t.status] || t.status)} />;
       case "client":
         return <SelectCell label="Client" value={t.client_id} options={clientOptions} placeholder="No client" onChange={(v) => onPatch(t, { client_id: v })} filter={filterFor("client", t.client_id, clientName(t.client_id) || "tasks with no client")} />;
       case "assignee":
-        return <PersonCell value={t.assigned_to} options={personOptionsFor(t)} onChange={(v) => onPatch(t, { assigned_to: v })} filter={filterFor("assignee", t.assigned_to, memberName(t.assigned_to) || "unassigned tasks")} />;
+        /* The LIST goes in and the LIST comes back — `assignees` is the field
+         * that means "who is on it" and `assigned_to` is derived from its first
+         * entry (migration 0028, and withAssignees in src/lib/data.js). Sending
+         * the single field here would quietly drop everybody but the primary
+         * on every edit. */
+        return <PersonCell value={assigneesOf(t)} options={personOptionsFor(t)} onChange={(v) => onPatch(t, { assignees: v })} filter={filterFor("assignee", t.assigned_to, memberName(t.assigned_to) || "unassigned tasks")} />;
       case "priority":
         return <SelectCell label="Priority" value={t.priority} options={priorityOptions} clearable={false} onChange={(v) => onPatch(t, { priority: v })} filter={filterFor("priority", t.priority, TASK_PRIORITY_LABELS[t.priority] || t.priority)} />;
       case "due":
@@ -342,7 +366,25 @@ export default function TaskDatabase({
                 </tr>
 
                 {!shut && sortRowsBy(g.rows, sort, { clientName, memberName, phases: TASK_PHASES }).map((t) => (
-                  <tr key={t.id} className={t.status === "done" ? "adm-db-row is-done" : "adm-db-row"}>
+                  /* CLICK THE ROW, OPEN THE TASK — 31 Aug 2026.
+                   *
+                   * The guard is `closest`, not `e.target.tagName`. React
+                   * events bubble through the REACT tree, so a click on the
+                   * label inside a chip arrives here with the chip's own
+                   * button as an ancestor and nothing else to tell them apart
+                   * — the same trap the sales sheet hit in August. Anything
+                   * that is its own control keeps its own click; everywhere
+                   * else on the row opens the panel. */
+                  <tr
+                    key={t.id}
+                    className={`${t.status === "done" ? "adm-db-row is-done" : "adm-db-row"}${onOpen ? " is-clickable" : ""}`}
+                    onClick={(e) => {
+                      if (!onOpen) return;
+                      if (e.target.closest('button, a, input, select, textarea, [role="button"], [contenteditable="true"]')) return;
+                      if (window.getSelection && String(window.getSelection()).length > 0) return;
+                      onOpen(t);
+                    }}
+                  >
                     {visible.map((c) => <td key={c.key} className="adm-db-cell">{cell(t, c.key)}</td>)}
                     <td className="adm-db-cell">
                       <button type="button" className="adm-db-open" title="Open the task" onClick={() => onOpen(t)}>⤢</button>

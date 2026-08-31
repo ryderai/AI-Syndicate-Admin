@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  listClients, upsertClient, listTasks, listAllTasksForImport, upsertTask, deleteTask,
+  listClients, upsertClient, deleteClient, listTasks, listAllTasksForImport, upsertTask, deleteTask,
   listWeekly, upsertWeekly, listTeam, logActivity, listClientSites, listEmailThreads,
   CLIENT_STAGES, TASK_STATUSES, TASK_STATUS_LABELS,
   TASK_CATEGORIES, TASK_PHASES, TASK_PRIORITIES, TASK_PRIORITY_LABELS,
@@ -21,6 +21,9 @@ import { useScreenContext } from "../../lib/screenContext.js";
 import { useRoute } from "../../lib/router.js";
 import { peopleOptions, personLabel, deliveryPeopleOptions } from "../../lib/people.js";
 import { planTaskImport, planSummary } from "../../../lib/notion-merge.js";
+import { assigneesOf, isAssignedTo } from "../../../lib/task-assignees.js";
+import TaskDrawer from "./taskDrawer.jsx";
+import { CLIENT_DELETE_CASCADES, CLIENT_DELETE_KEEPS, confirmsDelete, deleteWarning } from "../../../lib/client-delete.js";
 
 /* Operations — the Notion replacement, in Notion's own shape.
  *
@@ -57,6 +60,16 @@ const PREFS_KEY = "adm-ops-prefs";
 /* What Postgres says when a column in the patch is not in the table. Matched so
  * a missing migration reads as one plain sentence instead of PGRST204. */
 const MISSING_DESCRIPTION = /(column|schema cache)[^]*?description|description[^]*?(column|schema cache|does not exist)/i;
+
+/* MIGRATION 0028 MAY NOT BE RUN YET — the same trap 0012 set, and the reason
+ * that retry exists. Postgres rejects the WHOLE row when it is sent a column
+ * the table does not have, so a console deployed before 0028 runs could not
+ * save ANY task edit: a due-date change would die on `assignees`, a field the
+ * person never touched.
+ *
+ * Deploy order stops mattering because of this. The list is dropped, the rest
+ * saves, `assigned_to` still carries the primary, and the screen says why. */
+const MISSING_ASSIGNEES = /(column|schema cache)[^]*?assignees|assignees[^]*?(column|schema cache|does not exist)/i;
 
 function readPrefs() {
   try {
@@ -114,6 +127,7 @@ export default function Operations({ member }) {
   const [colAnchor, setColAnchor] = useState(null);
   const [taskModal, setTaskModal] = useState(null);   // null | {} | task
   const [importTasksOpen, setImportTasksOpen] = useState(false);
+  const [openTaskId, setOpenTaskId] = useState(null);
 
   const loadTasks = useCallback(async () => {
     const t = await listTasks();
@@ -161,7 +175,18 @@ export default function Operations({ member }) {
 
   const patchTask = async (task, patch) => {
     setTasks((cur) => cur.map((t) => (t.id === task.id ? { ...t, ...patch } : t)));
-    const res = await upsertTask({ id: task.id, ...patch });
+    let res = await upsertTask({ id: task.id, ...patch });
+    if (!res.ok && MISSING_ASSIGNEES.test(String(res.error || ""))) {
+      /* Fall back to the single field, so a console running ahead of its
+       * migration still saves — and say so, once, rather than silently
+       * pretending two people were stored. */
+      const { assignees, ...rest } = patch;
+      res = await upsertTask({ id: task.id, ...rest, assigned_to: (assignees || [])[0] || null });
+      if (res.ok) {
+        toast.warn("Saved — but only one person",
+          "This database has no assignees column yet. Run supabase/migrations/0028_task_assignees.sql, then set the rest.");
+      }
+    }
     if (!res.ok) {
       /* Undo only the fields this call touched. Restoring the whole old row would
        * also undo anything else that changed while we were waiting. */
@@ -197,6 +222,16 @@ export default function Operations({ member }) {
     else toast.success("Task added", name);
   };
 
+  /* Deleting a task lives here with the other writes, so the drawer and the
+   * task modal both go through one path and the list is fixed in one place. */
+  const removeTask = async (task) => {
+    const res = await deleteTask(task.id);
+    if (!res.ok) { toast.error("Couldn't delete that", res.error); return false; }
+    setTasks((cur) => cur.filter((t) => t.id !== task.id));
+    toast.success("Task deleted", task.name);
+    return true;
+  };
+
   /* ---- what the table sees --------------------------------------- */
 
   const me = member?.user_id;
@@ -207,10 +242,13 @@ export default function Operations({ member }) {
 
     if (clientFilter !== "all" && (t.client_id || "__none") !== clientFilter) return false;
 
-    if (assigneeFilter === "__me" && t.assigned_to !== me) return false;
-    if (assigneeFilter === "__none" && t.assigned_to) return false;
+    /* THE OWNER FILTER ASKS "IS THIS PERSON ON IT", not "is it theirs".
+     * Filtering on the primary alone hides a task from the second person who is
+     * standing on it — the same reason the Work page reads the whole list. */
+    if (assigneeFilter === "__me" && !isAssignedTo(t, me)) return false;
+    if (assigneeFilter === "__none" && assigneesOf(t).length) return false;
     if (assigneeFilter !== "all" && assigneeFilter !== "__me" && assigneeFilter !== "__none"
-      && t.assigned_to !== assigneeFilter) return false;
+      && !isAssignedTo(t, assigneeFilter)) return false;
 
     for (const k of FACET_FIELDS) {
       const want = facets[k];
@@ -317,7 +355,7 @@ export default function Operations({ member }) {
 
   const dbProps = {
     tasks: filtered, groupBy, columns, clients: clients.rows, team,
-    onPatch: patchTask, onCreate: createTask, onOpen: (t) => setTaskModal(t), onOpenClient: openClient,
+    onPatch: patchTask, onCreate: createTask, onOpen: (t) => setOpenTaskId(t.id), onOpenClient: openClient,
     onFacet: applyFacet, onGroupBy: setGroupBy, facetValue,
     /* Unfiltered, for the column-header menus — see TaskDatabase. */
     allTasks: tasks,
@@ -457,7 +495,7 @@ export default function Operations({ member }) {
           action={activeFilters.length ? <button className="btn" onClick={clearAllFilters}>Clear the filters</button> : null}
         />
       ) : viewId === "board" ? (
-        <TaskBoard tasks={filtered} clients={clients.rows} team={team} onPatch={patchTask} onOpen={(t) => setTaskModal(t)} />
+        <TaskBoard tasks={filtered} clients={clients.rows} team={team} onPatch={patchTask} onOpen={(t) => setOpenTaskId(t.id)} />
       ) : (
         <TaskDatabase {...dbProps} />
       )}
@@ -468,6 +506,24 @@ export default function Operations({ member }) {
           onClose={() => setImportTasksOpen(false)} reload={loadAll}
         />
       )}
+
+      {/* THE DRAWER IS THE TASK. Held by ID, not by the object, so the panel
+          redraws from the page's own list — open it, change something from the
+          table behind it, and the panel is already right. Holding the object
+          would show a copy that quietly went stale. */}
+      {openTaskId && (() => {
+        const t = tasks.find((x) => x.id === openTaskId);
+        if (!t) return null;
+        return (
+          <TaskDrawer
+            task={t} clients={clients.rows} team={team}
+            onPatch={patchTask}
+            onDelete={async (task) => { await removeTask(task); setOpenTaskId(null); }}
+            onOpenClient={(id) => { setOpenTaskId(null); go(`#/dashboard/clients?id=${id}`); }}
+            onClose={() => setOpenTaskId(null)}
+          />
+        );
+      })()}
 
       {taskModal !== null && (
         <TaskModal
@@ -716,7 +772,42 @@ export function ClientModal({ member, client, onClose, reload }) {
     notes: client?.notes || "",
   });
   const [busy, setBusy] = useState(false);
+  const [dangerOpen, setDangerOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [taskCount, setTaskCount] = useState(null);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  /* Count what is about to go, from the database, at the moment the danger
+   * panel is opened. A number remembered from a page load is a number that can
+   * be wrong by the time somebody presses the button. */
+  useEffect(() => {
+    if (!dangerOpen || !client?.id) return;
+    let alive = true;
+    (async () => {
+      const t = await listTasks(client.id);
+      if (alive) setTaskCount(t.error ? null : t.rows.length);
+    })();
+    return () => { alive = false; };
+  }, [dangerOpen, client?.id]);
+
+  /* The gate. Typing the name is not ceremony: it is the difference between
+   * deleting the client you meant and the one that happened to be open. */
+  const nameMatches = confirmsDelete(typed, client?.name);
+
+  const doDelete = async () => {
+    if (!client?.id || !nameMatches) return;
+    setBusy(true);
+    const res = await deleteClient(client.id);
+    setBusy(false);
+    if (!res.ok) { toast.error("Could not delete", res.error); return; }
+    await logActivity({
+      actor: member.user_id, kind: "client_deleted",
+      title: `Deleted client: ${client.name}`,
+      body: `${taskCount === null ? "an unknown number of" : taskCount} tasks went with it. This cannot be undone.`,
+    });
+    toast.success("Client deleted", `${client.name} and everything filed under it are gone.`);
+    onClose(); reload();
+  };
 
   const save = async () => {
     if (!f.name.trim()) { toast.warn("The client needs a name"); return; }
@@ -751,6 +842,45 @@ export function ClientModal({ member, client, onClose, reload }) {
       <Field label="Notes" hint="Passwords never go here — Bitwarden links only.">
         <TextArea value={f.notes} onChange={set("notes")} />
       </Field>
+
+      {/* DELETING A CLIENT — added 31 Aug 2026.
+          Until now there was no way to remove a client from the console at all;
+          the Aug 30 dry run left a fake one on the list with no way to take it
+          off. Owners only, behind a fold, gated on typing the name, and it says
+          out loud what goes and what stays. */}
+      {client?.id && member?.role === "owner" ? (
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--rule)" }}>
+          {!dangerOpen ? (
+            <button className="btn btn-sm" onClick={() => setDangerOpen(true)}>Delete this client…</button>
+          ) : (
+            <div className="adm-db-warn">
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                {deleteWarning(client.name, taskCount)}
+              </div>
+              <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                <strong>Goes with it:</strong>{" "}
+                {CLIENT_DELETE_CASCADES.map(([, what]) => what).join(", ")}.
+                <br />
+                <strong>Kept:</strong> {CLIENT_DELETE_KEEPS.map(([, what]) => what).join("; ")}.
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <Field label={`Type ${client.name} to confirm`}>
+                  <TextInput value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={client.name} />
+                </Field>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-sm" onClick={() => { setDangerOpen(false); setTyped(""); }}>Keep it</button>
+                <button
+                  className="btn btn-sm"
+                  style={{ background: "#b91c1c", borderColor: "#b91c1c", color: "#fff", opacity: nameMatches && !busy ? 1 : 0.5 }}
+                  onClick={doDelete}
+                  disabled={!nameMatches || busy}
+                >{busy ? "Deleting…" : "Delete for good"}</button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
     </Modal>
   );
 }
@@ -760,7 +890,7 @@ export function TaskModal({ task, clients, team, defaultClientId, onClose, reloa
   const [f, setF] = useState({
     name: task?.name || "",
     client_id: task?.client_id || defaultClientId || "",
-    assigned_to: task?.assigned_to || "",
+    assignees: assigneesOf(task || {}),
     category: task?.category || "", phase: task?.phase || "",
     priority: task?.priority || "medium", status: task?.status || "todo",
     due_date: task?.due_date || "", latest_report: task?.latest_report || "",
@@ -775,7 +905,7 @@ export function TaskModal({ task, clients, team, defaultClientId, onClose, reloa
     const patch = {
       name: f.name.trim(),
       client_id: f.client_id || null,
-      assigned_to: f.assigned_to || null,
+      assignees: f.assignees,
       category: f.category || null,
       phase: f.phase || null,
       priority: f.priority,
@@ -791,6 +921,17 @@ export function TaskModal({ task, clients, team, defaultClientId, onClose, reloa
      * console without 0012 could not save ANY task edit at all — a due date
      * change died on a field the person never touched. Now the brief is dropped,
      * the rest saves, and the reason is said out loud. */
+    if (!res.ok && MISSING_ASSIGNEES.test(String(res.error || ""))) {
+      const { assignees, ...rest } = patch;
+      res = await upsertTask({ ...rest, assigned_to: (assignees || [])[0] || null });
+      if (res.ok) {
+        toast.warn("Added — but only one person",
+          "This database has no assignees column yet. Run supabase/migrations/0028_task_assignees.sql, then add the rest.");
+        onClose(); reload();
+        setBusy(false);
+        return;
+      }
+    }
     if (!res.ok && MISSING_DESCRIPTION.test(String(res.error || ""))) {
       const { description, ...withoutBrief } = patch;   // eslint-disable-line no-unused-vars
       res = await upsertTask(withoutBrief);
@@ -828,11 +969,26 @@ export function TaskModal({ task, clients, team, defaultClientId, onClose, reloa
         <Field label="Client">
           <Select value={f.client_id} onChange={set("client_id")} options={[["", "No client"], ...clients.map((c) => [c.id, c.name])]} />
         </Field>
-        <Field label="Assigned to" hint="Whoever this is shows it on their own Work page.">
+        <Field label="Who is on it" hint="Pick as many as you need. It shows on every one of their Work pages.">
           {/* deliveryPeopleOptions, not everybody: a sales rep has no Operations
             * page, so a task handed to one can never be opened by the person it
-            * is on. Whoever already holds it stays in the list, marked. */}
-          <Select value={f.assigned_to} onChange={set("assigned_to")} options={[["", "Unassigned"], ...deliveryPeopleOptions(team, f.assigned_to).map((o) => [o.value, o.label])]} />
+            * is on. Whoever already holds it stays in the list, marked.
+            *
+            * Toggles rather than a dropdown, because a <select> holds one
+            * answer and this question now has more than one — 31 Aug 2026. */}
+          <div className="adm-drawer-people">
+            {deliveryPeopleOptions(team, f.assignees[0] || null).map((o) => {
+              const on = f.assignees.includes(o.value);
+              return (
+                <span key={o.value} className={`adm-drawer-person${on ? " on" : ""}`}>
+                  <button type="button" onClick={() => setF({ ...f, assignees: on ? f.assignees.filter((x) => x !== o.value) : [...f.assignees, o.value] })}>
+                    {o.label}{on && f.assignees[0] === o.value && f.assignees.length > 1 ? " · primary" : ""}
+                  </button>
+                </span>
+              );
+            })}
+            {!f.assignees.length ? <span className="adm-db-empty">Unassigned</span> : null}
+          </div>
         </Field>
         <Field label="Status"><Select value={f.status} onChange={set("status")} options={TASK_STATUSES.map((s) => [s, TASK_STATUS_LABELS[s]])} /></Field>
         <Field label="Priority"><Select value={f.priority} onChange={set("priority")} options={TASK_PRIORITIES.map((p) => [p, `${PRIORITY_ICON[p]} ${TASK_PRIORITY_LABELS[p]}`])} /></Field>

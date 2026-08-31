@@ -189,8 +189,19 @@ console.log("\nTHE PICKERS THAT WRITE AN ASSIGNMENT USE THAT RULE");
 
 const OPS = readFileSync(new URL("../../src/components/admin/Operations.jsx", import.meta.url), "utf8");
 const TABLE = readFileSync(new URL("../../src/components/admin/opsTable.jsx", import.meta.url), "utf8");
-ok("the task modal's Assigned to uses deliveryPeopleOptions",
-  /f\.assigned_to[\s\S]{0,200}deliveryPeopleOptions/.test(OPS));
+/* REPINNED 31 Aug 2026. This read `/f\.assigned_to[\s\S]{0,200}deliveryPeopleOptions/`
+ * and broke the day the field became `f.assignees` — migration 0028 let more
+ * than one person hold a task. The RULE did not change and the picker still
+ * obeys it; only the name of the thing it reads did. A test pinned to a literal
+ * fails every time the literal is correctly extended, which is how tests get
+ * deleted instead of read. So pin the rule: the modal's people picker offers
+ * deliveryPeopleOptions and never the raw roster. */
+{
+  const picker = OPS.slice(OPS.indexOf("Who is on it"), OPS.indexOf("Who is on it") + 900);
+  ok("the task modal's people picker uses deliveryPeopleOptions",
+    picker.includes("deliveryPeopleOptions("), picker.slice(0, 200));
+  ok("...and never offers the raw roster instead", !/\bteam\.map\(/.test(picker));
+}
 ok("the sheet's assignee cell uses it too", TABLE.includes("deliveryPeopleOptions(team, t?.assigned_to"));
 /* The FILTER at the top of Operations keeps the whole roster on purpose — it is
  * how you find a task wrongly put on a rep before this rule existed. Narrowing

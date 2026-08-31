@@ -10,6 +10,7 @@
 
 import { getSupabase, isConfigured } from "./supabase.js";
 import { fetchPaged, PAGE } from "../../lib/paging.js";
+import { isAssignedTo, assigneePatch } from "../../lib/task-assignees.js";
 /* Shared with the server endpoint api/client-standing.js. It is pure (no
  * imports, no database, no fetch) precisely so both sides can use the same
  * counting rules — a client page that counted differently from the saved
@@ -744,11 +745,28 @@ export async function listTasks(clientId = null) {
 export async function listAllTasksForImport() {
   if (!live()) return { rows: [...previewStore.tasks], sample: true };
   const supabase = getSupabase();
-  return fetchPaged(() => supabase.from("admin_tasks").select("id, client_id, name, status, priority, category, phase, due_date, latest_report, description, assigned_to"),
+  return fetchPaged(() => supabase.from("admin_tasks").select("id, client_id, name, status, priority, category, phase, due_date, latest_report, description, assigned_to, assignees"),
     { order: "created_at", ascending: false, max: 20000 });
 }
 
-export async function upsertTask(patch) {
+/* WHOEVER WRITES A TASK WRITES BOTH FIELDS.
+ *
+ * `assigned_to` is the primary and `assignees` is everybody, and they can never
+ * disagree (migration 0028). The database trigger enforces that whatever
+ * arrives, but a caller that sends only one of them makes the row it gets back
+ * differ from the row it just sent — so the screen redraws with something the
+ * caller did not choose. Normalising here means the optimistic redraw and the
+ * database agree from the first frame. */
+function withAssignees(patch) {
+  if (!patch || (!("assignees" in patch) && !("assigned_to" in patch))) return patch;
+  const list = "assignees" in patch
+    ? patch.assignees
+    : (patch.assigned_to ? [patch.assigned_to] : []);
+  return { ...patch, ...assigneePatch(list) };
+}
+
+export async function upsertTask(rawPatch) {
+  const patch = withAssignees(rawPatch);
   if (!live()) {
     if (patch.id) {
       const i = previewStore.tasks.findIndex((t) => t.id === patch.id);
@@ -1518,8 +1536,14 @@ export async function getMyWork(userId) {
   const todayStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
   /* ---- tasks assigned to me, still open ---- */
+  /* EVERYBODY ON THE TASK, not just whoever is primary.
+   *
+   * This read used to be `mine(t.assigned_to)`. With two people on a task that
+   * shows the work to the first one and hides it from the second — a task
+   * sitting on somebody's row that is on none of their pages, which is the
+   * exact failure the Aug 30 dry run found from the other direction. */
   const myTasks = tasks.rows
-    .filter((t) => mine(t.assigned_to) && t.status !== "done")
+    .filter((t) => (!userId || isAssignedTo(t, userId)) && t.status !== "done")
     .map((t) => {
       const due = t.due_date ? Date.parse(t.due_date + "T23:59:59") : null;
       let bucket = "later";

@@ -6873,3 +6873,197 @@ lint clean · **2,829 checks across 33 suites** (was 2,489 across 25) · build c
 modules · driven in a real browser against the built bundle. An adversarial checker found 15
 defects in this work and all 15 are fixed; eight rules had no test at all and two more were
 guards that could not fire.
+
+### §57 addendum — the tasks are IN (Mon 31 Aug 2026, ~1:00 PM CT)
+
+Ryder deployed §57 that morning and the import was run against the live database.
+
+**107 created · 0 refused · 0 failures.** Operations went 4 → **111 shown · 78 open · 31 late**.
+Per client: Matt McCall 36 · Shiner 21 · Justin Dyar 18 · Jessica Mackrael 11 · Michelle
+Creamer 11 · Dahler 10 — every count matches Notion exactly. **Nothing in Notion was changed;
+read calls only.**
+
+31 of the rows carry the Notion page's own body text as the standing brief, proved by
+searching the console for a phrase that exists only inside one page body. The same 107 pasted
+a second time returned **`0 new · 0 updated · 107 already right`** — the idempotency rule holds
+against the real database, not only in the test suite.
+
+**A large paste cannot be typed into the box in one tool call from a cloud session.** The
+211 KB payload was loaded into a page variable in fourteen pieces through the browser console,
+then written into the textarea with React's native value setter followed by an `input` event —
+a plain `.value =` never reaches React state and the button stays dead. Worth keeping for any
+future bulk paste into this console.
+
+Record: `WORK-LOG/2026-08-31--internal--the-107-notion-tasks-are-in.md`. The payload stays on
+disk at `_merge/notion-tasks-2026-08-31.json` so the import can be re-run without Notion.
+
+**Still not run: Sales → ⋯ → Reps on the sheet.**
+
+## §58. A CLIENT CAN BE DELETED · TWO PEOPLE ON A TASK · THE TASK OPENS IN A PANEL — Mon 31 Aug 2026, afternoon (append-only section)
+
+Three asks in one sitting: *"can you delete the test client"* · *"make sure two people can be
+assigned to the same task"* · *"when i click a row i want it to open a sidebar with the actual
+to do item and all the info and edit the text and all that there."*
+
+Full record: `WORK-LOG/2026-08-31--internal--delete-a-client-two-people-on-a-task-and-the-side-panel.md`
+
+### New files
+
+| Piece | File |
+|---|---|
+| What a client delete costs, and the typed-name gate | `lib/client-delete.js` |
+| Who is on a task, and who is primary | `lib/task-assignees.js` |
+| The array column, the backfill, the trigger | `supabase/migrations/0028_task_assignees.sql` |
+| The task, open | `src/components/admin/taskDrawer.jsx` |
+| Tests | `tests/client-delete` (28) · `tests/task-assignees` (62) |
+
+`opsCells.jsx`, `opsTable.jsx`, `Operations.jsx`, `src/lib/data.js`, `lib/notion-merge.js` and
+`src/admin.css` all changed. `tests/people` had one assertion **repinned**, not deleted — see
+the rule below.
+
+### Rules that must not be broken
+
+1. **`assigned_to` IS `assignees[0]`, always.** It stays as THE PRIMARY so the ~30 readers of
+   it keep working; the array is "who is on it". A trigger in 0028 keeps them in step
+   whichever one a writer sets, because five writers already exist and a rule five callers
+   must remember is a rule that gets broken.
+2. **De-duplicating must not sort.** Order is who the primary is. `array_agg(distinct …)` in
+   Postgres and `[...new Set()]` in JS differ here; both sides keep first-seen order.
+3. **"Is this person ON it", never "is it theirs".** `getMyWork` and the Operations owner
+   filter both use `isAssignedTo`. Comparing the single field hides a second assignee's work
+   from them — the Aug 30 vanished-task failure, from a new direction.
+4. **A row read before 0028 still works.** `assigneesOf` falls back to the single field, so
+   nothing waits on a backfill.
+5. **Deploy order does not matter.** Postgres rejects the WHOLE row when sent a column the
+   table lacks — 0012 set this trap once already. Both write paths fall back to the single
+   field, save the rest, and say why.
+6. **The delete screen names every table.** Ten cascade, seven set null. A test derives both
+   lists from the migrations and fails if a new table gains a `client_id` and is not named,
+   which is the only thing stopping the screen from lying by omission.
+7. **The panel owns no data.** Every change goes out through the page's own `patchTask`, and
+   the draft is keyed on the task id so a row returning mid-edit cannot wipe what is being
+   typed.
+
+### Two lessons worth carrying
+
+**A clickable row whose cells are all buttons is unreachable.** Measured on the built bundle:
+all 11 cells were 100% filled by their own control, so the "click anywhere that is not a
+control" guard blocked every possible click. The cursor said clickable and nothing happened.
+The task NAME is the way in now — the widest column, and where a person aims. Measure the
+cells before assuming a row has a lap to click on.
+
+**A guard that fires on prose is as useless as one that cannot fire.** Two new tests failed
+against their own explanatory comments — `array_agg(distinct …)` written in a SQL comment
+explaining why it is NOT used, and `mine(t.assigned_to)` in a JS comment explaining what the
+line used to say. Both now strip comments before matching. The sibling of the loose-regex
+rule already in this file.
+
+**And one about tests:** `tests/people` pinned `f.assigned_to … deliveryPeopleOptions` and
+broke the moment the field correctly became `f.assignees`. It was **repinned to the rule** —
+the picker offers `deliveryPeopleOptions` and never the raw roster — not deleted. A test
+pinned to a literal fails every time the literal is correctly extended, which is how tests
+get deleted instead of read.
+
+### Proof
+
+lint clean · **2,925 checks across 36 suites** (was 2,829) · build clean at 174 modules ·
+driven in a real browser: the panel opens on the clicked task and renames the row behind it;
+a second person shows as **"Sample Admin +1"** on the row; **make primary** reorders without
+removing; a chip click opens its own popover and not the panel; and the client delete moved
+the list 3 → 2 with the button dead until the exact name was typed.
+
+**Not deployed. 0028 is NOT run.** `DO-THIS-NEXT-notion-merge.md` at the repo root is the
+click-by-click.
+
+## §59. STATE BOARD — replaces §55–§58 as the current picture (Mon 31 Aug 2026, end of day)
+
+Everything below is measured or read off disk, not remembered. Where something is quoted
+from a screen rather than measured here, it says so.
+
+### The one-paragraph version
+
+Notion has moved into the console. Six clients and all 107 Operations tasks are LIVE and
+verified. Nothing was deleted from Notion — it is untouched and still the source of truth
+until somebody decides otherwise. Three more things were built this afternoon (deleting a
+client, more than one person on a task, and a side panel that opens the whole to-do) and
+those are NOT deployed; one of them needs `0028_task_assignees.sql` run first. The last
+piece of the merge — giving the sheet's eight reps accounts so their claimed leads come
+back to them — is built, deployed and has never been pressed.
+
+### What is LIVE right now
+
+| | |
+|---|---|
+| Clients in the console | **7** — the six from Notion plus `ZZ TEST — Dry Run Realty` |
+| Tasks in Operations | **111** — the 107 from Notion plus the test client's 4 |
+| Contacts on the sales sheet | 3,663 people at 2,765 firms |
+| Migrations run | 0001 – **0027**. **0028 is NOT run.** |
+| Deployed | everything up to and including this morning's push |
+| Not deployed | this afternoon: client delete, multi-assign, the task panel |
+
+Per client: Matt McCall 36 · Shiner Law Group 21 · Justin Dyar 18 · Jessica Mackrael 11 ·
+Michelle Creamer 11 · Dahler Group (30A) 10. Every count matches Notion exactly.
+
+### What was built on 31 Aug, in the order it happened
+
+1. **The Notion merge** (§57). `lib/notion-merge.js` + the Operations import modal; the
+   client payload; `lib/sales-owners.js` + `api/sales-owners.js` + the Reps-on-the-sheet
+   screen; `listAllTasksForImport()`; a 60s ceiling for the new route in `vercel.json`.
+2. **The 107 tasks went in** (§57 addendum). 107 created, 0 refused, 0 failures, proved
+   twice and re-pasted to prove it cannot double.
+3. **Client delete · multi-assign · the task panel** (§58). `lib/client-delete.js`,
+   `lib/task-assignees.js`, `0028_task_assignees.sql`, `src/components/admin/taskDrawer.jsx`.
+
+### Proof, as of tonight
+
+`lint` clean across `lib src api tests` · **2,925 checks across 35 running suites** (was
+2,489 on 30 Aug across 25) · `npm run build` clean in the cloud container at **174 modules** ·
+every feature driven in a real browser against the built bundle, and the client import and
+the task import driven against the **live** database.
+
+`tests/auth-gate` and `tests/inbox` still do not run on the Mac bridge — playwright is
+missing and the inbox test has a bad relative import. Both predate 30 Aug. **Do not "fix"
+them by rewriting them.**
+
+### The three payload files that are worth keeping
+
+- `_merge/notion-tasks-2026-08-31.json` — 211 KB, the 107 tasks with their briefs. The
+  import can be re-run from this without going back to Notion.
+- `_merge/notion-clients-2026-08-31.json` — the six clients, already imported.
+- `DO-THIS-NEXT-notion-merge.md` — the click-by-click for what is left.
+
+### Open, in the order it should be picked up
+
+1. **Run `supabase/migrations/0028_task_assignees.sql`**, then push and deploy. Deploy order
+   does not matter — the app falls back and says so — but nothing multi-person works until
+   the migration is in.
+2. **Delete `ZZ TEST — Dry Run Realty`** once that deploy is live. Ten tables cascade; the
+   screen names them.
+3. **Sales → ⋯ → Reps on the sheet.** Seven accounts, ~3,000 lead rows handed back. Built
+   and deployed, never pressed. `"Andrew"` is deliberately left for a person to decide.
+4. **Real email addresses for those seven reps**, then a proper Team-page invite each.
+5. **A GoDaddy customer number and password are sitting in plain text on a Notion page**
+   ("Get access to Website and Google Tools", Jessica Mackrael). Not copied into the console
+   on purpose. Bitwarden, then delete them off Notion.
+6. **Justin Dyar has no start date**, so his week number cannot be worked out. His stage is a
+   placeholder that says so in its own notes.
+7. Optional: re-paste the task payload after 0028 to put the second person onto the 12 Notion
+   tasks that had two.
+
+### The rules this day produced, all of them worth carrying
+
+- **A shared first name is not enough to hand somebody a pipeline.** Only `exact` and
+  `initial` matchOwner hits may be acted on. (§57)
+- **`assigned_to` IS `assignees[0]`.** Ask `isAssignedTo`, never `assigned_to === id`. (§58)
+- **Postgres rejects the WHOLE row over one unknown column**, so every new column needs a
+  fallback or the deploy order becomes load-bearing. 0012 set this trap, 0028 disarmed it.
+- **A count on a screen must be the count the button will do.**
+- **A check screen that shows counts is asking somebody to agree to a number** — list the
+  fields.
+- **A clickable row whose cells are all buttons is unreachable.** Measure the cells.
+- **A guard that fires on its own comment is as useless as one that cannot fire.** Strip
+  comments before matching source.
+- **Repin a test to the rule; never delete it** because a literal correctly changed.
+- **Check what is actually listening before believing a browser.** A stale dev server cost an
+  hour on a bug that never existed.
+- **`claimed_at` and `cadence_started_at` are stamped together, and neither is "now".**
