@@ -47,9 +47,29 @@
 -- 1. admin_leads — SELECT stays wide, UPDATE gets a with check
 -- ============================================================
 -- SELECT is deliberately untouched and deliberately wide: every member reads
--- every lead. That is not an oversight, it is the requirement — a rep who
--- cannot see another rep's row cannot be stopped from working the same firm,
--- which is the loudest rule on the Rules of Engagement tab.
+-- every lead.
+--
+-- ****  COMMENT-ONLY UPDATE, 30 AUG 2026. NO SQL BELOW THIS FILE'S HEADER HAS  ****
+-- ****  CHANGED. Re-running this file is as safe as it was.                    ****
+--
+-- The sentence that used to be here said the wide SELECT was "not an oversight,
+-- it is the requirement — a rep who cannot see another rep's row cannot be
+-- stopped from working the same firm". THAT PRODUCT RULE WAS REVERSED by Ryder
+-- on 30 Aug 2026: a rep no longer sees a lead somebody else holds. The firm
+-- collision it was protecting is now carried by a mark on the FIRM that names
+-- nobody (firmsHeldByOthers in src/lib/salesSheet.js).
+--
+-- The wide SELECT here is now a DELIBERATE GAP, not the requirement. Ryder's
+-- call that day was screen-only enforcement, so the narrowing lives in three
+-- places on the application side and none in the database:
+--   src/lib/salesSheet.js   visibleToMember()    the Sales page
+--   lib/brain-context.js    repLeadFilter        the AI's context block
+--   lib/assistant-tools.js  the search tool      the AI's own lookups
+-- A rep's browser can therefore still fetch another rep's lead by hand. If that
+-- stops being acceptable, the fix is a NEW migration adding a select policy of
+-- `public.admin_is_admin() or owner_id = auth.uid() or owner_id is null`, not an
+-- edit to this file. Do not read the wide policy as evidence that reps are
+-- meant to see everything.
 --
 -- WHY `owner_id is null` IS IN THE WITH CHECK AS WELL AS THE USING.
 --
@@ -139,9 +159,12 @@ create policy "members log own activity" on public.admin_lead_activity
     and public.admin_can_work_lead(lead_id)
   );
 
--- SELECT on activity stays wide, from 0001. A rep opening somebody else's row
--- read-only has to be able to read its timeline, or "so nobody doubles up on
--- this firm" does not work.
+-- SELECT on activity stays wide, from 0001. The reason given here was that a rep
+-- opening somebody else's row read-only has to be able to read its timeline.
+-- After 30 Aug 2026 a rep is not shown that row at all, so this is the same
+-- deliberate gap as the one on admin_leads above — see that note. The
+-- application side prunes lead activity to the leads a rep may see
+-- (lib/brain-context.js). Comment-only update; the SQL is untouched.
 
 -- ============================================================
 -- 3. admin_proposals — the same shape, through the lead

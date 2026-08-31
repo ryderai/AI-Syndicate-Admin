@@ -664,10 +664,18 @@ export default async function handler(req, res) {
   if (skip && people?.length) {
     const { allowed, blocked } = parkableLeadIds(people, { role: myRole, userId: me });
     if (allowed.length) {
+      /* "BEFORE A CONVERSATION EXISTS" IS `first_contact_at`, NOT A STAGE LIST.
+       *
+       * This read `.in("stage", ["new","researching"])`. On 30 Aug the four
+       * early stages stopped being settable — a lead being worked for a month
+       * still reads `new` — so a firm scanned at 92 mid-conversation would have
+       * been silently moved to Skip by a website scan. That is precisely the
+       * defect salesQueue's comment says was fixed; the fix had been applied in
+       * one of the two places that make the decision. Found by a checker. */
       const { data: parked, error: parkErr } = await admin.from("admin_leads")
         .update({ stage: "skip_90" })
         .in("id", allowed)
-        .in("stage", ["new", "researching"])
+        .is("first_contact_at", null)
         .select("id");
       if (parkErr) problems.push(`the scan was filed but the contacts were not moved to Skip (${parkErr.message})`);
       skipped = parked?.length || 0;

@@ -6,6 +6,7 @@ import {
 /* The sort itself lives in a plain .js module so it can be tested — see
  * src/lib/opsSort.js and tests/ops. */
 import { STATUS_ORDER, sortRowsBy, nextSort } from "../../lib/opsSort.js";
+import { personLabel } from "../../lib/people.js";
 import {
   Chip, SelectCell, PersonCell, TextCell, PopoutCell, DateCell, Avatar, todayISO, Popover,
   STATUS_COLOR, PRIORITY_COLOR, PRIORITY_ICON, CATEGORY_COLOR, PHASE_COLOR, clientColor,
@@ -152,7 +153,7 @@ export default function TaskDatabase({
   const clientName = (id) => clients.find((c) => c.id === id)?.name || null;
   const memberName = (id) => {
     const m = team.find((x) => x.user_id === id);
-    return m ? (m.full_name || m.email) : null;
+    return m ? personLabel(m, team) : null;
   };
 
   const clientOptions = useMemo(
@@ -161,7 +162,8 @@ export default function TaskDatabase({
   );
   const personOptions = useMemo(
     () => team.filter((m) => m.active !== false)
-      .map((m) => ({ value: m.user_id, label: m.full_name || m.email })),
+      // Two teammates with the same name must not draw two identical rows.
+      .map((m, _i, list) => ({ value: m.user_id, label: personLabel(m, list) })),
     [team],
   );
   /* Deactivating someone does not un-own their tasks. If the owner is no longer
@@ -534,7 +536,7 @@ export function TaskBoard({ tasks, clients, team, onPatch, onOpen }) {
   const clientName = (id) => clients.find((c) => c.id === id)?.name || null;
   const memberName = (id) => {
     const m = team.find((x) => x.user_id === id);
-    return m ? (m.full_name || m.email) : null;
+    return m ? personLabel(m, team) : null;
   };
 
   const drop = (status) => (e) => {

@@ -11,9 +11,20 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  BOARD_STAGES, REASON_STAGES, OFF_BOARD_STAGES, NOTE_MAX,
+  BOARD_STAGES, WORKING_COLUMN, REASON_STAGES, OFF_BOARD_STAGES, NOTE_MAX,
   isStageMove, needsReason, offersNote, cleanNote, stageMoveBody, dropCheck,
 } from "../../lib/stage-move.js";
+
+/* LEAD_STAGES IS READ AS TEXT, NOT IMPORTED. src/lib/data.js pulls in
+ * src/lib/supabase.js, which reads `import.meta.env` — undefined under plain
+ * node, so importing it throws before a single assertion runs. Every other suite
+ * in this repo reads that file the same way for the same reason. */
+const DATA_SRC = readFileSync(new URL("../../src/lib/data.js", import.meta.url), "utf8");
+const LEAD_STAGES = (() => {
+  const m = DATA_SRC.match(/export const LEAD_STAGES = \[([\s\S]*?)\];/);
+  if (!m) throw new Error("LEAD_STAGES could not be read out of data.js — this test is now blind");
+  return [...m[1].matchAll(/"([a-z0-9_]+)"/g)].map((x) => x[1]);
+})();
 
 let passed = 0;
 let failed = 0;
@@ -34,17 +45,59 @@ test("every board column is a stage the database will accept", () => {
   /* The stage list lives in 0009_sales.sql's check constraint. Named
    * explicitly rather than globbed: if somebody moves it, this test should
    * fail loudly rather than quietly pass against some other file. */
-  const sql = readFileSync(new URL("../../supabase/migrations/0009_sales.sql", import.meta.url), "utf8")
+  const live = readFileSync(new URL("../../supabase/migrations/0009_sales.sql", import.meta.url), "utf8")
     + readFileSync(new URL("../../supabase/migrations/0015_sales_lifecycle.sql", import.meta.url), "utf8");
-  for (const stage of [...BOARD_STAGES, ...OFF_BOARD_STAGES]) {
-    assert.ok(sql.includes(`'${stage}'`), `${stage} appears nowhere in the migrations`);
+  /* EVERY DROP TARGET must be a stage the database accepts TODAY. These are the
+   * ones a person can write by dragging, so a value the constraint refuses is a
+   * card that bounces back with a database error. */
+  for (const stage of BOARD_STAGES) {
+    assert.ok(live.includes(`'${stage}'`), `${stage} is a drop target the database would refuse`);
+  }
+  /* The read-only columns are a softer bar on purpose: they DRAW a stage, they
+   * never write one. `not_a_fit` is drawn before migration 0027 creates it, so
+   * the board is already right the moment that runs — but it must at least be
+   * named in a migration somebody can point at, or it is a typo. */
+  const pending = live + readFileSync(new URL("../../supabase/migrations/0027_pipeline_spec.sql", import.meta.url), "utf8");
+  for (const stage of OFF_BOARD_STAGES) {
+    assert.ok(pending.includes(`'${stage}'`), `${stage} appears in no migration at all`);
   }
 });
 
 test("the board's columns are in pipeline order and hold no duplicates", () => {
   assert.equal(new Set(BOARD_STAGES).size, BOARD_STAGES.length);
-  assert.equal(BOARD_STAGES[0], "new");
+  /* WAS `BOARD_STAGES[0] === "new"`. The four early stages came off the board on
+   * 30 Aug because they are derived — nothing may set them, so a column you drag
+   * a card INTO would be typing a second copy of the timeline by hand. */
+  assert.equal(BOARD_STAGES[0], "follow_up");
   assert.deepEqual(BOARD_STAGES.slice(-2), ["won", "lost"]);
+  for (const s of ["new", "researching", "contacted", "in_conversation"]) {
+    assert.ok(!BOARD_STAGES.includes(s), `${s} is derived and must not be a drop target`);
+  }
+});
+
+test("NOTHING IS INVISIBLE ON THE BOARD — the derived stages have a column of their own", () => {
+  /* Shrinking BOARD_STAGES without this would have repeated the defect an audit
+   * found the same morning: a lead at an off-board stage matched no column and
+   * was drawn NOWHERE. Not greyed, not bucketed — gone. */
+  assert.ok(WORKING_COLUMN, "there has to be somewhere for the derived stages to show");
+  for (const s of ["new", "researching", "contacted", "in_conversation", "reopened"]) {
+    assert.ok(WORKING_COLUMN.stages.includes(s), `${s} is drawn nowhere`);
+  }
+  /* And it must not also be a drop target, or the stage becomes settable again
+   * through the back door. */
+  for (const s of WORKING_COLUMN.stages) {
+    assert.ok(!BOARD_STAGES.includes(s), `${s} is both derived and droppable`);
+    assert.equal(dropCheck({ editable: true, from: "follow_up", to: s }).ok, false,
+      `a card can be dropped into the derived stage ${s}`);
+  }
+  /* Between them, the two lists have to account for every stage that is not a
+   * deliberate resting place — otherwise the next stage somebody adds is
+   * invisible and nobody finds out for a month. */
+  const drawn = [...BOARD_STAGES, ...WORKING_COLUMN.stages];
+  for (const s of LEAD_STAGES) {
+    assert.ok(drawn.includes(s) || OFF_BOARD_STAGES.includes(s),
+      `${s} appears in no board column and is not a declared resting place`);
+  }
 });
 
 test("the resting stages are NOT board columns", () => {

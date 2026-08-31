@@ -26,6 +26,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { isOpenStage } from "../../lib/sales-rules.js";
 import {
   canEditLead, heldByLabel,
   AVAILABILITY, cleanAvailability, availabilityOf, byAvailability, availabilityCounts,
@@ -34,6 +35,9 @@ import {
   scoreBandOf, sizeBandOf, touchBandOf, readCount,
   readCompanyReport, newestReportByCompany,
   sortValue, sortRowsBy, sheetRows,
+  /* 30 Aug 2026 — who may SEE a lead, and the firm marker that replaces what
+   * the old see-everything rule was protecting. */
+  visibleToMember, firmsHeldByOthers, FIRM_BUSY_LABEL,
 } from "../../src/lib/salesSheet.js";
 
 let pass = 0, fail = 0;
@@ -644,6 +648,212 @@ const RLS = src("supabase/migrations/0020_rep_scoping.sql");
 ok("the migration points at canEditLead()", /canEditLead\(\)/.test(RLS));
 ok("...and canEditLead points back at the migration", /0020_rep_scoping\.sql/.test(CAN_EDIT_SRC + SHEET_SRC.slice(SHEET_SRC.indexOf("THE LOCK IS ON THE ROW"), SHEET_SRC.indexOf("export function canEditLead"))));
 ok("the migration names the test that proves it", /tests\/floor-scoping\/sql\.sh/.test(RLS));
+
+
+/* ================================================================== */
+/* WHO MAY SEE A LEAD AT ALL — 30 Aug 2026                             */
+/*                                                                     */
+/* Ryder reversed the Aug 27 rule: a rep no longer sees a lead that     */
+/* somebody else holds. This section is the whole of that rule, and     */
+/* the marker that keeps the protection the old rule was there for.    */
+/* ================================================================== */
+console.log("\nWHO MAY SEE A LEAD AT ALL");
+
+const idsOf = (list) => list.map((l) => l.id);
+
+eq("a rep sees their own leads and the unclaimed ones, and nothing else",
+  idsOf(visibleToMember(LEADS, REP)), ["l1", "l2", "l4", "l5"]);
+eq("...so another rep's row is GONE, not merely read-only",
+  visibleToMember(LEADS, REP).some((l) => l.id === "l3"), false);
+eq("the other rep sees the mirror image of it",
+  idsOf(visibleToMember(LEADS, REP2)), ["l2", "l3", "l5"]);
+eq("an owner still sees every lead", idsOf(visibleToMember(LEADS, OWNER)), idsOf(LEADS));
+eq("an admin still sees every lead", idsOf(visibleToMember(LEADS, ADMIN)), idsOf(LEADS));
+eq("...and an owner gets the SAME ARRAY back, not a copy — this runs on every keystroke",
+  visibleToMember(LEADS, OWNER) === LEADS, true);
+
+/* FAIL CLOSED, both directions. A page that has lost track of who is looking at
+ * it must not hand out the whole pipeline, and a role nobody has taught this
+ * file about is not an owner. Both fall to the narrow rule, which is never
+ * empty in the way returning [] would be. */
+eq("a member with no role gets the narrow set, not everything",
+  idsOf(visibleToMember(LEADS, { user_id: "u-rep", full_name: "x" })), ["l1", "l2", "l4", "l5"]);
+/* AN UNKNOWN ROLE SEES EVERYTHING, and that is deliberate, not an oversight.
+ * canEditLead has said "every role that is not `sales` may edit anything" since
+ * Aug 27, on the ground that a role nobody has taught the file about must not
+ * silently lose the ability to work. So a role like this can already change
+ * every lead in the company. Hiding those same leads from it would leave the two
+ * rules disagreeing about one person, which is worse than either answer alone.
+ * The pair moves together or not at all — change one and this assertion fires. */
+eq("an unknown role sees everything, exactly as canEditLead lets it edit everything",
+  idsOf(visibleToMember(LEADS, { user_id: "u-rep", role: "intern" })), idsOf(LEADS));
+eq("...and canEditLead agrees about that same person",
+  LEADS.every((l) => canEditLead(l, { user_id: "u-rep", role: "intern" })), true);
+eq("a member with no role can edit nothing, and gets the narrow set",
+  canEditLead(LEADS[2], { user_id: "u-rep" }), false);
+eq("no member at all sees only the unclaimed rows",
+  idsOf(visibleToMember(LEADS, null)), ["l2", "l5"]);
+/* "UNCLAIMED" IS `!l.owner_id`, the same convention byAvailability, the tiles and
+ * contestedCompanies all use. An empty string is not a user id and reads as
+ * unclaimed here exactly as it does everywhere else in this file — the point of
+ * asserting it is that the four places agree, not that any of them is clever. */
+eq("an empty-string owner_id reads as unclaimed, the same as everywhere else",
+  idsOf(visibleToMember([{ id: "x", owner_id: "" }], null)), ["x"]);
+eq("...and byAvailability says the same thing about it",
+  idsOf(byAvailability([{ id: "x", owner_id: "" }], "available", REP)), ["x"]);
+eq("no leads is an empty list, not a throw", visibleToMember(null, REP), []);
+
+/* THE CLAIM/RELEASE ROUND TRIP. Both halves of a rep's set are on their page,
+ * so neither button can push a record out from under the person pressing it —
+ * which is what lets the drawer read the page's set instead of the board. */
+{
+  const claimed = LEADS.map((l) => (l.id === "l2" ? { ...l, owner_id: REP.user_id } : l));
+  eq("claiming an unclaimed lead keeps it on the rep's page",
+    visibleToMember(claimed, REP).some((l) => l.id === "l2"), true);
+  eq("...and takes it off every other rep's page",
+    visibleToMember(claimed, REP2).some((l) => l.id === "l2"), false);
+  const released = LEADS.map((l) => (l.id === "l1" ? { ...l, owner_id: null } : l));
+  eq("releasing one of your own keeps it on your page",
+    visibleToMember(released, REP).some((l) => l.id === "l1"), true);
+  eq("...and puts it on everybody else's", 
+    visibleToMember(released, REP2).some((l) => l.id === "l1"), true);
+}
+
+console.log("\nTHE FIRM MARKER — THE PROTECTION THE OLD RULE WAS FOR");
+
+/* This is the whole reason the rows can be hidden safely. It has to be counted
+ * from the WHOLE board: pass it the narrowed list and it can only ever come back
+ * empty, and the marker silently never appears. */
+{
+  const busyForRep = firmsHeldByOthers(LEADS, REP);
+  eq("co1 is busy for the rep — rep2 holds Dana there", busyForRep.has("co1"), true);
+  eq("co3 is not — the only claim there is the rep's own", busyForRep.has("co3"), false);
+  eq("nothing but company ids comes out",
+    [...busyForRep].every((v) => typeof v === "string" && v.startsWith("co")), true);
+
+  const busyFromNarrowed = firmsHeldByOthers(visibleToMember(LEADS, REP), REP);
+  eq("COUNTED FROM THE NARROWED LIST IT IS EMPTY — this is the mistake the comment warns about",
+    busyFromNarrowed.size, 0);
+
+  eq("for an owner, every claimed firm is 'somebody else' — which is why the page passes null instead",
+    firmsHeldByOthers(LEADS, OWNER).has("co1"), true);
+  eq("a lead with no firm can never make a firm busy",
+    firmsHeldByOthers([{ id: "z", owner_id: "u-rep2", company_id: null }], REP).size, 0);
+  eq("an unclaimed lead can never make a firm busy",
+    firmsHeldByOthers([{ id: "z", owner_id: null, company_id: "co9" }], REP).size, 0);
+  eq("no leads is an empty set, not a throw", firmsHeldByOthers(null, REP).size, 0);
+
+  /* OPEN STAGES ONLY — the same filter contestedCompanies and companyClaimWarning
+   * both apply. Without it a contact somebody marked Lost in March marks that
+   * firm busy for ever, while the drawer's warning on the same firm — which does
+   * filter — shows nothing. Two parts of one page, opposite answers. */
+  eq("a LOST contact of another rep's does not make a firm busy",
+    firmsHeldByOthers([{ id: "z", owner_id: "u-rep2", company_id: "co9", stage: "lost" }], REP).size, 0);
+  eq("nor does a WON one — a converted client is not a firm somebody is still working",
+    firmsHeldByOthers([{ id: "z", owner_id: "u-rep2", company_id: "co9", stage: "won" }], REP).size, 0);
+  eq("an open one does", 
+    firmsHeldByOthers([{ id: "z", owner_id: "u-rep2", company_id: "co9", stage: "contacted" }], REP).size, 1);
+  eq("...and the drawer's warning agrees about that same firm",
+    firmsHeldByOthers(LEADS, REP).has("co1"),
+    LEADS.some((l) => l.company_id === "co1" && l.owner_id === "u-rep2" && isOpenStage(l.stage)));
+
+  /* NOBODY HOLDS AN UNCLAIMED ROW. Only reachable for a roleless member, but it
+   * printed "Held by another rep" on a free row. */
+  eq("an unclaimed row never carries a held-by marker",
+    heldByLabel({ id: "z", owner_id: null }, { user_id: "x" }, teamName), null);
+
+  /* And on the row itself. Only ever true for an UNCLAIMED row: on a row you
+   * hold, the firm being busy is you; on a row somebody else holds, you are not
+   * seeing it at all any more. */
+  const busyRows = sheetRows(visibleToMember(LEADS, REP), { ...ctx, firmsBusy: busyForRep });
+  const bid = (id) => busyRows.find((r) => r.id === id);
+  eq("the unclaimed row at the busy firm is marked", bid("l2").firmBusy, true);
+  /* YOUR OWN ROW AT THAT FIRM IS MARKED TOO, and the first draft had this the
+   * other way round on the reasoning that "a firm you are in is busy with you".
+   * That is wrong: firmsHeldByOthers has already excluded your own claims, so
+   * the set only holds firms SOMEBODY ELSE is in — and a rep who holds one
+   * contact at a firm another rep is also working is exactly the person the
+   * warning is for. The old test silenced them. Found by an adversarial review,
+   * 30 Aug 2026.
+   *
+   * It is also what replaces contestedCompanies on a rep's page: that needs two
+   * owners in one list and a rep's list can now hold at most one. */
+  eq("YOUR OWN row at that same firm is marked too — the collision is the point",
+    bid("l1").firmBusy, true);
+  eq("your own row at a quiet firm is not", bid("l4").firmBusy, false);
+  eq("a row with no firm at all is not", bid("l5").firmBusy, false);
+  eq("with no firmsBusy passed, nothing is marked — the owner's page",
+    sheetRows(LEADS, ctx).every((r) => r.firmBusy === false), true);
+  ok("the marker names nobody", !/\brep\b|\bLarry\b|\bBrandon\b|\bDana\b/i.test(FIRM_BUSY_LABEL));
+}
+
+console.log("\nTHE NARROWING HAPPENS ONCE, AND THE ADDRESS BAR CANNOT WALK ROUND IT");
+{
+  const P = src("src/components/admin/SalesPage.jsx");
+  eq("visibleToMember is called exactly once on the page", count(P, /visibleToMember\(/g), 1);
+  ok("the page's set IS that call",
+    /const scopeLeads = useMemo\(\s*\(\) => visibleToMember\(/.test(P));
+  ok("firmsHeldByOthers reads board.leads, never scopeLeads",
+    /firmsHeldByOthers\(board\?\.leads \|\| \[\], member\)/.test(P));
+  ok("the deep-link guard checks the page's set", /if \(!scopeLeads\.some\(\(l\) => l\.id === id\)\) \{/.test(P));
+  ok("the ?lead= pre-check checks the same set",
+    /if \(scopeLeads\.some\(\(l\) => l\.id === linkedLeadId\)\)/.test(P));
+  ok("the drawer reads the page's set", /const openLead = openId \? scopeLeads\.find/.test(P));
+  ok("nothing on the page still opens a lead out of the raw board",
+    !/board\?\.leads \|\| \[\]\)\.find\(\(l\) => l\.id === openId\)/.test(P));
+  ok("the Firms view counts people from the page's set, not the board",
+    /const people = scopeLeads\.filter\(\(l\) => l\.company_id === c\.id\)/.test(P));
+
+  /* NO NAMES FOR A REP. Hiding a record and then printing the holder's name in
+   * a warning beside it would hand back exactly what was hidden. */
+  const PROF = src("src/components/admin/salesProfile.jsx");
+  ok("the drawer's firm warning names nobody for a rep",
+    /member\.role === "sales"[\s\S]{0,120}Somebody on the team/.test(PROF));
+  ok("...and the warning itself is still built, from every contact at the firm",
+    /companyClaimWarning\(lead, siblings, warnName/.test(PROF));
+  const SH = src("src/components/admin/salesSheet.jsx");
+  ok("the sheet's firm cell knows whether it may name people",
+    /const hideNames = member\?\.role === "sales";/.test(SH));
+  ok("...and passes it to the cell that would print a name", /hideNames=\{hideNames\}/.test(SH));
+}
+
+
+console.log("\nTHE AI IS A SECOND DOOR INTO THE SAME ROWS, AND IT IS SHUT TOO");
+/* An adversarial review found this open on the day the rule was written: the
+ * Sales page hid another rep's leads, and AI Brain handed the model every one of
+ * them WITH THE HOLDER'S NAME. Both files run on the SERVICE ROLE, which ignores
+ * row-level security, so these lines are the guard — the same shape as the
+ * reminders filter an Aug 20 review found missing in the same file. */
+{
+  const BC = src("lib/brain-context.js");
+  const AT = src("lib/assistant-tools.js");
+
+  ok("brain-context has one rep lead filter, defined once",
+    /const repLeadFilter = \(q\) => \(repScoped \? q\.or\(`owner_id\.eq\.\$\{userId\},owner_id\.is\.null`\) : q\);/.test(BC));
+  eq("...and BOTH lead reads go through it — filtering one leaves the other carrying the rows",
+    count(BC, /readTable\(admin, "admin_leads", \(q\) => repLeadFilter\(q\)/g), 2);
+  eq("...so no unfiltered admin_leads read is left in the file",
+    count(BC, /readTable\(admin, "admin_leads", \(q\) => q\n/g), 0);
+  ok("the lead ACTIVITY is pruned to the leads that came back",
+    /snap\.leadActivity = snap\.leadActivity\.filter\(\(a\) => !a\.lead_id \|\| seen\.has\(a\.lead_id\)\);/.test(BC));
+  ok("...and says when it pruned, so a thin list does not read as 'nothing happened'",
+    /snap\.leadActivityScoped/.test(BC));
+  ok("the doc comment no longer claims userId is not used for filtering",
+    !/used for "yours" markers, not for filtering/.test(BC));
+
+  ok("the assistant's search scopes a rep's leads as well",
+    /if \(role === "sales" && me\) query = query\.or\(`owner_id\.eq\.\$\{me\},owner_id\.is\.null`\);/.test(AT));
+  ok("...and it is applied before the limit, not after the rows come back",
+    AT.indexOf('query = query.or(`owner_id.eq.${me}') < AT.indexOf("await query.limit(limit)"));
+
+  /* THE THREE DOORS HAVE TO NAME EACH OTHER, or the next person changes one and
+   * ships a hole. This repo already learned that with canEditLead and 0020. */
+  ok("brain-context points at the page's rule", /visibleToMember/.test(BC));
+  ok("the assistant points at both of the others",
+    /visibleToMember/.test(AT) && /brain-context\.js/.test(AT));
+  ok("and the page's rule warns that it is not the only door",
+    /not a security boundary/.test(src("src/lib/salesSheet.js")));
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

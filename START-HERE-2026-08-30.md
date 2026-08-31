@@ -1,5 +1,9 @@
 # START HERE — AI Syndicate admin console, handed over Sun 30 Aug 2026
 
+> ⚠️ **SUPERSEDED BY `START-HERE-2026-08-31.md`.** This one says 0026 is not run. It IS run, and so
+> is 0027. Everything below is the picture as it stood on the evening of 30 Aug; read the 31 Aug
+> handover for the current one. Kept because its account of the 30 Aug work is still accurate.
+
 Everything below was built on 30 Aug. It is all on disk, it all passes, and **none of it is
 deployed and none of it is pushed.**
 

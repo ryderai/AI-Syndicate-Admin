@@ -8,9 +8,19 @@ import {
    * A button never writes. Four buttons that could mark a deal Won had four
    * behaviours, and one of them permanently blocked the only one that worked. */
   closeLeadWon, markLeadLost, lostMessage, setLeadTag, syncAutoTags, listLeadTagEvents,
+  /* What a stage will not let you leave without. HubSpot ships this as a
+     Required checkbox on the stage; this is the same idea, read from columns
+     that exist. 30 Aug 2026 */
+  STAGE_REQUIRES, stageRequirementMet,
+  /* Two clicks on the Contacted? cell. One function, because the ORDER of the
+   * five writes behind it is the design — see logTouch in src/lib/data.js. */
+  logTouch,
 } from "../../lib/data.js";
 import {
   salesQueue, claimState, scoreGate, listHealth, isOpenStage, ROE,
+  /* The safety net: three saved filters over columns we already keep, instead of
+     a scheduled job that hands leads back on its own. See LEAD_LISTS. */
+  LEAD_LISTS, LEAD_LIST_IDS, onLeadList, leadListCounts,
   textGate, LOST_REASONS, WON_REASONS, MIN_REASON_NOTE_CHARS, checkCloseReason,
 } from "../../../lib/sales-rules.js";
 /* Tags are an append-only event log, so "which tags are on this lead" is a
@@ -19,7 +29,7 @@ import { currentTags, tagHistory } from "../../../lib/lead-tags.js";
 /* The pipeline's own rules, shared with the sheet's chip and the board's drop
  * target so a lead dragged onto Won cannot behave differently from one picked
  * out of a menu. lib/stage-move.js is pure and tests/stage-move attacks it. */
-import { BOARD_STAGES, dropCheck, stageMoveBody, cleanNote } from "../../../lib/stage-move.js";
+import { BOARD_STAGES, READ_ONLY_COLUMNS, dropCheck, stageMoveBody, cleanNote } from "../../../lib/stage-move.js";
 /* The rep-by-rep table this page used to open in a modal now has a page of its
  * own — src/components/admin/SalesStats.jsx, reached from Sales → Stats. It
  * calls outreachByRep, lossReasons and repStats there, from the same
@@ -28,6 +38,10 @@ import { BOARD_STAGES, dropCheck, stageMoveBody, cleanNote } from "../../../lib/
  * why none of those three is imported here. 30 Aug 2026 */
 import {
   sheetRows, canEditLead,
+  /* WHO MAY SEE A LEAD AT ALL, and the firm marker that replaces what the old
+   * see-everything rule was protecting. Both pure, both attacked by
+   * tests/floor-scoping. 30 Aug 2026 */
+  visibleToMember, firmsHeldByOthers,
   AVAILABILITY, AVAILABILITY_LABELS, AVAILABILITY_HINTS,
   cleanAvailability, byAvailability, availabilityCounts,
   readCompanyReport, sheetDate, sheetDateLong,
@@ -52,6 +66,10 @@ import { SalesImportModal } from "./salesImport.jsx";
  * page rather than rewritten — it already works, and dropping it would have
  * quietly removed the scraper controls along with the page's old name. */
 import { SourcesModal } from "./leadsIntake.jsx";
+/* The email drafter. Its own file because it is a panel with three warnings and
+ * a disclosure in it, and SalesPage is long enough. 31 Aug 2026 */
+import { EmailDraftModal } from "./emailDraft.jsx";
+import { peopleOptions, personLabel } from "../../lib/people.js";
 
 /* SALES — the page that replaces CJ's outreach spreadsheet.
  *
@@ -92,12 +110,14 @@ const VIEWS = [["day", "My Day"], ["lists", "The sheet"], ["pipeline", "Pipeline
  * `tiles` lists the tiles that mode gets. A list rather than a flag because
  * the rule here is that a tile which filters nothing gets removed, not left
  * lit and inert — that is the bug "Owed a touch today" was on the sales role
- * for a day. Hence the floor's empty list: "On the floor" would filter nothing
- * (the page IS the floor), "Yours, open" and the last two would have to break
- * the lock to mean anything, "Claims at risk" is zero by definition on leads
- * nobody has claimed, and "Owed a touch today" is My Day, a view these pages
- * do not have. That is all six, so the row goes. The health card above the
- * table already counts what is on screen.
+ * for a day.
+ *
+ * THE FLOOR HAD NONE OF THEM UNTIL 30 AUG and now has four. What changed: the
+ * page's set became "mine or nobody's", so the four that ask about stage or
+ * claim state count something true about it; and the page gained view tabs, so
+ * "Owed a touch today" has a My Day to switch to. The two that stay off are the
+ * two the availability switch already says — "On the floor" is Available and
+ * "Yours, open" is Mine.
  */
 /* THE TILES' OWN WORDS, in one place. The chip that stands in for a pressed
  * tile on the sheet reads from this, so a tile and its chip cannot drift into
@@ -115,36 +135,73 @@ const MODES = {
   /* THE FLOOR. One mode where there were two.
    *
    * `floor` used to mean "the leads nobody has claimed" and `mine` meant "the
-   * ones I have". Ryder, Aug 27 2026: a rep should see every lead in the
-   * company, because a rep who cannot see another rep's row cannot be stopped
-   * from working the same firm — which is the loudest rule on the Rules of
-   * Engagement tab. So the two pages became one page with a three-state switch
-   * over it, and `mine` is where it opens.
+   * ones I have". Aug 27 2026: the two pages became one page with a three-state
+   * switch over it, holding EVERY lead in the company, because a rep who cannot
+   * see another rep's row cannot be stopped from working the same firm — the
+   * loudest rule on the Rules of Engagement tab.
    *
-   * WHAT A LOCK IS NOW. It is no longer "whose leads this page is about" — the
-   * page is about all of them. The lock moved onto the ROW: see canEditLead in
-   * src/lib/salesSheet.js. Everything below is therefore about WORDS and TILES,
-   * not about narrowing a set.
+   * 30 AUG 2026, RYDER, REVERSING THAT: "if something becomes claimed by someone
+   * else then it gets removed from the floor and the rep doesnt see those leads,
+   * only the claimed rep and the owner/admin see it. that way the reps never
+   * comingle."
    *
-   * `tiles: []` on purpose, and the row of tiles is not drawn at all rather than
-   * drawn dead. Every tile this page could carry either duplicates the
-   * availability switch above the table (which already counts Mine, Available
-   * and All from the same rows the list holds) or belongs on Overview, which is
-   * where a rep's own numbers live now. A tile that filters nothing gets
-   * removed, not left lit and inert — that was the bug "Owed a touch today" had
-   * on the sales role for a day. */
+   * WHAT A LOCK IS NOW. Both things at once, and they are separate mechanisms:
+   *   - the SET is narrowed by visibleToMember (src/lib/salesSheet.js), applied
+   *     once in scopeLeads below, before any filter;
+   *   - the ROW is locked by canEditLead, which every control still reads.
+   * The two agree for every role today, which makes the row lock a guard that
+   * cannot fire on this page. It stays: it is what api/ and migration 0020
+   * check, and it is what a future screen showing a rep somebody else's row will
+   * land on.
+   *
+   * AND THE FIRM COLLISION THE AUG 27 RULE WAS FOR IS NOT DROPPED. It moved to
+   * firmsHeldByOthers: an ⚠ on a firm somebody else is inside, naming nobody. */
   floor: {
     page: "The Floor",
-    saying: "Every lead we have · you can only change the ones that are yours or unclaimed",
-    tiles: [],
-    emptyNote: "There are no contacts loaded at all. Somebody with an owner login imports the outreach sheet, and every row on it appears here.",
+    /* WAS "Every lead we have". It is not, as of 30 Aug — it is every lead a rep
+     * may work, which is their own plus the unclaimed ones. A page whose
+     * subtitle claims a set wider than the one it draws is the first thing that
+     * stops a screen being believed. */
+    saying: "Every lead you can work \u2014 yours and the ones nobody has claimed",
+    /* THE TILES CAME BACK — Ryder, 30 Aug 2026: the rep page and the owner page
+     * should "display all the same stuff".
+     *
+     * Not all six. Two of them are the availability switch said twice: "On the
+     * floor" is Available and "Yours, open" is Mine, and the rule this file has
+     * kept since Aug 26 is that a control saying what another control already
+     * says gets removed, not left lit. The other four each ask a question no
+     * control on this page can ask, and every one of them now counts a rep's own
+     * work honestly, because the page holds nothing else. */
+    tiles: ["owed", "atRisk", "meetings", "won"],
+    /* TWO REASONS THIS PAGE CAN BE EMPTY, and until 30 Aug there was one. It
+     * used to say "there are no contacts loaded at all", which was the only
+     * possibility while the page held every lead in the company. A rep on a book
+     * where everything is claimed now hits this too, and telling them to have an
+     * owner re-import a sheet that already has 3,663 rows on it sends them to
+     * fix something that is not broken. */
+    emptyNote: "Nothing is on your floor: either no contacts have been imported yet, or every lead is claimed by somebody else. Somebody with an owner login can see the whole pipeline and hand one over.",
     /* What a rep is told when a link points at a contact this page does not
      * hold. There is only ONE reason left for that now — the contact is not in
      * the rows that were loaded — because the page holds every lead it read. The
      * old wording ("somebody has claimed this one") described a lock that no
      * longer exists. */
-    notOnPage: "The Floor holds the newest contacts we loaded, and this one is not among them. Search their name to find them.",
-    hint: `Press Claim to take a lead — first contact is then due within ${ROE.FIRST_CONTACT_BUSINESS_DAYS} business days or it comes back to the floor. A row somebody else holds is greyed out and opens read-only, so nobody works the same firm twice.`,
+    /* TWO REASONS AGAIN, and the second one is the one where the old advice
+     * cannot work: searching for a name will never surface a lead somebody else
+     * holds, because it is not in the set the search runs over. */
+    notOnPage: "That contact is not on your floor — either somebody else has claimed them, or they are not among the contacts loaded. Somebody with an owner login can see every contact we hold.",
+    /* THERE IS NO HINT LINE ANY MORE — Ryder, 30 Aug 2026, pointing at it: "remove
+     * this text".
+     *
+     * It was a paragraph of instructions sitting between the list tabs and the
+     * table, on the screen a rep looks at all day. Everything it said is on the
+     * screen already and says itself: the Claim button is a button marked Claim,
+     * the ⚠ explains itself when you click the firm, and a lead somebody else
+     * holds is simply not drawn. A sentence explaining a control that is visible
+     * next to it is a sentence nobody reads twice.
+     *
+     * The rules it quoted are not lost — they live where they are enforced:
+     * ROE.FIRST_CONTACT_BUSINESS_DAYS in lib/sales-rules.js, and FIRM_BUSY_WHY in
+     * src/lib/salesSheet.js, which is what the firm popover prints. */
   },
 };
 
@@ -165,15 +222,29 @@ export default function SalesPage({ member, mode = null }) {
    * in a route must not be the thing that hands a rep the whole pipeline and
    * the admin controls with it — same fail-open the note at the top of
    * AdminDashboard.jsx is about. */
-  const lock = mode ? (MODES[mode] || MODES.mine) : null;
+  /* An unrecognised mode falls back to a REAL mode, so a typo in a route locks
+   * the page rather than unlocking it. It used to say `MODES.mine`, and there
+   * has been no `mine` mode since Aug 27 — so the fallback was `undefined`,
+   * which is the unlocked owner's page with the admin controls on it, and it
+   * would also have switched the firm marker off, since that is gated on `lock`.
+   * The exact fail-open the comment was written to prevent. 30 Aug 2026. */
+  const lock = mode ? (MODES[mode] || MODES.floor) : null;
   const [board, setBoard] = useState(null);
   // A locked page is the sheet and nothing else, so it opens there.
   const [view, setView] = useState(lock ? "lists" : member.role === "sales" ? "day" : "lists");
   const [q, setQ] = useState("");
   const [listFilter, setListFilter] = useState("all");
   const [stageFilter, setStageFilter] = useState("open");
+  /* `lock ? "all"`, NOT `lock.owner`. MODES has carried no `owner` key since the
+   * Aug 27 rebuild, so this was seeding `undefined` — which no filter reads
+   * (filterLeads skips the owner dropdown whenever `lock` is set) but which
+   * `canClear` compares against `tileOff.owner` ("all"). The comparison was
+   * therefore always true, so "Clear the filters" was always offered and the
+   * "Nothing open here right now" empty screen could never be reached on a rep's
+   * page. tileOff was fixed on Aug 27; this half was missed. Found by an
+   * adversarial review, 30 Aug 2026. */
   const [ownerFilter, setOwnerFilter] = useState(
-    lock ? lock.owner : member.role === "sales" ? member.user_id : "all",
+    lock ? "all" : member.role === "sales" ? member.user_id : "all",
   );
   const [openId, setOpenId] = useState(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -185,21 +256,30 @@ export default function SalesPage({ member, mode = null }) {
 
   /* ---- THE AVAILABILITY SWITCH — Mine · Available · All ----
    *
-   * Three states, one piece of state, and it is a FILTER OVER THE FULL BOARD
-   * rather than a new fetch. That is the whole architecture in one line: one
+   * Three states, one piece of state, and it is a FILTER OVER THE PAGE'S SET
+   * rather than a new fetch. (It said "the full board" until 30 Aug, when that
+   * was the same thing.) That is the whole architecture in one line: one
    * read, one row builder, three layouts. A page that fetches its own leads is a
    * page with its own snapshot, and two snapshots of one pipeline is how a tile
    * ends up disagreeing with the list underneath it.
    *
-   * It opens on "Mine", because that is where a rep actually works. Available is
-   * one click.
+   * Where it opens, and why, is the long note on the useState below — it moved
+   * on 30 Aug and the two sentences must not both live here.
    *
    * DELIBERATELY NOT REMEMBERED BETWEEN VISITS. Columns and grouping are saved
    * to localStorage; filters are not. A rep who comes back tomorrow to a page
    * still filtered to one state from last week reads it as an empty pipeline —
    * and the control that would explain it is the one they have forgotten they
-   * touched. */
-  const [availability, setAvailability] = useState(() => cleanAvailability("mine"));
+   * touched.
+   *
+   * IT OPENS ON "ALL" NOW, NOT "MINE" — 30 Aug 2026. It opened on Mine because
+   * that was where a rep worked and All was the whole company. As of today All
+   * IS a rep's whole workable book: their own leads plus the unclaimed ones, and
+   * nothing else. Opening on Mine meant a new rep — who holds nothing — landed
+   * on an empty table with every list tab reading 0, over a page whose own
+   * subtitle said it held thousands. That is what Ryder was looking at when he
+   * said the two pages were not showing the same thing. */
+  const [availability, setAvailability] = useState(() => cleanAvailability("all"));
 
   /* ---- what the Floor's buttons open ----
    * One piece of state each, holding the row it is about or null. A single
@@ -210,6 +290,11 @@ export default function SalesPage({ member, mode = null }) {
   const [tagging, setTagging] = useState(null);      // the row whose tags are open
   const [scanning, setScanning] = useState(null);    // the row whose scan panel is open
   const [logging, setLogging] = useState(null);      // { row, kind }
+  /* The email drafter. `drafting` is the id of the row whose draft is in flight
+   * — one at a time, so pressing four buttons does not open four panels — and
+   * `emailDraft` is what came back, or null. */
+  const [drafting, setDrafting] = useState(null);
+  const [emailDraft, setEmailDraft] = useState(null);
 
   /* THE SIX TILES ARE ONE ROW OF SWITCHES — Ryder, Aug 26 2026.
    *
@@ -222,6 +307,9 @@ export default function SalesPage({ member, mode = null }) {
    * Reading the lit state off `tileFilter` and nothing else is what makes the
    * ring honest: it lights only when the tile itself put the filters there. */
   const [tileFilter, setTileFilter] = useState(null);
+  /* Which safety-net list is being watched, or null. One at a time, like the
+   * tiles: two hygiene filters at once produces a list nobody can describe. */
+  const [listWatch, setListWatch] = useState(null);
   /* Where the ⋯ menu hangs from, or null. A rect, not a boolean — Popover
    * anchors to the button that opened it. */
   const [moreMenu, setMoreMenu] = useState(null);
@@ -351,7 +439,7 @@ export default function SalesPage({ member, mode = null }) {
   const teamName = useCallback((userId) => {
     if (!userId || !board) return null;
     const m = board.team.find((t) => t.user_id === userId);
-    return m ? (m.full_name || m.email) : "someone";
+    return m ? personLabel(m, board.team) : "someone";
   }, [board]);
 
   const companyById = useMemo(() => {
@@ -474,8 +562,32 @@ export default function SalesPage({ member, mode = null }) {
      * note?" for a move that has not happened. The reason box is that note. */
     if (patch.stage === "won" && lead.stage !== "won") { askForReason(lead, "won"); return false; }
     if (patch.stage === "lost" && lead.stage !== "lost") { askForReason(lead, "lost"); return false; }
+
+    /* ---- THE STAGE GATE — 30 Aug 2026 ----
+     *
+     * Follow up and Meeting need a date; Proposal needs a proposal with a number
+     * on it. HubSpot ships exactly this as a Required checkbox on the stage that
+     * blocks the save, and Salesforce as a validation rule.
+     *
+     * IT REFUSES, IT DOES NOT SILENTLY FIX. Booking a date on the rep's behalf
+     * would be the console inventing a fact about the future. The refusal names
+     * the field and the control that sets it, so the sentence is an instruction
+     * rather than a complaint.
+     *
+     * Returns FALSE, which is the same contract Won and Lost use: the chip
+     * picker skips its note step, because a note about a move that did not
+     * happen is worse than no note. */
+    if (patch.stage && patch.stage !== lead.stage) {
+      const need = STAGE_REQUIRES[patch.stage];
+      if (need && !stageRequirementMet(patch.stage, lead, { proposals: board?.proposals || [] })) {
+        toast.warn(need.ask, `${need.why} ${need.kind === "date"
+          ? "Log a touch on this row and set the date when it asks “and next?”, or set the follow-up on the record."
+          : "Open the record, add the proposal under Proposals, then set the stage."}`);
+        return false;
+      }
+    }
     return patchLeadRaw(lead, patch, note);
-  }, [askForReason, patchLeadRaw]);
+  }, [askForReason, patchLeadRaw, board]);
 
   /* Put a name in the Sales Owner column. This is a CLAIM, not a text field:
    * it stamps the claim date and starts the cadence, because the sheet's whole
@@ -616,6 +728,170 @@ export default function SalesPage({ member, mode = null }) {
     if (moved) await load();
   }, [board, companyById, load, member, now]);
 
+  /* ---- LOG A TOUCH FROM THE ROW — Ryder, 30 Aug 2026 ----
+   *
+   * Everything that makes this correct is in logTouch (src/lib/data.js) and
+   * lib/touch-log.js. This is the thin half: hand it the lead, say what happened
+   * to the person who pressed it, reload.
+   *
+   * The toast NAMES THE SIDE EFFECTS. A rep who logs a call and silently has the
+   * lead claimed for them will find out later and not know why — and "we claimed
+   * it for you" is the one thing on this path they did not ask for. Same for the
+   * dates: they are what the Stats page counts, so a rep should know the click
+   * did more than write a line. */
+  const doTouch = useCallback(async (row, channel, outcome) => {
+    const res = await logTouch({
+      lead: row.lead, userId: member.user_id,
+      actorName: member.full_name || member.email,
+      channel, outcome,
+    });
+    if (!res.ok) {
+      if (res.taken) toast.error("Somebody got there first", res.error);
+      else toast.error("That was not logged", res.error);
+      await load();
+      return false;
+    }
+    const extras = [];
+    if (res.claimed) extras.push("claimed for you");
+    if (res.stamped?.length) extras.push("the dates the stats read are set");
+    /* `res.error` on an ok result means the touch landed and a stamp did not —
+     * two different facts, and folding them into one green toast would be the
+     * "one flag, three causes" bug this console already wrote a note about. */
+    if (res.error) toast.warn("Logged, with one problem", res.error);
+    else toast.success("Logged", extras.length ? `On their timeline · ${extras.join(" · ")}.` : "On their timeline.");
+    await load();
+    return true;
+  }, [member.user_id, member.full_name, member.email, load]);
+
+  /* ---- "AND NEXT?" — the third step, after the touch is already written ----
+   *
+   * Two separate writes on purpose, and neither one blocks the other:
+   *
+   *   the DATE goes on the lead as `next_follow_up_at`. That column has existed
+   *   since migration 0002 and until today only the Work page wrote it and only
+   *   the Work page read it — no sales rule has ever looked at it. It is what
+   *   makes "no next step booked" a real query instead of a guess.
+   *
+   *   the NOTE goes on the timeline as type 'note' — the one type the timers
+   *   trigger (0009) ignores, so adding a sentence cannot reset a cold clock.
+   *
+   * A failure in one is reported and the other still stands. They are different
+   * facts and folding them into one message would make the sentence false for
+   * whichever half worked. */
+  const doTouchDone = useCallback(async (row, { next, note } = {}) => {
+    const body = String(note || "").trim();
+    const problems = [];
+
+    if (next) {
+      /* 9am local, matching what the Work page writes, so one column does not
+       * hold two conventions. A date with no time sorts at midnight UTC, which
+       * in Central is the evening BEFORE — the follow-up would come due a day
+       * early and nobody would know why. */
+      const at = new Date(`${next}T09:00:00`);
+      if (Number.isNaN(at.getTime())) problems.push("that date could not be read");
+      else {
+        const res = await upsertLead({ id: row.lead.id, next_follow_up_at: at.toISOString() });
+        if (!res.ok) problems.push(`the follow-up date did not save (${res.error})`);
+      }
+    }
+
+    if (body) {
+      const res = await addLeadActivity({
+        leadId: row.lead.id, actor: member.user_id, type: "note", outcome: null, body,
+      });
+      if (!res.ok) problems.push(`the note did not save (${res.error})`);
+    }
+
+    if (problems.length) {
+      toast.error("Not everything saved", `${problems.join(", and ")}. The touch itself is still logged.`);
+    } else if (next) {
+      toast.success("Booked", `Back on this ${new Date(`${next}T09:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}.`);
+    }
+    await load();
+  }, [member.user_id, load]);
+
+  /* ---- DRAFT THE NEXT EMAIL — Ryder, 31 Aug 2026 ----
+   *
+   * Everything that decides what the email says is on the server: the facts are
+   * read there, the model sees nothing else, and a draft that states something
+   * the facts do not support is thrown away there. See api/lead-email.js.
+   *
+   * This half only carries the request and opens the panel. It deliberately
+   * keeps the LEAD on the draft object, so "write another" can ask again
+   * without the panel having to know how to find the row it came from. */
+  const doDraftEmail = useCallback(async (row, angle = null) => {
+    const lead = row?.lead || row;
+    if (!lead?.id) return;
+    setDrafting(lead.id);
+    try {
+      /* `body` IS AN OBJECT, NOT A STRING. apiFetch stringifies it itself, so
+         passing JSON.stringify() here sent a JSON string of a JSON string. It
+         happened to survive — the dev plugin parses once and readJson parses
+         again — which is worse than failing, because it would have broken on
+         Vercel where nothing parses twice. */
+      const res = await apiFetch("/api/lead-email", {
+        method: "POST",
+        body: { leadId: lead.id, ...(angle ? { angle } : {}) },
+      });
+      if (!res?.ok) {
+        /* A bounced address is a REFUSAL WITH A REASON, not a failure. It is the
+         * rule working, so it is said as information rather than as an error. */
+        if (res?.bounced) toast.warn("Nothing can be sent to that address", res.error);
+        else toast.error("No draft came back", res?.error || "The server did not answer.");
+        return;
+      }
+      /* THE PAYLOAD IS UNDER `.data`. apiFetch returns `{ ok, data }`, so
+         spreading `res` gave the panel an object with no subject, no body and
+         no job — it opened blank. Found by opening it. */
+      setEmailDraft({ ...res.data, lead });
+    } finally {
+      setDrafting(null);
+    }
+  }, []);
+
+  /* ---- THE DRAFT WAS SENT: LOG IT — Ryder, 31 Aug 2026 ----
+   *
+   * "when i send a draft that was made for me … it marks them as contacted by
+   * email with the date and notes, then the rep just clicks the follow up date."
+   *
+   * THROUGH logTouch, the same path the Contacted? cell uses. That is the whole
+   * reason this is three lines: the claim, the database trigger's date stamps,
+   * the cadence step and the timeline line all behave identically whichever
+   * control was pressed. A second way to log an email would be a second way for
+   * the two to drift.
+   *
+   * The EDITED subject and body are the note, so the timeline carries the words
+   * that actually went out rather than the draft's. See logTouch's `note`.
+   */
+  const doEmailSent = useCallback(async (lead, { subject, body } = {}) => {
+    const res = await logTouch({
+      lead, userId: member.user_id,
+      actorName: member.full_name || member.email,
+      channel: "email", outcome: "sent",
+      note: [subject ? `Subject: ${subject}` : null, body].filter(Boolean).join("\n\n"),
+    });
+    if (!res.ok) {
+      if (res.taken) toast.error("Somebody got there first", res.error);
+      else toast.error("That was not logged", res.error);
+      await load();
+      return false;
+    }
+    const extras = [];
+    if (res.claimed) extras.push("claimed for you");
+    if (res.stamped?.length) extras.push("the dates the stats read are set");
+    if (res.error) toast.warn("Logged, with one problem", res.error);
+    else toast.success("Logged as emailed", extras.length ? `On their timeline · ${extras.join(" · ")}.` : "On their timeline.");
+    await load();
+    return true;
+  }, [member.user_id, member.full_name, member.email, load]);
+
+  /* The follow-up date, after the email is already logged. The SAME writer the
+   * Contacted? picker's third step uses, so one column is written one way. */
+  const doEmailNext = useCallback(async (lead, next) => {
+    if (!next) return;
+    await doTouchDone({ lead }, { next, note: null });
+  }, [doTouchDone]);
+
   /* Hand a lead back to the floor. Own leads only, said out loud rather than
    * refused silently — the button is not drawn on somebody else's row, and this
    * is the guard for the path that does not go through the button. */
@@ -675,6 +951,17 @@ export default function SalesPage({ member, mode = null }) {
     await load();
   }, [load]);
 
+  /* THE WHOLE BOARD ON PURPOSE, and it is the one place that still is.
+   *
+   * These are every contact at the open record's firm, and they feed exactly two
+   * things: the drawer's firm warning, and "claim their colleagues too". The
+   * warning has to count another rep's contacts or it cannot warn about them —
+   * that warning is what makes hiding their rows safe in the first place. It
+   * prints no name for a rep: see salesProfile.jsx, where the naming function is
+   * swapped for one that says "Somebody on the team".
+   *
+   * Nothing here renders a hidden lead as a row. If that ever changes, this is
+   * the line to narrow. 30 Aug 2026 */
   const siblingsOf = useCallback((lead) => {
     if (!lead?.company_id) return [lead].filter(Boolean);
     return (board?.leads || []).filter((l) => l.company_id === lead.company_id);
@@ -699,7 +986,45 @@ export default function SalesPage({ member, mode = null }) {
    * It is kept as its own memo rather than folded into `rows` because three
    * things count from it and must count from the same set: the availability
    * switch, the list tabs, and the empty-screen wording. */
-  const scopeLeads = useMemo(() => board?.leads || [], [board]);
+  /* 30 AUG 2026 — AND IT IS A NARROWING AGAIN, FOR ONE ROLE.
+   *
+   * Ryder: "if something becomes claimed by someone else then it gets removed
+   * from the floor and the rep doesnt see those leads, only the claimed rep and
+   * the owner/admin see it. that way the reps never comingle."
+   *
+   * So this is `visibleToMember` and nothing else. Owner and admin get the same
+   * array they always got — the function returns the input untouched for any
+   * role that is not `sales` — so the owner's page is not changed by this line.
+   * A rep gets their own leads plus the unclaimed ones.
+   *
+   * THE FIRM COLLISION THAT THE OLD WIDE RULE WAS PROTECTING IS HANDLED, not
+   * dropped: `firmsBusy` below is worked out from board.leads BEFORE this runs,
+   * and marks an unclaimed row at a firm somebody else is inside. Read the block
+   * at the bottom of src/lib/salesSheet.js before changing either of them.
+   *
+   * It stays its own memo rather than folding into `rows` because four things
+   * count from it and must count from the same set: the availability switch, the
+   * list tabs, the tiles and the empty-screen wording. */
+  const scopeLeads = useMemo(
+    () => visibleToMember(board?.leads || [], member),
+    [board, member],
+  );
+
+  /* WHICH FIRMS SOMEBODY ELSE IS ALREADY INSIDE.
+   *
+   * From `board.leads`, the WHOLE board — not from scopeLeads, which is the
+   * exact set with those rows taken out of it. Counting this from the narrowed
+   * list would return an empty set on every render and the marker would silently
+   * never appear, which is the failure this console keeps writing notes about:
+   * a guard that cannot fire.
+   *
+   * Only on a locked page. On the owner's page every claimed row is on screen
+   * with a name against it, so a chip saying "somebody is working this firm"
+   * would sit on most of the sheet carrying nothing. */
+  const firmsBusy = useMemo(
+    () => (lock ? firmsHeldByOthers(board?.leads || [], member) : null),
+    [lock, board, member],
+  );
 
   /* ---- THE ONLY WAY A LEAD GETS INTO THE DRAWER ----
    *
@@ -712,27 +1037,39 @@ export default function SalesPage({ member, mode = null }) {
    * everything and the guard would be theatre. It is not deleted — it is
    * repointed at the thing that actually decides:
    *
-   *   an id NOT in the rows we loaded  -> refused, and told why
-   *   an id in the rows, not editable  -> opens READ-ONLY. Fields, notes and the
-   *                                       timeline are visible; there are no
-   *                                       buttons at all.
-   *   an id in the rows, editable      -> opens as it always did
+   *   an id NOT on this page           -> refused, and told why
+   *   an id on it, not editable        -> opens READ-ONLY. Fields, notes and the
+   *                                       timeline are visible; no buttons.
+   *   an id on it, editable            -> opens as it always did
    *
-   * Read-only rather than refused is the requirement, not a softening of it: a
-   * rep has to be able to see that Brandon is already in this building, and what
-   * was said, or the whole reason for showing every row disappears.
+   * 30 AUG: THE MIDDLE CASE IS NOW UNREACHABLE HERE, because the page's set and
+   * the editable set are the same set — a rep is never handed a row they may not
+   * edit. It is kept, not deleted: an unreachable branch that fails closed costs
+   * nothing, and the Aug 26 hole was one missing check exactly like it.
+   *
+   * The Aug 27 reasoning for the read-only branch was that a rep has to be able
+   * to see that Brandon is already in this building. That requirement did not go
+   * away — Ryder moved it. The ⚠ on the firm says somebody is in there, without
+   * showing the record or the name. See firmsHeldByOthers.
    *
    * The read-only decision is NOT made here. It is derived once from
    * canEditLead() where the drawer is rendered, so the drawer and the row it was
    * opened from cannot disagree. */
   const openLeadById = useCallback((id) => {
     if (!id) return;
-    if (!(board?.leads || []).some((l) => l.id === id)) {
+    /* AGAINST `scopeLeads`, NOT `board.leads`. This was repointed at the whole
+     * board on Aug 27, when the page held every row and a check against the
+     * page's own set would have passed for everything. As of 30 Aug the page
+     * narrows again, so the address bar is a way past the narrowing unless this
+     * reads the same set the page draws — which is the exact hole a checker
+     * found on Aug 26 (`?lead=<another rep's lead>` opening a full drawer from a
+     * page that did not list it). One set, one check. */
+    if (!scopeLeads.some((l) => l.id === id)) {
       toast.error("That contact is not on this page", lock ? lock.notOnPage : "The sheet holds the newest contacts only. Search their name to find them.");
       return;
     }
     setOpenId(id);
-  }, [board, lock]);
+  }, [scopeLeads, lock]);
 
   /* ---- ONE FILTER CHAIN, AND EVERY NUMBER ON THE PAGE READS IT ----
    *
@@ -741,7 +1078,7 @@ export default function SalesPage({ member, mode = null }) {
    * own — and the only way two numbers on one screen cannot drift is if there
    * is one place that decides what a filtered set holds. `skipList` is the one
    * filter a caller may leave out: the tabs' own. Aug 26 2026 */
-  const filterLeads = useCallback((source, { skipList = false, skipAvailability = false } = {}) => {
+  const filterLeads = useCallback((source, { skipList = false, skipAvailability = false, skipWatch = false } = {}) => {
     let list = source;
     /* THE AVAILABILITY SWITCH IS A FILTER LIKE ANY OTHER, and it lives here with
      * the rest of them so there is one place that decides what the list holds.
@@ -752,6 +1089,16 @@ export default function SalesPage({ member, mode = null }) {
      * says the same thing more precisely (it can name a person), and two
      * controls filtering the same column is how one of them ends up lying. */
     if (lock && !skipAvailability) list = byAvailability(list, availability, member);
+    /* THE SAFETY-NET LIST, and it runs early because it is the most selective
+     * filter on the page by a wide margin. `stuck` is deliberately NOT narrowed
+     * to the reader — it is the owner's view of everybody else's abandoned
+     * claims, and narrowing it would make the one list that exists to find other
+     * people's stuck work show only your own. */
+    if (listWatch && !skipWatch) {
+      list = list.filter((l) => onLeadList(listWatch, l, {
+        userId: listWatch === "stuck" ? null : member.user_id, now,
+      }));
+    }
     if (!skipList && listFilter !== "all") list = list.filter((l) => l.list_id === listFilter);
     if (stageFilter === "open") list = list.filter((l) => isOpenStage(l.stage));
     else if (stageFilter === "closed") list = list.filter((l) => !isOpenStage(l.stage));
@@ -785,7 +1132,7 @@ export default function SalesPage({ member, mode = null }) {
       });
     }
     return list;
-  }, [lock, availability, member, listFilter, stageFilter, ownerFilter, tileFilter, now, q, companyById]);
+  }, [lock, availability, member, listFilter, stageFilter, ownerFilter, tileFilter, listWatch, now, q, companyById]);
 
   /* ---- the filtered set every view draws from ---- */
   const rows = useMemo(() => filterLeads(scopeLeads), [filterLeads, scopeLeads]);
@@ -838,26 +1185,75 @@ export default function SalesPage({ member, mode = null }) {
      * where the page OPENS, so it only counts once they have moved off it.
      * Otherwise Clear would offer to undo something nobody did, and pressing it
      * would reload the same rows. */
-    || (lock ? availability !== "mine" : false)
+    || listWatch !== null
+    || (lock ? availability !== "all" : false)
   );
 
   const queue = useMemo(() => {
     if (!board) return [];
-    return salesQueue(board.leads, {
+    /* FROM THE PAGE'S OWN SET. My Day used to build its queue from the whole
+     * board, which was right while the page held the whole board. As of 30 Aug
+     * a rep's page does not, and a queue counted from rows the sheet refuses to
+     * draw would put another rep's contact at the top of this rep's day. */
+    /* AND THROUGH THE AVAILABILITY SWITCH on a locked page. My Day sits under
+     * that switch now that a rep has view tabs, and a queue built before it ran
+     * put "Free to claim" cards on screen while the switch above them said Mine.
+     * Filters the rep set, never widens it. */
+    /* THROUGH THE WATCH LIST TOO. My Day built its queue from the page's whole
+     * set, so pressing a chip and switching to My Day left the chip lit over a
+     * queue it did not filter — a control that says it is on about a view it
+     * does not touch. The chips are drawn on every view precisely because the
+     * filter runs on every view; this is the view where that was not true. */
+    const base = listWatch
+      ? scopeLeads.filter((l) => onLeadList(listWatch, l, {
+        userId: listWatch === "stuck" ? null : member.user_id, now,
+      }))
+      : scopeLeads;
+    return salesQueue(lock ? byAvailability(base, availability, member) : base, {
       userId: member.user_id, now,
       touchCounts: board.touchCounts,
       includeUnclaimed: true,
       scoreOf,
     });
-  }, [board, member.user_id, now, scoreOf]);
+  }, [board, scopeLeads, lock, availability, listWatch, member, now, scoreOf]);
 
   const owed = queue.filter((c) => c.over !== null && c.over >= 0 && c.reason !== "unclaimed");
+
+  /* WHAT EACH SAFETY-NET LIST WOULD SHOW. Counted from the page's own set with
+   * every OTHER filter off, so the number on a chip is what pressing it gives —
+   * the same shape as availCounts and the list tabs. Counted in one pass over
+   * one array, so two chips cannot come from two different reads. */
+  /* FROM THE SAME FILTER CHAIN THE LIST USES, minus the watch itself.
+   *
+   * It counted raw `scopeLeads`, so a rep on "Available" saw "No next step · 4"
+   * and got an empty table — the availability switch, the owner dropdown and
+   * the search box all narrow the list and narrowed none of the count. Same
+   * shape as availCounts and the list tabs: everything that is on, minus the
+   * one thing this number is about. Found by a checker, 30 Aug 2026. */
+  const watchCounts = useMemo(
+    () => leadListCounts(filterLeads(scopeLeads, { skipWatch: true, skipList: true }), {
+      userId: member.user_id, now,
+    }),
+    [filterLeads, scopeLeads, member.user_id, now],
+  );
 
   /* Counted from this page's set, so a tile on My leads counts the rep's own
    * leads and a tile on the owner's page counts the whole board — exactly what
    * the list under it holds. */
   const counts = useMemo(() => {
-    const all = scopeLeads;
+    /* ON A LOCKED PAGE, THE AVAILABILITY SWITCH COUNTS HERE TOO.
+     *
+     * These used to count the page's whole set with no filter on them at all.
+     * That was harmless while the floor had no tiles; the four that came back on
+     * 30 Aug made it a defect: press Mine, press Pipeline, and "Meetings +
+     * proposals" counted the rep's own AND every unclaimed one while the board
+     * underneath drew Mine only. Two numbers about the same thing on one screen.
+     *
+     * The switch and nothing else — the list tabs, the stage box and the search
+     * are the tiles' own job to override, and a tile that counted through them
+     * could never be pressed back out of. Same shape as tabScope and availCounts
+     * above: everything that is on, minus the thing this number is about. */
+    const all = lock ? byAvailability(scopeLeads, availability, member) : scopeLeads;
     const open = all.filter((l) => isOpenStage(l.stage));
     return {
       floor: open.filter((l) => !l.owner_id).length,
@@ -867,19 +1263,19 @@ export default function SalesPage({ member, mode = null }) {
       meetings: all.filter((l) => ["meeting", "proposal"].includes(l.stage)).length,
       won: all.filter((l) => l.stage === "won").length,
     };
-  }, [scopeLeads, member.user_id, now, owed.length]);
+  }, [scopeLeads, lock, availability, member, now, owed.length]);
 
   useEffect(() => {
     if (linkOpened || !linkedLeadId || !board) return;
     setLinkOpened(true);
-    /* Only if it is genuinely in what we loaded. Setting openId to an id that
-     * is not on the board renders an empty drawer, which reads as broken. The
-     * page caps at the newest 2,000 contacts, so a link to an older one lands
-     * on the page and says nothing rather than lying. */
-    /* Through the guard, so a link cannot reach past the lock — see
-     * openLeadById. On the owner's page this is the same board check it always
-     * was. */
-    if (board.leads.some((l) => l.id === linkedLeadId)) openLeadById(linkedLeadId);
+    /* Only if it is genuinely on this page. Setting openId to an id that is not
+     * there renders an empty drawer, which reads as broken.
+     *
+     * AGAINST `scopeLeads`, and through openLeadById, which checks the same set
+     * again. Checking the whole board here and the narrowed set there would mean
+     * the two disagree about the same address — and an address that gets past
+     * one of them is the Aug 26 hole exactly. */
+    if (scopeLeads.some((l) => l.id === linkedLeadId)) openLeadById(linkedLeadId);
     /* Two different reasons, and they must not be blended. A failed read of the
      * leads table also leaves the list empty, and telling somebody to "search
      * their name" then sends them chasing advice that cannot work, for a cause
@@ -889,19 +1285,40 @@ export default function SalesPage({ member, mode = null }) {
     } else {
       toast.info("That contact is not loaded", "The sheet holds the newest contacts only. Search their name to find them.");
     }
-  }, [linkedLeadId, board, linkOpened, openLeadById]);
+  }, [linkedLeadId, board, scopeLeads, linkOpened, openLeadById]);
 
-  /* Read from the board on purpose, and safe because `openId` can only have
-   * been set by openLeadById above — which is where the lock is enforced. Read
-   * from `scopeLeads` instead and the drawer would close under a rep the instant
-   * they pressed Claim or Release inside it, because that is the moment the lead
-   * leaves the page's set. */
-  const openLead = openId ? (board?.leads || []).find((l) => l.id === openId) : null;
+  /* FROM THE PAGE'S SET, and the second lock on the same door: `openId` can only
+   * be set through openLeadById, which already refuses anything outside it, and
+   * the Aug 26 hole was exactly one missing check like this one.
+   *
+   * IT USED TO READ THE WHOLE BOARD, with a note saying that reading the page's
+   * set here would close the drawer under a rep the moment they pressed Claim or
+   * Release, because that was when a lead left the set. THAT IS NO LONGER TRUE
+   * and it is worth saying why: after 30 Aug a rep's set is "mine OR unclaimed",
+   * and Claim and Release move a lead from one of those halves to the other.
+   * Both halves are on the page, so neither button can push a record out from
+   * under the person pressing it. The only writes that CAN are an owner handing
+   * the lead to a third person and a rep having it taken off them — both of
+   * which are somebody else's action, and closing the drawer is the honest
+   * response to it. */
+  const openLead = openId ? scopeLeads.find((l) => l.id === openId) : null;
 
   /* A locked page has no view tabs, so `view` is fixed at the sheet. Deriving
    * it here rather than trusting the state is what makes that structural: no
    * stray setView can put My Day on a rep's page. */
-  const shownView = lock ? "lists" : view;
+  /* 30 AUG 2026 — A LOCKED PAGE HAS VIEW TABS NOW.
+   *
+   * It used to be pinned to the sheet, and `shownView` was derived rather than
+   * stateful so that no stray setView could move it. That was right while a rep
+   * saw a different set from the owner: My Day, the Pipeline board and Firms all
+   * count across a book, and a book with somebody else's rows in it would have
+   * counted them.
+   *
+   * A rep's set is now exactly the set they may work, so all four views are true
+   * about it, and Ryder asked for the two pages to show the same things. The
+   * derivation stays a derivation — an unknown view falls back to the sheet
+   * rather than rendering nothing. */
+  const shownView = VIEWS.some(([v]) => v === view) ? view : "lists";
   const ALL_TILES = ["floor", "mine", "owed", "atRisk", "meetings", "won"];
   const tileRow = lock ? lock.tiles : ALL_TILES;
 
@@ -961,10 +1378,10 @@ export default function SalesPage({ member, mode = null }) {
       )}
 
       {/* ---- tiles ----
-          Which tiles a page gets is decided in MODES at the top, and a tile
-          that is not on this page is not drawn at all rather than drawn dead.
-          The floor gets none, so the row itself goes with them — an empty grey
-          strip above the table is a row of switches that does nothing. */}
+          Which tiles a page gets is decided in MODES at the top, and a tile that
+          is not on this page is not drawn at all rather than drawn dead. If a
+          page ends up with none, the row itself goes too — an empty grey strip
+          above the table is a row of switches that does nothing. */}
       {/* ---- tiles ----
           NOT ON THE SHEET any more — Ryder, 30 Aug 2026: "everything seems
           really complex and jumbled, i want to simplify it all." Six tiles of
@@ -992,6 +1409,61 @@ export default function SalesPage({ member, mode = null }) {
         </div>
       )}
 
+      {/* ---- THE SAFETY NET ----
+          Three saved filters over columns we already keep. They sit ABOVE the
+          numbers card, because a lead falling through a crack is more urgent
+          than how the pipeline is doing overall — and a chip reading 0 is drawn
+          anyway, in grey, because "nothing has gone quiet" is a fact worth
+          seeing and a row that appears only when things are wrong teaches
+          nobody where to look. 30 Aug 2026 */}
+      {/* ON EVERY VIEW, not just the sheet.
+          It was gated to the sheet, and the filter is not — so switching to
+          Pipeline with a list on left the board quietly showing 2 of 3 cards
+          with no control on screen to explain or undo it. This file already
+          says why that is forbidden, about the tile chip: "a filter that is ON
+          with no control on screen showing it is a filter nobody can find or
+          turn off". Found by clicking Pipeline, not by a test. */}
+      {board.leads.length > 0 && (
+        <div className="adm-sl-watch" role="group" aria-label="Leads that need attention">
+          {LEAD_LIST_IDS.filter((id) => !LEAD_LISTS[id].owners || isAdmin).map((id) => {
+            const def = LEAD_LISTS[id];
+            const n = watchCounts[id] || 0;
+            const on = listWatch === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                className={`adm-sl-watch-b${on ? " on" : ""}${n === 0 ? " zero" : ""}`}
+                aria-pressed={on}
+                title={n === 0 ? def.empty : def.hint}
+                onClick={() => {
+                  /* Same tile rule: pressing the lit one turns it off and puts
+                     the page back where it opened. A hygiene filter you cannot
+                     find the way out of is worse than not having it. */
+                  setTileFilter(null);
+                  if (on) { setListWatch(null); return; }
+                  setListWatch(id);
+                  setStageFilter("open");
+                  setListFilter(tileOff.list);
+                  setView("lists");
+                }}
+              >
+                <span className="adm-sl-watch-n">{n}</span>
+                <span>{def.label}</span>
+              </button>
+            );
+          })}
+          {listWatch && (
+            <span className="adm-sl-watch-why">
+              {watchCounts[listWatch] === 0 ? LEAD_LISTS[listWatch].empty : LEAD_LISTS[listWatch].hint}
+              {listWatch === "stuck" && watchCounts.stuck > 0 && isAdmin
+                ? " Set the Sales Owner column to “Nobody — on the floor” to hand one back."
+                : ""}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* ---- what is on screen, above the controls ----
           Only on the sheet, because it counts the rows the sheet is about to
           draw; My Day, Pipeline and Firms are different shapes with different
@@ -1003,18 +1475,35 @@ export default function SalesPage({ member, mode = null }) {
 
       {/* ---- toolbar ---- */}
       <div className="card adm-sl-bar">
-        {lock ? (
-          /* THE AVAILABILITY SWITCH, where the view tabs sit on the owner's
-             page. Three states, exactly one active, and each one carries the
-             number of rows pressing it would show — counted from the same set the
-             list is built from, so the button and the list cannot disagree.
+        {/* THE VIEW TABS ARE ON BOTH PAGES NOW — Ryder, 30 Aug 2026.
+            They used to be swapped out for the availability switch on a locked
+            page, because a rep's set held other reps' rows and My Day, the
+            Pipeline board and Firms would all have counted them. That set is
+            gone, so all four views are true about a rep's page and the two
+            pages can finally show the same shapes. */}
+        <div className="adm-sl-views">
+          {VIEWS.map(([v, label]) => (
+            /* Picking a view by hand puts the tile row out for the same reason
+               the dropdowns do: the tiles set the view, so leaving one lit
+               after you moved off it makes the ring mean nothing. Aug 26 2026 */
+            <button key={v} className={view === v ? "active" : ""} onClick={() => { setTileFilter(null); setView(v); }}>
+              {label}{v === "day" && owed.length ? ` · ${owed.length}` : ""}
+            </button>
+          ))}
+        </div>
 
-             IT REPLACED A LINE OF PLAIN TEXT that said which leads the page held.
-             That sentence was honest when the page held one slice; the page holds
-             all of them now, and this is the control that says which slice you
-             are looking at. Reusing .adm-sl-views rather than adding a class: it
-             is the segmented control this console already has, and admin.css was
-             not opened for this change. Aug 27 2026 */
+        {/* THE AVAILABILITY SWITCH, and only on a locked page. Three states,
+            exactly one active, each carrying the number of rows pressing it
+            would show — counted from the same set the list is built from, so the
+            button and the list cannot disagree.
+
+            The owner's page has the person dropdown instead, which says the same
+            thing more precisely because it can name somebody. Two controls
+            filtering one column is how one of them ends up lying.
+
+            "All" now means yours plus unclaimed, because that is all the page
+            holds. Its words changed with it — see AVAILABILITY_HINTS. */}
+        {lock ? (
           <div className="adm-sl-views" role="group" aria-label="Which leads to show">
             {AVAILABILITY.map((a) => (
               <button
@@ -1030,18 +1519,7 @@ export default function SalesPage({ member, mode = null }) {
               </button>
             ))}
           </div>
-        ) : (
-          <div className="adm-sl-views">
-            {VIEWS.map(([v, label]) => (
-              /* Picking a view by hand puts the tile row out for the same reason
-                 the dropdowns do: the tiles set the view, so leaving one lit
-                 after you moved off it makes the ring mean nothing. Aug 26 2026 */
-              <button key={v} className={view === v ? "active" : ""} onClick={() => { setTileFilter(null); setView(v); }}>
-                {label}{v === "day" && owed.length ? ` · ${owed.length}` : ""}
-              </button>
-            ))}
-          </div>
-        )}
+        ) : null}
 
         <TextInput
           className="adm-sl-search"
@@ -1082,8 +1560,13 @@ export default function SalesPage({ member, mode = null }) {
             <option value="all">Everybody</option>
             <option value="mine">Mine</option>
             <option value="floor">On the floor</option>
-            {board.team.filter((t) => t.active).map((t) => (
-              <option key={t.user_id} value={t.user_id}>{t.full_name || t.email}</option>
+            {/* peopleOptions over the ACTIVE list, not full_name: two teammates
+              * with the same name drew two identical rows here, and picking the
+              * wrong one silently filters the floor to somebody else's leads.
+              * The active filter runs first on purpose — the list judged for a
+              * clash has to be the list being drawn. src/lib/people.js */}
+            {peopleOptions(board.team.filter((t) => t.active)).map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
         )}
@@ -1195,13 +1678,13 @@ export default function SalesPage({ member, mode = null }) {
               whose number does not match its list. On a locked page it is
               availability-, stage- and search-filtered — see tabScope above. */
           tabScope={tabScope}
+          firmsBusy={firmsBusy}
           /* The page's whole set, filters and all off. The ONLY thing this
               decides is which empty screen is true: a page with nothing in it,
               versus filters that match nothing in a page that holds plenty. */
           scopeLeads={scopeLeads}
           allTabLabel={lock ? "All lists" : "Everybody"}
           emptyNote={lock ? lock.emptyNote : null}
-          hint={lock ? lock.hint : null}
           /* CLAIMING, and only ever with YOUR OWN id: a Claim button that could
               file a lead under somebody else is not a claim.
               It used to be `lock.owner === "floor"` — the page that held only
@@ -1221,12 +1704,17 @@ export default function SalesPage({ member, mode = null }) {
           onScan={(row) => setScanning(row)}
           onClose={(row, kind) => askForReason(row.lead, kind)}
           onRelease={(row) => doRelease(row.lead)}
+          onTouch={doTouch}
+          onTouchDone={doTouchDone}
+          onDraftEmail={doDraftEmail}
+          drafting={drafting}
           /* Clear means clear, so it puts the tile row and the availability
               switch back too — otherwise a tile stayed lit over a list it was no
               longer filtering. Back to THIS page's opening values. */
           onClear={() => {
             setQ(""); setListFilter(tileOff.list); setStageFilter(tileOff.stage);
-            setOwnerFilter(tileOff.owner); setTileFilter(null); setAvailability("mine");
+            setOwnerFilter(tileOff.owner); setTileFilter(null); setAvailability("all");
+            setListWatch(null);
           }}
           /* And whether it is offered at all. See canClear. */
           canClear={canClear}
@@ -1245,7 +1733,10 @@ export default function SalesPage({ member, mode = null }) {
       )}
 
       {shownView === "firms" && (
-        <FirmsView board={board} rows={rows} teamName={teamName} onOpen={openLeadById} />
+        <FirmsView
+          board={board} scopeLeads={scopeLeads} rows={rows} teamName={teamName}
+          onOpen={openLeadById} hideNames={member.role === "sales"} firmsBusy={firmsBusy}
+        />
       )}
 
       {/* ---- overlays ---- */}
@@ -1284,6 +1775,10 @@ export default function SalesPage({ member, mode = null }) {
              the ONE function rather than in front of the four buttons that call
              it. See askForReason. */
           onCloseDeal={(kind) => askForReason(openLead, kind)}
+          /* THE DRAWER MOVES A LEAD THROUGH THE PAGE'S GATE, like every other
+             control. It used to write the stage itself, so Follow up, Meeting
+             and Proposal were gated on the sheet and free in the drawer. */
+          onStage={(stage, note, extra = {}) => patchLead(openLead, { stage, ...extra }, note)}
           onClose={() => setOpenId(null)}
           reload={load}
         />
@@ -1340,6 +1835,22 @@ export default function SalesPage({ member, mode = null }) {
           text={textGate(logging.row.lead)}
           onClose={() => setLogging(null)}
           reload={load}
+        />
+      )}
+
+      {/* ---- THE EMAIL DRAFT ----
+          `onRedraft` asks the server again with the rep's angle and replaces
+          what is on screen. It is the SAME function the button uses, so a
+          redraft cannot come to behave differently from a first draft — and it
+          carries the lead the panel was opened from, so the panel never has to
+          know how to find its own row. */}
+      {emailDraft && (
+        <EmailDraftModal
+          draft={emailDraft}
+          onClose={() => setEmailDraft(null)}
+          onRedraft={(angle) => doDraftEmail(emailDraft.lead, angle)}
+          onSent={(text) => doEmailSent(emailDraft.lead, text)}
+          onNext={(next) => doEmailNext(emailDraft.lead, next)}
         />
       )}
 
@@ -1554,6 +2065,10 @@ function ListHealth({ rows, now, scoreOf, badge }) {
 function ListsView({
   rows, board, now, teamName, companyById, listById, onOpen, member,
   listFilter, onListFilter, onClear, onPatch, onAssign, onRunScore,
+  /* The firms somebody else is already inside, or null on a page that does not
+   * want the marker. Worked out in SalesPage from the WHOLE board — see the memo
+   * there for why it can never be computed from `rows`. */
+  firmsBusy = null,
   /* The set this page is about — the whole board on the owner's page, the
    * floor or one rep's leads on theirs. It decides ONE thing: which empty
    * screen is true. Nothing is counted on screen from it, because "how many
@@ -1569,7 +2084,6 @@ function ListsView({
   tabScope = scopeLeads,
   allTabLabel = "Everybody",
   emptyNote = null,
-  hint = null,
   /* Whether clearing the filters could change what is on screen. False means
      no filter a person set is on, so the Clear button is not drawn at all. */
   canClear = true,
@@ -1582,6 +2096,7 @@ function ListsView({
      holds no state of its own about any of them. */
   canAssign = true,
   onTag, onRefreshTags, onLog, onScan, onClose: onCloseDeal, onRelease,
+  onTouch, onTouchDone, onDraftEmail, drafting,
 }) {
   /* One row object per person, built once. Everything the table sorts,
    * filters, groups and paints comes from the same object, so a row can never
@@ -1602,9 +2117,12 @@ function ListsView({
       tagsById: board.tagsById,
       reportByCompany: board.reportByCompany,
       member,
+      /* WHICH FIRMS SOMEBODY ELSE IS ALREADY INSIDE. Null on the owner's page,
+         which is what turns the marker off there — see sheetRow(). */
+      firmsBusy,
     }),
     [rows, companyById, teamName, board.touchCounts, board.tagsByLead, board.tagsById,
-      board.reportByCompany, listById, now, member],
+      board.reportByCompany, listById, now, member, firmsBusy],
   );
 
   /* WHAT AN EMPTY SCREEN SAYS — THREE CASES, NOT TWO. Aug 26 2026.
@@ -1680,14 +2198,6 @@ function ListsView({
         )}
       </div>
 
-      {/* One line, and only where a page needs it — the floor, which is the one
-          page whose whole job is an action. Nothing on the owner's page. */}
-      {hint && (
-        <div style={{ fontSize: 12.5, color: "var(--ink-dim)", margin: "-4px 0 12px", lineHeight: 1.5 }}>
-          {hint}
-        </div>
-      )}
-
       {rows.length === 0 ? (
         /* Two different empty screens again, and the difference is counted from
            the page's own set: filters that match nothing, versus a page with
@@ -1708,7 +2218,15 @@ function ListsView({
           <div className="card adm-sl-tablewrap">
             <SalesSheet
               rows={sheet}
-              allLeads={board.leads}
+              /* THE PAGE'S SET, NOT THE BOARD. This feeds companyHeadcount and
+                 contestedCompanies inside the sheet. Handed the board, a rep saw
+                 "We hold 4 people at this firm — group the table by Company to
+                 see them together", followed the instruction, and found one row:
+                 a count of three leads they must not see, printed, with advice
+                 that could not work. The collision those three represent is said
+                 by the ⚠ instead, which is computed from the whole board and
+                 names nobody. 30 Aug 2026 */
+              allLeads={scopeLeads}
               member={member}
               team={board.team}
               lists={board.lists}
@@ -1726,6 +2244,10 @@ function ListsView({
               onScan={onScan}
               onCloseDeal={onCloseDeal}
               onRelease={onRelease}
+              onTouch={onTouch}
+              onTouchDone={onTouchDone}
+              onDraftEmail={onDraftEmail}
+              drafting={drafting}
             />
           </div>
         </>
@@ -1790,6 +2312,63 @@ function PipelineView({ rows, teamName, companyById, onOpen, onMove, canEdit }) 
       </div>
 
       <div className="adm-board">
+        {/* ---- THE READ-ONLY FIRST COLUMN ----
+            Every lead at a stage the system derives. It is not a drop target and
+            has no drop handlers at all — there is nothing to drag into it, which
+            is the point: the four early stages stopped being things a person
+            sets on 30 Aug.
+            It exists so that shrinking BOARD_STAGES did not repeat the defect an
+            audit found the same day, where a lead at an off-board stage matched
+            no column and was drawn NOWHERE — not greyed, not bucketed, gone.
+            Cards still drag OUT of here: dropCheck only tests the destination. */}
+        {READ_ONLY_COLUMNS.map((column) => {
+          const col = rows.filter((l) => column.stages.includes(l.stage));
+          /* The Not a fit column is drawn only when it holds something. Working
+             is always drawn, because an empty Working column is a true and
+             useful statement ("nothing is being worked"), while an empty Not a
+             fit column is just a gap on a board that is already wide. */
+          if (col.length === 0 && column.id !== "__working") return null;
+          return (
+            <div className="adm-board-col adm-board-col-derived" key={column.id}>
+              <div className="adm-sl-colhead">
+                <span className="adm-sl-colderived" title={column.help}>{column.label}</span>
+                <span>{col.length}</span>
+              </div>
+              {col.slice(0, 60).map((l) => {
+                const co = companyById.get(l.company_id);
+                const mine = canEdit(l);
+                return (
+                  <div
+                    key={l.id}
+                    className={`adm-board-card${mine ? " drag" : " locked"}${moving === l.id ? " busy" : ""}`}
+                    draggable={mine}
+                    onDragStart={(e) => {
+                      if (!mine) { e.preventDefault(); return; }
+                      e.dataTransfer.setData("text/plain", l.id);
+                      e.dataTransfer.effectAllowed = "move";
+                      setDragging(l);
+                    }}
+                    onDragEnd={() => { setDragging(null); setOver(null); }}
+                    onClick={() => onOpen(l.id)}
+                    title={mine
+                      ? "Drag me into a column when something real happens."
+                      : "Somebody else holds this lead. You can open it, not move it."}
+                  >
+                    <div className="adm-sl-bc-t">{l.name || l.company || "—"}</div>
+                    <div className="adm-sl-bc-s">{co?.name || l.company || ""}</div>
+                    <div className="adm-sl-bc-f">
+                      <span>{teamName(l.owner_id) || "on the floor"}</span>
+                      <ScoreChip score={co?.site_score} />
+                    </div>
+                  </div>
+                );
+              })}
+              {col.length > 60 ? <div className="adm-sl-bc-more">+{col.length - 60} more</div> : null}
+              {col.length === 0 ? <div className="adm-sl-bc-more">Nothing being worked.</div> : null}
+            </div>
+          );
+        })}
+
         {BOARD_STAGES.map((stage) => {
           const col = rows.filter((l) => l.stage === stage);
           const lit = over === stage && dragging && dragging.stage !== stage && canEdit(dragging);
@@ -1890,22 +2469,36 @@ function PipelineView({ rows, teamName, companyById, onOpen, onMove, canEdit }) 
 /* FIRMS                                                               */
 /* ================================================================== */
 
-function FirmsView({ board, rows, teamName, onOpen }) {
+/* `scopeLeads` is what a firm's People and Working it columns are counted from,
+ * NOT `board.leads`. On the owner's page they are the same array. On a rep's
+ * page they are not, and counting from the board would print "4 people ·
+ * Larry, Dana" for a firm whose rows the sheet two clicks away refuses to show
+ * — the record hidden and its contents printed beside it.
+ *
+ * `hideNames` is the same rule the sheet's firm cell keeps: a rep is told a firm
+ * is taken, never by whom. 30 Aug 2026 */
+function FirmsView({ board, scopeLeads, rows, teamName, onOpen, hideNames = false, firmsBusy = null }) {
   const shown = useMemo(() => {
     const ids = new Set(rows.map((l) => l.company_id).filter(Boolean));
     return board.companies
       .filter((c) => ids.has(c.id))
       .map((c) => {
-        const people = board.leads.filter((l) => l.company_id === c.id);
+        const people = scopeLeads.filter((l) => l.company_id === c.id);
         const owners = [...new Set(people.filter((p) => p.owner_id).map((p) => p.owner_id))];
-        return { company: c, people, owners, gate: scoreGate(c.site_score) };
+        /* THE SAME MARKER THE SHEET CARRIES. Without it this column read
+           "nobody" about a firm the sheet two clicks away marks ⚠, because
+           `owners` is derived from the rep's own narrowed set and the person
+           actually in that building is not in it. A view that contradicts the
+           sheet about the same firm is worse than a view that says less. */
+        const busy = Boolean(firmsBusy && firmsBusy.has(c.id));
+        return { company: c, people, owners, busy, gate: scoreGate(c.site_score) };
       })
       .sort((a, b) => {
         // Unscored first (they need work doing), then the widest gap.
         if (a.gate.known !== b.gate.known) return a.gate.known ? 1 : -1;
         return (a.gate.score ?? 0) - (b.gate.score ?? 0);
       });
-  }, [board, rows]);
+  }, [board, scopeLeads, rows, firmsBusy]);
 
   if (!shown.length) {
     return (
@@ -1935,7 +2528,7 @@ function FirmsView({ board, rows, teamName, onOpen }) {
             </tr>
           </thead>
           <tbody>
-            {shown.map(({ company: c, people, owners }) => (
+            {shown.map(({ company: c, people, owners, busy }) => (
               <tr key={c.id} className="adm-sl-row" onClick={() => onOpen(people[0]?.id)}>
                 <td>
                   <div className="adm-sl-rowname">{c.name}</div>
@@ -1947,8 +2540,10 @@ function FirmsView({ board, rows, teamName, onOpen }) {
                 </td>
                 <td className="adm-sl-rowsub">{people.length}</td>
                 <td className="adm-sl-rowsub">
-                  {owners.length === 0 ? <span className="adm-sl-faint">nobody</span>
-                    : owners.map(teamName).join(", ")}
+                  {owners.length === 0 && !busy ? <span className="adm-sl-faint">nobody</span>
+                    : hideNames
+                      ? [owners.length ? "you" : null, busy ? "somebody on the team ⚠" : null].filter(Boolean).join(" + ")
+                      : owners.map(teamName).join(", ")}
                 </td>
                 <td className="adm-sl-rowsub">{[c.city, c.state].filter(Boolean).join(", ") || "—"}</td>
                 <td><SiteLink domain={c.domain} /></td>

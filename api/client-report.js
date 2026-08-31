@@ -29,6 +29,7 @@
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
 import { draft, isAiConfigured, AI_MODEL } from "../lib/ai.js";
 import { recordAiUsage } from "../lib/ai-usage.js";
+import { teamDate } from "../lib/brain-context.js";
 import {
   assembleReportFacts, buildFactsText, buildReportInstruction, parseAnswer,
   checkReport, deterministicReport, missingFrom, presetById, MAX_INSTRUCTION_CHARS,
@@ -251,7 +252,18 @@ export default async function handler(req, res) {
   let rejected = null;
   let truncated = 0;
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  /* THE TEAM'S DAY, NOT UTC'S. This line was
+   * `new Date().toISOString().slice(0, 10)`, so from 7pm Chicago onward every
+   * report was HEADED WITH TOMORROW'S DATE — and this is the report that gets
+   * forwarded to a client. Caught 30 Aug 2026 at 8:53pm, when the "where this
+   * client stands" block on the same page said "Aug 30" and the report title
+   * under it said 2026-08-31.
+   *
+   * The identical copied line was fixed in api/console-report.js and
+   * api/rep-report.js on Aug 26 2026 and this one was missed, which is the
+   * whole lesson: a bug fixed by hand in two files is not fixed. Day maths in
+   * this repo goes through teamDate(). */
+  const todayIso = teamDate(Date.now());
   const teamNames = (roster.data || []).map((r) => r.full_name).filter(Boolean);
 
   if (isAiConfigured()) {

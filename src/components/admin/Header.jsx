@@ -15,7 +15,11 @@ const SECTION_TITLES = {
    * Without an entry the fallback capitalises the page id, so the header would
    * read "Floor" and "Gmail" — the first says less than the page does and the
    * second reads like a brand rather than like whose mail it is. */
-  floor: { kicker: "Sales", title: "The Floor · every lead, claimed or not" },
+  /* WAS "The Floor · every lead, claimed or not". That stopped being true on
+     30 Aug 2026: a lead somebody else has claimed is not on this page at all.
+     A page whose own title states the opposite of its rule is the first thing
+     that stops a screen being believed. */
+  floor: { kicker: "Sales", title: "The Floor · yours, and everything free to claim" },
   gmail: { kicker: "Comms", title: "Gmail · your own mailbox" },
   operations: { kicker: "Delivery", title: "Operations · the task board" },
   inbox: { kicker: "Comms", title: "Inbox · team Gmail in one place" },

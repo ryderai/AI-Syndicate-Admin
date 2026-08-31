@@ -101,6 +101,14 @@ export const SHEET_COLUMNS = [
    * Two menus that mean nearly the same thing is how a person ends up filtering
    * on the wrong one and reading a number that does not match. */
   { key: "scores", label: "Scores", width: 168, where: "report", edit: null, sortable: true, filterable: false, groupable: false },
+  /* DRAFT AN EMAIL — Ryder, 31 Aug 2026. An action column, like Scores, not a
+   * value: there is nothing stored to sort or filter on, so it is neither
+   * sortable nor filterable and saying so here is what stops a header menu
+   * offering a menu of nothing.
+   *
+   * Sits beside Website because that is where a rep's eye already is when they
+   * are deciding whether to write — the firm, the site, the email. */
+  { key: "draft_email", label: "Draft email", width: 132, where: "action", edit: null, sortable: false, filterable: false, groupable: false },
   { key: "website", label: "Website", width: 188, where: "company", edit: null, sortable: true, filterable: true, groupable: true },
   { key: "list", label: "List", width: 168, where: "lead", edit: "select", sortable: true, filterable: true, groupable: true },
   { key: "touches", label: "Touches", width: 104, where: "counted", edit: null, sortable: true, filterable: false, groupable: false },
@@ -123,6 +131,10 @@ export const SHEET_COLUMN_KEYS = SHEET_COLUMNS.map((c) => c.key);
 export const DEFAULT_SHEET_COLUMNS = [
   "owner", "contacted", "stage", "claim", "first_contact", "last_touch", "tags",
   "first_name", "last_name", "title", "company", "email", "site_score", "scores",
+  /* On by default. A button nobody can find is a button nobody uses, and this
+   * is the one the whole rebuild points at: the pipeline exists to get a rep to
+   * the next message. 31 Aug 2026 */
+  "draft_email",
   /* Last here too, or the default view would put the notes back in the middle
    * while SHEET_COLUMNS says they belong at the end. Aug 26 2026. */
   "next_step",
@@ -255,6 +267,13 @@ export function sheetRow(lead, {
    * than required arguments because tests/sales-sheet builds rows with the
    * original context and its 137 assertions must keep passing unchanged. */
   tagsByLead = null, tagsById = null, reportByCompany = null, member = null,
+  /* ---- added Aug 30 2026 ----
+   * The set of company ids somebody else is already inside, from
+   * firmsHeldByOthers(). Null on the owner's page ON PURPOSE: an owner sees
+   * every claimed row already, so a chip saying "somebody is working this firm"
+   * on nearly every row would be noise carrying no information. Null means the
+   * chip is not drawn, which is what every caller before today meant. */
+  firmsBusy = null,
 }) {
   const company = lead.company_id ? (companyById?.get(lead.company_id) || null) : null;
   const touches = Number(touchCounts[lead.id] || 0);
@@ -317,6 +336,20 @@ export function sheetRow(lead, {
      * row rather than an editable one. */
     editable: canEditLead(lead, member),
     heldBy: heldByLabel(lead, member, teamName),
+
+    /* ---- IS SOMEBODY ELSE ALREADY IN THIS FIRM ----
+     *
+     * ANY row at that firm, not only an unclaimed one. The first version tested
+     * `!lead.owner_id` on the reasoning that a firm you are in is busy with you
+     * — but firmsHeldByOthers has already excluded your own claims, so the set
+     * only ever contains firms SOMEBODY ELSE is in. A rep holding one contact at
+     * a firm another rep is also working is precisely the person who needs
+     * telling, and the old test silenced exactly them.
+     *
+     * This is also what replaces contestedCompanies on a rep's page: that
+     * function needs two owners visible in the same list to fire, and a rep's
+     * list can now hold at most one. See the block at the bottom of this file. */
+    firmBusy: Boolean(firmsBusy && lead.company_id && firmsBusy.has(lead.company_id)),
   };
 }
 
@@ -763,18 +796,34 @@ export function sheetDateLong(iso, tz = "America/Chicago") {
  * whether they were allowed is how one of them ended up disagreeing with the
  * other three.
  *
- * WHAT REPLACED WHAT. Until today `scopeLeads` in SalesPage.jsx handed a rep
- * either the unclaimed rows or their own rows, and the lock was the LIST. The
- * Floor shows every lead in the company — that is the requirement, because a rep
- * who cannot see another rep's row cannot be stopped from working the same firm
- * — so that lock is gone and this one replaces it:
+ * WHAT REPLACED WHAT, TWICE. Read the two reversals in order or this function
+ * makes no sense:
  *
- *     visibility: everyone, every row.
- *     editability: mine, or nobody's, or I am an owner/admin.
+ *   Before Aug 27, `scopeLeads` in SalesPage.jsx handed a rep either the
+ *   unclaimed rows or their own, and the LIST was the lock.
  *
- * Somebody else's row renders greyed with every control off and a marker saying
- * who holds it. Opening it gives a READ-ONLY drawer: fields, notes and timeline
- * visible, no buttons.
+ *   Aug 27: the list stopped being narrowed — a rep saw every lead in the
+ *   company — because a rep who cannot see another rep's row cannot be stopped
+ *   from working the same firm. Somebody else's row rendered greyed and opened
+ *   read-only. This function became the whole lock.
+ *
+ *   30 Aug, Ryder: "the rep doesnt see those leads... that way the reps never
+ *   comingle." The list is narrowed again, by visibleToMember at the bottom of
+ *   this file, and the firm collision the Aug 27 rule was protecting is carried
+ *   by firmsHeldByOthers instead — a mark on the firm, naming nobody.
+ *
+ * WHERE THAT LEAVES THIS FUNCTION:
+ *
+ *     visibility: mine, or nobody's, or I am an owner/admin.  (visibleToMember)
+ *     editability: exactly the same set.                      (this)
+ *
+ * The two now agree for every role, which means the greyed row and the read-only
+ * drawer are unreachable in practice: a rep is never handed a row they may not
+ * edit. THEY ARE KEPT ANYWAY, and deliberately — this function is what api/ and
+ * migration 0020 check, a member with no role still fails closed here, and a
+ * feature that hands a rep somebody else's row on any future screen must land on
+ * a read-only drawer rather than an editable one. An unreachable guard that
+ * fails closed is cheap; the same guard missing is the Aug 26 hole.
  *
  * THIS IS THE POLITE HALF OF THE LOCK, NOT THE WORKING HALF. Every file in
  * `api/` runs on the Supabase service key and ignores row-level security
@@ -840,6 +889,11 @@ export function canEditLead(lead, member) {
  *  reader may edit it — a "held by" marker on your own row is noise. */
 export function heldByLabel(lead, member, teamName) {
   if (canEditLead(lead, member)) return null;
+  /* NOBODY HOLDS AN UNCLAIMED ROW. Reachable only for a member with no role at
+   * all, whom canEditLead refuses everything: without this, an unclaimed lead
+   * gave `teamName(null)` → null → "Held by another rep", a lock marker on a
+   * free row. Found by an adversarial review, 30 Aug 2026. */
+  if (!lead?.owner_id) return null;
   const name = teamName ? (teamName(lead.owner_id) || "another rep") : "another rep";
   return `Held by ${name}`;
 }
@@ -851,13 +905,19 @@ export function heldByLabel(lead, member, teamName) {
 /**
  * The three-state switch at the far left of the filter bar.
  *
- * IT IS A FILTER OVER THE FULL BOARD, NOT A NEW FETCH. That is the whole
+ * IT IS A FILTER OVER THE PAGE'S SET, NOT A NEW FETCH. That is the whole
  * architecture in one sentence: one read, one row builder, three layouts. A page
  * that fetches its own leads is a page with its own snapshot, and two snapshots
  * of one pipeline is how a tile ends up disagreeing with the list under it.
  *
- * `mine` is the default on load, because that is where a rep actually works.
- * Available is one click.
+ * IT SAID "THE FULL BOARD" UNTIL 30 AUG, and that was true then: the page held
+ * every lead and this switch was the only thing narrowing it. The page's set is
+ * now visibleToMember's — mine or nobody's — and this filters that. So "All" is
+ * the union of the other two buttons rather than the whole company.
+ *
+ * `all` is the default on load. It was `mine`, back when All meant the company;
+ * now that All IS a rep's workable book, opening on Mine put a new rep who holds
+ * nothing in front of an empty table with every list tab reading 0.
  */
 export const AVAILABILITY = ["mine", "available", "all"];
 
@@ -870,13 +930,18 @@ export const AVAILABILITY_LABELS = {
 export const AVAILABILITY_HINTS = {
   mine: "The leads you hold.",
   available: "Nobody has claimed these. Press Claim to take one.",
-  all: "Every lead in the company. Somebody else's opens read-only.",
+  /* WAS "Every lead in the company. Somebody else's opens read-only." That
+   * sentence stopped being true on 30 Aug: a rep no longer holds another rep's
+   * rows in the set at all, so "All" is now the union of the other two buttons
+   * and the words have to say so. A label that describes a rule the page has
+   * dropped is worse than no label. */
+  all: "Everything you can work \u2014 the ones you hold and the ones nobody holds.",
 };
 
-/** An unknown value falls back to `all` rather than to `mine`: a typo in a
- *  stored preference should show a rep too much of their own company's pipeline,
- *  which is harmless here because visibility is deliberately wide, rather than
- *  hiding rows they hold and making the page look broken. */
+/** An unknown value falls back to `all` — which is also the default now. A typo
+ *  in a stored value should show a rep everything they may work, not hide rows
+ *  they hold and make the page look broken. `all` cannot over-show: it is bounded
+ *  by visibleToMember before this ever runs. */
 export function cleanAvailability(v) {
   return AVAILABILITY.includes(v) ? v : "all";
 }
@@ -1199,3 +1264,97 @@ export function newestReportByCompany(rows) {
   }
   return out;
 }
+
+/* ================================================================== */
+/* WHO MAY SEE A LEAD AT ALL — Ryder, 30 Aug 2026                      */
+/* ================================================================== */
+
+/**
+ * THIS REVERSES THE AUG 27 RULE, ON PURPOSE, AND THE OLD REASONING IS KEPT
+ * BELOW SO NOBODY REVERSES IT BACK BY ACCIDENT.
+ *
+ * Aug 27: a rep saw EVERY lead in the company, and another rep's row opened
+ * read-only. The reason written down that day was that a rep who cannot see
+ * another rep's row cannot be stopped from working the same firm.
+ *
+ * Aug 30, Ryder: "on the reps page if something becomes claimed by someone else
+ * then it gets removed from the floor and the rep doesnt see those leads, only
+ * the claimed rep and the owner/admin see it. that way the reps never comingle."
+ *
+ * So a sales rep's universe is now exactly two things:
+ *   - the leads they hold
+ *   - the leads nobody holds
+ * An owner or an admin still sees all of them, unchanged.
+ *
+ * THE FIRM COLLISION IS NOT IGNORED, IT MOVED. The thing the Aug 27 rule was
+ * protecting is handled by firmsHeldByOthers() below: an unclaimed row at a firm
+ * somebody else is already inside is marked, without naming them and without
+ * showing their record. That keeps the protection and drops the comingling.
+ *
+ * VISIBILITY IS NARROWED IN EXACTLY ONE PLACE — `scopeLeads` in SalesPage.jsx,
+ * before any filter runs. Same rule as the Aug 26 lock: a narrowing applied to
+ * the set first cannot be widened by a tile, a tab, a dropdown, a search box or
+ * the next control somebody adds. Do not re-derive this inline anywhere.
+ *
+ * WHAT THIS IS NOT: it is not a security boundary. The read policy on
+ * admin_leads is still wide (0001, unchanged by 0020), so a rep's browser can
+ * still fetch another rep's row by hand. Ryder's call on 30 Aug was screen-only
+ * for now. If that changes, the database rule goes in its own migration and this
+ * function stays exactly as it is — the screen and the database saying the same
+ * thing twice is the point, not a duplication to remove.
+ */
+export function visibleToMember(leads, member) {
+  const all = leads || [];
+  /* A KNOWN role that is not `sales` sees everything — written the same way
+   * round as canEditLead, so the two cannot drift: a role nobody has taught this
+   * file about must not silently lose the ability to work.
+   *
+   * A member with NO role falls through to the narrow rule rather than the wide
+   * one. That is the fail-closed direction here: canEditLead already refuses a
+   * roleless member every edit, so the narrow set is the most such a page can
+   * honestly offer, and it is never empty in the way returning [] would be. */
+  if (member?.role && member.role !== "sales") return all;
+  const uid = member?.user_id ?? null;
+  return all.filter((l) => !l.owner_id || (uid !== null && l.owner_id === uid));
+}
+
+/**
+ * The firms somebody OTHER than this member is already inside.
+ *
+ * Counted from the WHOLE board, before visibleToMember() narrows anything —
+ * that is the entire point. Once the narrowing has run, the rows that prove a
+ * firm is taken are gone, so this has to be worked out first or it can only ever
+ * return an empty set. Passing the narrowed list here is the one way to make
+ * this silently useless, so it takes the board's leads by name at the call site.
+ *
+ * Returns company ids only. No lead ids, no owner ids, no names — a rep is told
+ * that a firm is busy, never who is in it, because who is in it is the thing
+ * Ryder asked to hide.
+ *
+ * OPEN STAGES ONLY, and that is not a detail. contestedCompanies filters on
+ * isOpenStage with a comment saying exactly why, and companyClaimWarning in
+ * lib/sales-rules.js does the same. Without it, a contact another rep marked
+ * Lost in March marks that firm busy for ever — and the drawer, which DOES
+ * filter, shows no warning on the same firm on the same click. Two parts of one
+ * page giving opposite answers about the same thing is worse than either answer
+ * alone. Found by an adversarial review the same day this function was written.
+ */
+export function firmsHeldByOthers(leads, member) {
+  const uid = member?.user_id ?? null;
+  const out = new Set();
+  for (const l of leads || []) {
+    if (!l?.company_id || !l.owner_id) continue;
+    if (!isOpenStage(l.stage)) continue;
+    if (uid !== null && l.owner_id === uid) continue;
+    out.add(l.company_id);
+  }
+  return out;
+}
+
+/** The words on that marker, in one place, so the chip on the row and the line
+ *  in the drawer cannot come to say two different things. Deliberately says
+ *  nothing about who: "somebody" is the whole content. */
+export const FIRM_BUSY_LABEL = "Somebody is already working this firm";
+export const FIRM_BUSY_WHY =
+  "Another person on the team holds a contact at this firm. You can still claim and work this "
+  + "person — check with the team first so the firm does not hear from two of us in one week.";

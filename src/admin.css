@@ -661,6 +661,84 @@ select.adm-input { cursor: pointer; }
 
 /* ---------- board extras ---------- */
 .adm-board-col.over { border-color: var(--accent); background: var(--accent-soft); }
+/* ---- the read-only "Working" column ----
+   Dashed and quieter than the real columns, because it is the one place on the
+   board you cannot drop into: the four early stages are derived now. Cards still
+   drag OUT of it. 30 Aug 2026 */
+.adm-board-col-derived {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--rule);
+}
+.adm-sl-colderived {
+  font-size: 11px;
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  cursor: help;
+}
+/* ---- the Draft email column ----
+   An action cell, so it reads as a button rather than a value; and a refusal
+   reads as a refusal rather than an empty cell. 31 Aug 2026 */
+.adm-sh-draftbtn { font-size: 12px; white-space: nowrap; }
+.adm-sh-draftbtn[disabled] { opacity: 0.55; cursor: default; }
+.adm-sh-refused {
+  font-size: 11.5px;
+  font-family: var(--mono);
+  color: var(--danger);
+  cursor: help;
+  white-space: nowrap;
+}
+/* Everything the model was shown, verbatim, behind a disclosure. Bounded and
+   scrollable: a fact sheet is long and it must not push the buttons off. */
+.adm-sl-facts {
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- the email panel's footnotes ----
+   NOT `.adm-cp-foot`: two rules already share that class name (one makes it a
+   flex row with space-between, the other a plain caption), and in a modal the
+   flex one wins — so "Skip it and they land on your No next step list" rendered
+   as three chunks pushed to the edges of the panel. Found by looking at it. Its
+   own name, so neither rule can reach it. 31 Aug 2026 */
+.adm-db-th-plain { cursor: default; opacity: 0.75; }
+
+.adm-sl-emailfoot {
+  display: block;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--rule);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+.adm-sl-emailfoot strong { color: var(--ink-dim); }
+
+.adm-sh-stage-derived {
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-style: italic;
+}
+.adm-sl-bc-more {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  padding: 8px 4px 2px;
+  line-height: 1.4;
+}
 .adm-board-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .adm-board-title { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.4; }
 .adm-board-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
@@ -3736,6 +3814,128 @@ select.adm-input { cursor: pointer; }
   color: var(--ink-dim);
 }
 .adm-cp-tick { color: var(--accent-deep); font-weight: 800; flex: none; }
+/* ---- step two of the touch picker: back to the channel list ----
+   Picking the wrong channel is the likeliest mis-click in that flow, and making
+   somebody close and re-open the menu for it is the difference between two
+   clicks and four. Sits above the heading so it reads as "you are inside
+   Called", not as another option. 30 Aug 2026 */
+.adm-cp-back {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--ink-dim);
+  padding: 2px 8px 6px;
+  cursor: pointer;
+}
+.adm-cp-back:hover { color: var(--ink); }
+.adm-cp-back:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: -2px; border-radius: 6px; }
+.adm-cp-back[disabled] { opacity: 0.5; cursor: default; }
+
+/* ---- step three of the touch picker: "and next?" ----
+   The date is offered as four presets plus a picker, because a rep working
+   three hundred rows should never open a calendar to say "Thursday". Wraps
+   rather than scrolls: a control that hides its own options is a control whose
+   last option nobody uses. 30 Aug 2026 */
+.adm-cp-when {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 2px 8px 10px;
+}
+.adm-cp-when-b {
+  border: 1px solid var(--rule);
+  background: var(--bg-1);
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-dim);
+  padding: 4px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.adm-cp-when-b:hover { border-color: var(--accent-deep); color: var(--ink); }
+.adm-cp-when-b.on {
+  background: var(--accent-soft);
+  border-color: var(--accent-deep);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+.adm-cp-when-b:focus-visible,
+.adm-cp-when-d:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 1px; }
+.adm-cp-when-b[disabled], .adm-cp-when-d[disabled] { opacity: 0.5; cursor: default; }
+/* ---- the three safety-net lists, above the numbers card ----
+   Chips rather than tiles: a tile is a number you read, and these are switches
+   you press. A zero chip stays drawn in grey, because "nothing has gone quiet"
+   is worth seeing and a row that appears only when something is wrong teaches
+   nobody where to look. 30 Aug 2026 */
+.adm-sl-watch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+.adm-sl-watch-b {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--rule);
+  background: var(--bg-0);
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  padding: 6px 13px 6px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.adm-sl-watch-b:hover { border-color: var(--accent-deep); }
+.adm-sl-watch-b:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 1px; }
+.adm-sl-watch-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.adm-sl-watch-b.zero { color: var(--ink-dim); }
+.adm-sl-watch-b.zero .adm-sl-watch-n { background: var(--bg-2); color: var(--ink-faint); }
+.adm-sl-watch-b.on {
+  border-color: var(--accent-deep);
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+.adm-sl-watch-why {
+  font-size: 12.5px;
+  color: var(--ink-dim);
+  line-height: 1.45;
+  flex: 1 1 240px;
+  min-width: 200px;
+}
+
+.adm-cp-when-d {
+  border: 1px solid var(--rule);
+  background: var(--bg-1);
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-dim);
+  padding: 3px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  max-width: 100%;
+}
 /* A menu with no "new…" in it looks broken until somebody says it is meant to
    be that way. */
 .adm-cp-foot {

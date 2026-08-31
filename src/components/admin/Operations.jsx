@@ -19,6 +19,7 @@ import TaskDatabase, {
 import { Popover, PRIORITY_ICON } from "./opsCells.jsx";
 import { useScreenContext } from "../../lib/screenContext.js";
 import { useRoute } from "../../lib/router.js";
+import { peopleOptions, personLabel } from "../../lib/people.js";
 
 /* Operations — the Notion replacement, in Notion's own shape.
  *
@@ -379,7 +380,10 @@ export default function Operations({ member }) {
           <select className="adm-input adm-db-mini" value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
             <option value="all">Anyone</option>
             <option value="__me">Just mine</option>
-            {team.map((m) => <option key={m.user_id} value={m.user_id}>{m.full_name || m.email}</option>)}
+            {/* peopleOptions, not full_name: two teammates with the same name
+              * drew two identical rows and a task assigned to the wrong one
+              * vanished off the right person's Work page. src/lib/people.js */}
+            {peopleOptions(team).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             <option value="__none">Unassigned</option>
           </select>
         </label>
@@ -619,7 +623,7 @@ export function ClientDetail({
       ) : tab === "sales" ? (
         <SalesHistoryPanel client={client} teamName={(id) => {
           const m = team.find((x) => x.user_id === id);
-          return m ? (m.full_name || m.email) : null;
+          return m ? personLabel(m, team) : null;
         }} />
       ) : tab === "tasks" ? (
         tasks.length ? (
@@ -809,7 +813,7 @@ export function TaskModal({ task, clients, team, defaultClientId, onClose, reloa
           <Select value={f.client_id} onChange={set("client_id")} options={[["", "No client"], ...clients.map((c) => [c.id, c.name])]} />
         </Field>
         <Field label="Assigned to" hint="Whoever this is shows it on their own Work page.">
-          <Select value={f.assigned_to} onChange={set("assigned_to")} options={[["", "Unassigned"], ...team.map((m) => [m.user_id, m.full_name || m.email])]} />
+          <Select value={f.assigned_to} onChange={set("assigned_to")} options={[["", "Unassigned"], ...peopleOptions(team).map((o) => [o.value, o.label])]} />
         </Field>
         <Field label="Status"><Select value={f.status} onChange={set("status")} options={TASK_STATUSES.map((s) => [s, TASK_STATUS_LABELS[s]])} /></Field>
         <Field label="Priority"><Select value={f.priority} onChange={set("priority")} options={TASK_PRIORITIES.map((p) => [p, `${PRIORITY_ICON[p]} ${TASK_PRIORITY_LABELS[p]}`])} /></Field>

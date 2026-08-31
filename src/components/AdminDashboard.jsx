@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useAuth } from "../lib/auth.js";
 import { useRoute, stampRoute } from "../lib/router.js";
+import { pageForAddress } from "../lib/pageForAddress.js";
 import { isConfigured, signInDisabled } from "../lib/supabase.js";
 import { usePreviewAccount, previewMember } from "../lib/previewAccounts.js";
 import Sidebar, { pageIdsForRole } from "./admin/Sidebar.jsx";
@@ -82,70 +83,19 @@ export default function AdminDashboard({ go }) {
   /* (Ryder, Aug 19 2026). Roles that cannot see Overview — sales —     */
   /* land on the first page their role does have, which is Work.        */
   /* ---------------------------------------------------------------- */
-  const LANDING = "overview";
   const [route, goRoute] = useRoute();
   // "#/dashboard/inbox?gmail=connected" → page "inbox", query kept as-is.
   // The query matters: the Gmail sign-in bounces back through it, and
   // dropping it swallowed the "mailbox connected / connecting failed"
   // message. Anything after the page id is left alone too, so a future deep
   // link (a client, a task, a thread) survives.
-  const [urlPath, urlQuery = ""] = route.replace(/^\/dashboard\/?/, "").split("?");
-  /* The page used to be called Leads. Old links, old bookmarks and the
-   * browser history of anybody who used it before Aug 21 2026 still say
-   * `leads`, and an unknown page id silently falls back to the landing page —
-   * so the link would not break loudly, it would just quietly take you
-   * somewhere else. Rewrite it instead. */
-  /* customers → clients, Aug 24 2026. The page stopped being "everyone who
-   * pays Stripe" and became "everyone we deal with", clients included. Old
-   * links and everyone's browser history still say `customers`, and an
-   * unknown page id falls back to the landing page — so the link would not
-   * break loudly, it would quietly take you somewhere else. */
-  const RENAMED = { leads: "sales", customers: "clients" };
-  /* A SPLIT IS NOT A RENAME. Both sides are live pages; which one you get
-   * depends on your job. Aug 26 2026 (Ryder): a rep no longer has the one
-   * Sales page, they have two locked halves of it — `leads`, the floor, and
-   * `mine`. So a link that says `sales` — CJ pasting one, an old bookmark, a
-   * URL typed by hand — has to put a rep on the floor. Without this line it
-   * falls through to the landing page, which is the quiet kind of broken link
-   * the notes above are about.
-   *
-   * Read ONLY when the role cannot open the page that was named, so an owner
-   * never reaches it and their addresses behave exactly as they did before.
-   * That is also what untangles the old `leads` name: the rename above still
-   * sends everybody's `#/dashboard/leads` to Sales, and for a rep the split
-   * then hands it on to the page a rep actually has, which is called `leads`
-   * again. One hop each way, and neither role sees the other's. */
-  /* A MAP PER ROLE, not one page id — Aug 27 2026, when the rep console became
-   * four pages. Every address a rep could already have bookmarked has to land
-   * somewhere true:
-   *
-   *   #/dashboard/sales   an owner pasted a link, or the RENAMED hop above sent
-   *                       an old `leads` here     -> The Floor
-   *   #/dashboard/leads   a rep's own bookmark of the old floor page
-   *                       (RENAMED rewrites it to `sales` first, and the line
-   *                       above then sends it on) -> The Floor
-   *   #/dashboard/mine    a rep's bookmark of My leads. The Floor opens on
-   *                       "Mine", so this is the same screen -> The Floor
-   *   #/dashboard/work     Work is not a rep's page any more -> Overview
-   *
-   * Without an entry, an unknown page id quietly falls back to the landing page,
-   * which is the kind of broken link nobody reports because it does not look
-   * broken. Read ONLY when the role cannot open the page that was named, so an
-   * owner never reaches this and their addresses behave exactly as before. */
-  const SPLIT_FOR_ROLE = {
-    sales: { sales: "floor", leads: "floor", mine: "floor", work: "overview" },
-  };
-  const rawPage = urlPath.split("/")[0];
-  const named = RENAMED[rawPage] || rawPage;
-  const fromUrl = allowedIds.includes(named)
-    ? named
-    : ((member && SPLIT_FOR_ROLE[member.role]?.[named]) || named);
-  const query = urlQuery ? `?${urlQuery}` : "";
-  // `|| "work"` is the last resort: a role nobody has taught this file about
-  // would otherwise leave the page id blank, and a blank page id shows one
-  // page under another page's title.
-  const fallback = allowedIds.includes(LANDING) ? LANDING : (allowedIds[0] || "work");
-  const section = allowedIds.includes(fromUrl) ? fromUrl : fallback;
+  /* THE WHOLE RULE LIVES IN src/lib/pageForAddress.js — renames, the per-role
+   * splits, the fallback and the query. It was fifty lines here, unreachable by
+   * any test, and the line that decides where the Gmail sign-in drops a rep was
+   * wrong in it. Moved out 31 Aug 2026; tests/page-for-address pins it. */
+  const { rawPage, section, query, fallback } = pageForAddress({
+    route, role: member?.role || null, allowedIds,
+  });
   const setSection = (id) => goRoute(`/dashboard/${allowedIds.includes(id) ? id : fallback}`);
 
   // Keep the address honest: if it does not already name this page (fresh

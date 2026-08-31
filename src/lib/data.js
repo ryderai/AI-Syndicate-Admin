@@ -24,6 +24,10 @@ import { assembleReportFacts, deterministicReport, buildFactsText } from "../../
  * never disagree about whose claim has run out. */
 import { isOpenStage as isOpen } from "../../lib/sales-rules.js";
 import { normaliseDomain } from "../../lib/sales-import.js";
+/* Two clicks on the Contacted? cell. The rules are pure and live in one place
+ * so the row, the drawer and anything added later cannot disagree about what
+ * "they replied" means. See lib/touch-log.js. 30 Aug 2026 */
+import { touchWrite, stampPatch, claimsOnTouch } from "../../lib/touch-log.js";
 /* The team's own day. A number typed in at 8pm in Chicago is still today to
  * everybody here; UTC would file it under tomorrow, and the database's "one
  * reading per window per day" rule counts the day it is given. */
@@ -64,12 +68,25 @@ import { newestReportByCompany, readCompanyReport } from "./salesSheet.js";
 export const LEAD_STAGES = [
   "new", "researching", "contacted", "in_conversation", "follow_up",
   "meeting", "proposal", "won", "lost", "skip_90", "bad_contact", "reopened",
+  /* KNOWN BEFORE IT IS WRITABLE — 30 Aug 2026.
+   *
+   * Migration 0027 merges skip_90 and bad_contact into this one. It is listed
+   * here NOW, before that runs, because the app has to be able to READ a value
+   * the database is about to start holding: a checker found that without this
+   * line every merged lead would come back with no label, no help text, and —
+   * far worse — outside CLOSED_STAGES, which would put closed leads back on the
+   * cadence, back in My Day and back in the counts.
+   *
+   * It is deliberately NOT in PICKABLE_STAGES, so nothing can write it until
+   * the constraint accepts it. Known, not offered. */
+  "not_a_fit",
 ];
 export const LEAD_STAGE_LABELS = {
   new: "New", researching: "Researching", contacted: "Contacted",
   in_conversation: "In conversation", follow_up: "Follow up",
   meeting: "Meeting", proposal: "Proposal", won: "Won", lost: "Lost",
   skip_90: "Skip – 90+", bad_contact: "Bad contact info", reopened: "Reopened",
+  not_a_fit: "Not a fit",
 };
 /* What each one means, shown in the picker. Same reason as the email statuses:
  * a status nobody can explain out loud does not get used. */
@@ -86,7 +103,136 @@ export const LEAD_STAGE_HELP = {
   skip_90: "Their site scores 90 or above — already doing well, so not a prospect.",
   bad_contact: "The email bounces or the number is dead. Nobody's fault.",
   reopened: "Was claimed, went quiet, came back to the floor.",
+  not_a_fit: "Never going to work — the score, the contact details, or the kind of business.",
 };
+/* ================================================================== */
+/* WHICH STAGES A PERSON MAY PICK — 30 Aug 2026                        */
+/* ================================================================== */
+
+/**
+ * Six outcomes a rep can choose. Everything else in LEAD_STAGES is either
+ * derived or historical.
+ *
+ * THE RULE, from the pipeline spec: a stage exists only where a PERSON had to
+ * decide something. "New", "Researching", "Contacted" and "In conversation" are
+ * not decisions — they are facts the activity log already knows, and the
+ * Contacted? and Claim columns already print, live, from data that cannot drift.
+ * Asking a rep to type them was asking them to keep a second copy of the
+ * timeline by hand, and the second copy is always the wrong one.
+ *
+ * This is HubSpot's Lead object: it moves itself to Attempting and Connected off
+ * logged activity, and waits for a human only on Qualified and Disqualified.
+ * Close puts the useful range at five to seven stages and says above eight a
+ * pipeline turns bureaucratic. We had twelve.
+ *
+ * TWO ENTRIES FOR ONE OUTCOME, for now. `skip_90` and `bad_contact` are not two
+ * outcomes, they are two reasons for "not a fit" — but merging them means a new
+ * stage value, and `admin_leads_stage_check` (0009) is a database constraint.
+ * Migration 0027 does the merge; until it is RUN, both are offered under names
+ * that say they are the same outcome. Nothing here breaks when it runs.
+ */
+export const PICKABLE_STAGES = [
+  "follow_up", "meeting", "proposal", "won", "lost", "not_a_fit",
+];
+
+/* SIX, AS OF 31 AUG 2026 — migration 0027 is RUN.
+ *
+ * It was seven for one evening: `skip_90` and `bad_contact` were offered
+ * separately under names that said they were one outcome, because merging them
+ * needed a database constraint changed and 0027 had not been run yet. It has,
+ * so they are one stage with a reason, which is what the spec asked for.
+ *
+ * The two old values stay in LEAD_STAGES and CLOSED_STAGES: 0027 rewrote every
+ * row that held them, but a value that has been in the database for a week is a
+ * value that can turn up in an old timeline line or a backup, and reading one
+ * must not produce a blank label. Known, not offered. */
+
+/**
+ * The stages nothing may set by hand any more, because the system already knows
+ * them. Existing rows keep these values and keep displaying them — no data is
+ * rewritten and no history is lost. They simply stop being offered.
+ */
+export const DERIVED_STAGES = ["new", "researching", "contacted", "in_conversation", "reopened"];
+
+export function stageIsDerived(stage) {
+  return DERIVED_STAGES.includes(stage);
+}
+
+/**
+ * WHAT A STAGE WILL NOT LET YOU LEAVE WITHOUT.
+ *
+ * HubSpot ships this as a Required checkbox on the stage that blocks the save;
+ * Salesforce does it with a validation formula. We already do it for Won and
+ * Lost — those two ask for a written reason and have since Aug 27, and that box
+ * is deliberately NOT listed here because it is a different, richer flow.
+ *
+ * `field` is the column that must not be empty. `ask` is what the rep is asked
+ * for, in their words. There is deliberately no gate on anything earlier: the
+ * early stages are derived now, and nothing should ever stand between a rep and
+ * logging a call.
+ */
+/* WRITTEN AGAINST COLUMNS THAT EXIST. The first draft of this required
+ * `meeting_at` and `proposal_amount`, and NEITHER IS A COLUMN — I invented both
+ * while writing the rule. That is the exact failure this repo has a note about:
+ * three files once wrote column names the tables do not have, and every fixture
+ * agreed with them. Checked against the migrations before this shipped.
+ *
+ *   follow_up  → admin_leads.next_follow_up_at   (0002, real)
+ *   meeting    → admin_leads.next_follow_up_at   (the same column: the meeting
+ *                IS the next thing happening, and a meeting with no date in the
+ *                diary is the thing this gate exists to stop)
+ *   proposal   → a row in admin_proposals with an amount (0009, real). Not a
+ *                column on the lead — proposals are their own records, and
+ *                copying the number onto the lead would be a second copy that
+ *                stops matching.
+ */
+export const STAGE_REQUIRES = {
+  follow_up: {
+    kind: "date",
+    ask: "When are you picking this back up?",
+    why: "“Waiting on them” with no date is the definition of a forgotten lead.",
+  },
+  meeting: {
+    kind: "date",
+    ask: "When is the meeting?",
+    why: "Otherwise Meeting means both booked-for-Tuesday and happened-in-June, and nothing counted from it means anything.",
+  },
+  proposal: {
+    kind: "proposal",
+    ask: "Add the proposal and its amount first.",
+    why: "A pipeline you cannot total is a list.",
+  },
+};
+
+/**
+ * Does this lead already satisfy the stage's requirement?
+ *
+ * `proposals` is the board's proposals array — passed in rather than fetched, so
+ * this answers from the same snapshot the screen is drawing. An unreadable date
+ * counts as MISSING, which is the safe direction: asking twice costs a click,
+ * and letting a lead through on a date nothing can parse is a lead that never
+ * comes back.
+ */
+export function stageRequirementMet(stage, lead, { proposals = [] } = {}) {
+  const need = STAGE_REQUIRES[stage];
+  if (!need || !lead) return true;
+  if (need.kind === "date") {
+    /* IN THE FUTURE, not merely readable. A bare Date.parse accepted last
+     * March, so "When is the meeting?" was satisfied by a date that had already
+     * been and gone — and the lead then landed straight on the "No next step"
+     * list, which correctly treats a past date as no plan. Two rules about one
+     * column disagreeing is the defect this whole rebuild started with. */
+    const at = Date.parse(lead.next_follow_up_at);
+    return Number.isFinite(at) && at > Date.now();
+  }
+  if (need.kind === "proposal") {
+    return (proposals || []).some(
+      (p) => p.lead_id === lead.id && Number.isFinite(Number(p.amount_cents)) && Number(p.amount_cents) > 0,
+    );
+  }
+  return true;
+}
+
 /* The stages nobody should be chasing. `skip_90` and `bad_contact` are in here
  * on purpose — they are not failures, but a rep who keeps being nagged about a
  * firm they were told to skip stops reading the nags. Before Aug 21 2026 four
@@ -815,6 +961,136 @@ export async function addLeadActivity({ leadId, actor, type, outcome, body }) {
   if (error) return { ok: false, error: error.message };
   await supabase.from("admin_leads").update({ last_activity_at: new Date().toISOString() }).eq("id", leadId);
   return { ok: true, row: data };
+}
+
+/**
+ * LOG ONE TOUCH FROM THE ROW — the whole write, in one call.
+ *
+ * Ryder, 30 Aug 2026: two clicks on the Contacted? cell and all the data is
+ * there. This is the "all the data is there" half.
+ *
+ * IT IS ONE FUNCTION BECAUSE THE ORDER IS THE DESIGN. Five things can happen
+ * and each one can fail; doing them at the call site means the next control
+ * that logs a touch does them in a different order. The order, and why:
+ *
+ *   1. THE TEXT COUNTER IS CLAIMED FIRST. `texts_sent = texts_sent + 1` read in
+ *      the browser is a read-modify-write, and two tabs both read 0 and both
+ *      write 1 — two texts under a counter saying one. claimTextSend is a single
+ *      statement that only increments while the lead is under the limit, so
+ *      exactly one caller wins. Failing here means NOTHING is logged, which is
+ *      recoverable; the other order put the text on the record with the gate
+ *      still open. This is the same reasoning LogModal has carried since Aug 27.
+ *   2. THE CLAIM IS TAKEN NEXT, and only for an outbound touch on a lead nobody
+ *      holds. `expectUnclaimed` means the query decides, not what we read a
+ *      moment ago. If somebody won the race we STOP — a rep who cannot hold the
+ *      lead cannot write its activity either (0020), so carrying on would just
+ *      produce a permission error with half the work done.
+ *   3. THE TIMELINE ROW. The database trigger (0009) moves last_touch_at,
+ *      first_contact_at and claim_contacted_at off the back of this insert, and
+ *      only for an outbound type — which is exactly why an inbound event is
+ *      written as a note. See touchWrite().
+ *   4. THE FIRST-* STAMPS, after the row exists. first_email_at, first_reply_at
+ *      and bounced_at (0021) are written once and never overwritten. Until this
+ *      function shipped, NOTHING IN THE CONSOLE WROTE the last two, so every
+ *      reply-rate figure on the Stats page could only ever read zero or null.
+ *   5. The console activity feed, last, because it is the only one nothing reads
+ *      back.
+ *
+ * @returns { ok, claimed, stamped, error, taken }
+ *          `claimed` and `stamped` are for the toast — a rep who just had a lead
+ *          claimed for them should be told, not surprised by it later.
+ */
+export async function logTouch({ lead, userId, actorName = "someone", channel, outcome, note = null }) {
+  const write = touchWrite(channel, outcome);
+  /* An unknown pair writes NOTHING. Never a default: a silent fallback here
+   * would file a call as an email, and the row would look perfectly normal. */
+  if (!write) return { ok: false, error: "That is not a touch this console knows how to log." };
+  if (!lead?.id) return { ok: false, error: "No contact to log against." };
+  if (!userId) return { ok: false, error: "Nobody is signed in, so there is no one to log this under." };
+
+  const now = new Date().toISOString();
+
+  /* ---- 1. the text counter, before anything else ---- */
+  if (write.channel === "text" && !write.inbound) {
+    const claimed = await claimTextSend(lead.id);
+    if (!claimed.ok) return { ok: false, error: claimed.error };
+  }
+
+  /* ---- 2. the claim ---- */
+  let claimed = false;
+  if (claimsOnTouch(write, lead, userId)) {
+    const res = await claimLead(lead.id, userId, { name: actorName, expectUnclaimed: true });
+    if (!res.ok) {
+      /* Taken in the window. Stop rather than log: the activity insert would be
+       * refused by 0020 anyway, and a half-written touch is worse than none. */
+      return { ok: false, taken: Boolean(res.taken), error: res.error };
+    }
+    claimed = true;
+  }
+
+  /* ---- 3. the timeline row ---- */
+  /* THE NOTE GOES ON THE TOUCH ROW, not on a second one.
+   *
+   * Added 31 Aug 2026 for the email drafter: when a rep sends a draft, the
+   * email itself is what the timeline should show — "Emailed · sent it" with no
+   * words is a record nobody can use in three weeks. A separate note row would
+   * be a second timeline entry for one act, and the two would sort next to each
+   * other saying half the story each.
+   *
+   * Appended rather than replacing `write.body`, so the machine-readable first
+   * line ("Emailed · sent it.") is identical whether or not a note came with
+   * it — anything reading these rows keys off that line. */
+  const body = note ? `${write.body}\n\n${String(note).trim()}` : write.body;
+  const act = await addLeadActivity({
+    leadId: lead.id, actor: userId,
+    type: write.activityType, outcome: write.activityOutcome, body,
+  });
+  if (!act.ok) {
+    /* The claim above is deliberately NOT rolled back. It is not wrong — this
+     * rep did pick up the phone — and a rollback here would need its own race
+     * handling to avoid handing back a lead somebody else has since taken. The
+     * caller is told what did happen. */
+    return { ok: false, claimed, error: act.error };
+  }
+
+  /* ---- 4. the first-* stamps ----
+   *
+   * FROM THE ACTIVITY ROW'S OWN created_at, not the `now` captured at the top of
+   * this function. That difference made the whole "They replied" card
+   * unreachable, and it took an adversarial review to find:
+   *
+   *   `now` is taken before any write. The insert above then lands a moment
+   *   later, and the database trigger (0009) sets last_activity_at to the ROW's
+   *   created_at — a later instant. Stamping first_reply_at with the earlier
+   *   `now` meant last_activity_at > first_reply_at was true the instant a reply
+   *   was logged, so answeredAfterReply() said "already handled" and the top
+   *   card in the rep's day never appeared once.
+   *
+   * Using the row's own timestamp makes the two exactly equal, and
+   * answeredAfterReply compares with a strict `>` — so a reply reads as
+   * unanswered until somebody actually does something after it. */
+  const stampAt = act.row?.created_at || now;
+  const patch = stampPatch(write, lead, stampAt);
+  const stamped = Object.keys(patch);
+  if (stamped.length) {
+    const res = await upsertLead({ id: lead.id, ...patch });
+    /* A failed stamp is reported, not swallowed, and the touch still stands. The
+     * two are different facts: "we emailed them" is on the timeline either way,
+     * and the stamp only affects what the Stats page can count. Saying nothing
+     * would leave a reply rate quietly missing a reply nobody knows about. */
+    if (!res.ok) {
+      return { ok: true, claimed, stamped: [], error: `Logged, but the dates for the stats did not save: ${res.error}` };
+    }
+  }
+
+  /* ---- 5. the console feed ---- */
+  await logActivity({
+    actor: userId, kind: `lead_${write.channel}`,
+    title: `${write.inbound ? "Reply from" : "Touch on"} ${lead.name || lead.company || "a lead"}`,
+    body: write.body,
+  });
+
+  return { ok: true, claimed, stamped };
 }
 
 /* ------------------------------------------------------------------ */
@@ -2262,7 +2538,9 @@ export async function generateClientReportPreview(clientId, { instruction, prese
   const client = previewStore.clients.find((c) => c.id === clientId);
   if (!client) return { ok: false, error: "That client does not exist." };
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // The team's calendar day, not UTC's — preview mode must not date a
+  // report a day ahead of the real console. Same rule as api/client-report.js.
+  const todayIso = teamDate(Date.now());
   const facts = assembleReportFacts({
     client,
     tasks: previewStore.tasks.filter((t) => t.client_id === clientId),
@@ -2879,7 +3157,9 @@ export async function generateConsoleReportPreview({ instruction, preset } = {})
   };
 
   const facts = assembleConsoleFacts(snap, { nowMs: Date.now() });
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // The team's calendar day, not UTC's — preview mode must not date a
+  // report a day ahead of the real console. Same rule as api/client-report.js.
+  const todayIso = teamDate(Date.now());
   const report = deterministicConsoleReport(facts, {
     todayIso,
     why: "this is preview mode — no database key, so no AI call was made",

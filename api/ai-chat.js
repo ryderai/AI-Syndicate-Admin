@@ -17,7 +17,7 @@
  */
 
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
-import { loadSystemContext, renderContext, renderFocus } from "../lib/brain-context.js";
+import { loadSystemContext, renderContext, renderFocus, teamDate } from "../lib/brain-context.js";
 import { toolsForRole, runTool, logToolRun } from "../lib/assistant-tools.js";
 import { converse, isAiConfigured, AGENT_MODEL } from "../lib/ai-agent.js";
 import { recordAiUsage } from "../lib/ai-usage.js";
@@ -100,7 +100,13 @@ export default async function handler(req, res) {
 
   const contextBlock = renderContext(snap);
   const focusBlock = renderFocus(snap, screen);
-  const today = new Date().toISOString().slice(0, 10);
+  /* THE TEAM'S DAY, NOT UTC'S. From 7pm Chicago onward this told the assistant
+   * "Today is <tomorrow>", and the very next line asks it to work "Friday" and
+   * "next week" out from that date — so every evening it planned from a day
+   * that had not started. Same copied line as api/console-report.js and
+   * api/rep-report.js (fixed Aug 26 2026) and api/client-report.js (fixed
+   * 30 Aug 2026). Day maths goes through teamDate(). */
+  const today = teamDate(Date.now());
 
   const system = [
     HOUSE,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   SHEET_COLUMNS, DEFAULT_SHEET_COLUMNS, SHEET_COLUMN_KEYS,
-  FILTERABLE, GROUPABLE,
+  FILTERABLE, GROUPABLE, SORTABLE,
   CLAIM_LABELS, CLAIM_COLOR,
   columnLabel, facetValue, facetValues, groupRows,
   nameParts, nextSort, sortRowsBy,
@@ -14,12 +14,28 @@ import {
   applyFacets, toggleFacetValue, clearFacet, facetChips,
   SCORE_BANDS, SIZE_BANDS, TOUCH_BANDS, WEBSITE_BANDS,
   readCount,
+  /* ---- 30 Aug 2026 ----
+   * A rep no longer sees another rep's rows at all, so the firm cell is the one
+   * place left that can tell them a firm is taken. The words live in the pure
+   * module so the chip here and the line in the drawer cannot drift. */
+  FIRM_BUSY_LABEL, FIRM_BUSY_WHY,
 } from "../../lib/salesSheet.js";
-import { LEAD_STAGES, LEAD_STAGE_LABELS, LEAD_STAGE_HELP } from "../../lib/data.js";
+import { LEAD_STAGES, LEAD_STAGE_LABELS, LEAD_STAGE_HELP, PICKABLE_STAGES, stageIsDerived } from "../../lib/data.js";
+
+/* WAS the two "not a fit" stages under names that said they were one outcome.
+ * Migration 0027 ran on 31 Aug and made them one stage, so the workaround is
+ * gone and the picker shows what the database holds. Kept as an empty table
+ * rather than deleted, because the next stage that needs a different word in
+ * the chooser than on the row will want it back. */
+const STAGE_PICK_LABELS = {};
 import { ChipPicker } from "./chipPicker.jsx";
+/* Two clicks on the Contacted? cell. Its own component rather than a `mode` on
+ * ChipPicker: that one moves a lead between stages and the value it shows is
+ * the value it sets, and this does neither. 30 Aug 2026 */
+import { TouchPicker } from "./touchPicker.jsx";
 /* The one-text gate, read rather than re-implemented: the row, the drawer and the
  * database function admin_lead_claim_text all have to agree about it. */
-import { textGate } from "../../../lib/sales-rules.js";
+import { textGate, canEmail } from "../../../lib/sales-rules.js";
 import {
   Chip, Avatar, Popover,
 } from "./opsCells.jsx";
@@ -86,6 +102,40 @@ function cleanColumns(v) {
   const keep = v.filter((k) => SHEET_COLUMN_KEYS.includes(k));
   return keep.length ? keep : null;
 }
+
+/**
+ * A COLUMN ADDED AFTER SOMEBODY SAVED THEIR PREFERENCES HAS TO APPEAR ANYWAY.
+ *
+ * 31 Aug 2026: the Draft email column went into DEFAULT_SHEET_COLUMNS and did
+ * not appear on the screen at all, because a saved list from yesterday wins
+ * over today's defaults — so the one control the whole rebuild points at was
+ * invisible to every person who had ever touched the column menu. Found by
+ * counting the columns on the page, not by a test.
+ *
+ * This console already has a note about the shape: a saved preference can
+ * delete an action, and it did exactly that to the Claim button in August.
+ *
+ * `seen` is the set of keys that EXISTED when the preference was saved. Any
+ * default column that is not in it is new since, so it is added — in its proper
+ * place, not at the end. A column the person actually switched off is in `seen`
+ * and stays off, which is the whole point: this restores columns nobody has had
+ * the chance to decide about, and never overrules a decision somebody made.
+ *
+ * With no `seen` (a preference saved before this existed) the fallback is the
+ * key list as it was the day before, so the same reasoning holds for it too.
+ */
+const KEYS_BEFORE_DRAFT_EMAIL = SHEET_COLUMN_KEYS.filter((k) => k !== "draft_email");
+
+function withNewColumns(saved, seen) {
+  if (!saved) return null;
+  const known = new Set(Array.isArray(seen) && seen.length ? seen : KEYS_BEFORE_DRAFT_EMAIL);
+  const missing = DEFAULT_SHEET_COLUMNS.filter((k) => !known.has(k) && !saved.includes(k));
+  if (!missing.length) return saved;
+  /* Back in SHEET_COLUMNS order, so a new column lands where it was designed to
+   * be rather than after the notes. */
+  const wanted = new Set([...saved, ...missing]);
+  return SHEET_COLUMN_KEYS.filter((k) => wanted.has(k));
+}
 function cleanGroupBy(v) {
   return typeof v === "string" && (v === "none" || GROUPABLE.has(v)) ? v : "none";
 }
@@ -107,6 +157,16 @@ export default function SalesSheet({
    * the note at the top of the SALES section of src/lib/data.js for the defect
    * that rule exists to prevent. */
   onTag, onRefreshTags, onLog, onScan, onCloseDeal, onRelease,
+  /* onTouch(row, channel, outcome) — logs ONE touch from the Contacted? cell.
+     Resolving false means it was refused and the note step is skipped.
+     onTouchDone(row, { next, note }) — the "and next?" step, on a touch that is
+     already written. Two callbacks, not one with an optional argument, because
+     one callback is how the third step ends up logging a second touch. */
+  onTouch = null, onTouchDone = null,
+  /* onDraftEmail(row) — asks the server for a draft and opens the panel.
+     `drafting` is the id of the row whose draft is in flight, or null: one at a
+     time, because a rep pressing four buttons should not get four panels. */
+  onDraftEmail = null, drafting = null,
   /* WHO IS CLAIMING. A user id turns the Sales Owner cell of an UNCLAIMED row
    * into a one-press Claim button. Aug 26 2026, Ryder: the rep's Leads page is
    * the floor, and "put your name in the Sales Owner column" is not a claim
@@ -115,7 +175,10 @@ export default function SalesSheet({
    * because assigning somebody else's lead is a real thing an owner does. */
   claimAs = null,
 }) {
-  const [columns, setColumns] = useState(() => cleanColumns(loadPrefs().columns) || DEFAULT_SHEET_COLUMNS);
+  const [columns, setColumns] = useState(() => {
+    const p = loadPrefs();
+    return withNewColumns(cleanColumns(p.columns), p.seen) || DEFAULT_SHEET_COLUMNS;
+  });
   const [groupBy, setGroupBy] = useState(() => cleanGroupBy(loadPrefs().groupBy));
   /* A sort is something you do for a minute, so unlike columns and grouping it
    * is deliberately NOT remembered between visits. */
@@ -145,7 +208,15 @@ export default function SalesSheet({
    * else's first one. Aug 26 2026 */
   const [claiming, setClaiming] = useState(null);
 
-  useEffect(() => { savePrefs({ columns, groupBy }); }, [columns, groupBy]);
+  /* `seen` travels with the preference so the NEXT column added can tell what
+   * this person had already been offered. Without it, every future column would
+   * need its own hard-coded before-list like the one above. */
+  useEffect(() => { savePrefs({ columns, groupBy, seen: SHEET_COLUMN_KEYS }); }, [columns, groupBy]);
+
+  /* Whether the person reading this may be told WHO holds something. Derived
+   * once, here, from the same `member` every other rule on this table reads —
+   * not re-tested inline in a cell. 30 Aug 2026 */
+  const hideNames = member?.role === "sales";
 
   const contested = useMemo(() => contestedCompanies(allLeads), [allLeads]);
   const headcount = useMemo(() => companyHeadcount(allLeads), [allLeads]);
@@ -246,8 +317,20 @@ export default function SalesSheet({
   /* The picker shows what each stage MEANS, not just its name. A status
    * nobody can explain out loud is a status nobody uses — the help text has
    * existed in data.js since the drawer was built and the sheet never showed it. */
-  const stageOptions = LEAD_STAGES.map((v) => ({
-    value: v, label: LEAD_STAGE_LABELS[v], color: STAGE_COLOR[v] || "default", help: LEAD_STAGE_HELP[v],
+  /* ONLY THE STAGES A PERSON DECIDES — 30 Aug 2026.
+   *
+   * Was every value in LEAD_STAGES. The four early ones are derived now: the
+   * activity log knows whether we have reached out, and the Contacted? column
+   * two cells to the left prints it live. A dropdown asking a rep to keep a
+   * second copy of that by hand is how the two came to disagree.
+   *
+   * Rows still HOLDING an early stage keep it and keep displaying it — nothing
+   * is rewritten. It just cannot be chosen. `PICKABLE_STAGES` is the list; the
+   * two "Not a fit" entries are one outcome with two reasons until 0027 merges
+   * them into a single stage value. */
+  const stageOptions = PICKABLE_STAGES.map((v) => ({
+    value: v, label: STAGE_PICK_LABELS[v] || LEAD_STAGE_LABELS[v],
+    color: STAGE_COLOR[v] || "default", help: LEAD_STAGE_HELP[v],
   }));
   const listOptions = lists.map((l) => ({ value: l.id, label: l.name, color: "default" }));
 
@@ -403,19 +486,50 @@ export default function SalesSheet({
             : "Nobody has claimed this."));
 
       case "contacted": {
-        /* READ-ONLY ON PURPOSE. In the sheet this is a dropdown that says the
-         * same thing as Sales Cycle Status, reps fill one or the other, and
-         * neither can be trusted. Here it is counted off the timeline, so it
-         * can never disagree with anything. */
+        /* STILL COUNTED, NEVER SET — and now it is also where you log the touch.
+         *
+         * The VALUE stays derived. In the outreach sheet this was a dropdown
+         * saying the same thing as Sales Cycle Status; reps filled one or the
+         * other and neither could be trusted. Here it is counted off the
+         * timeline, so it cannot disagree with anything, and that does not
+         * change: nothing below writes a "contacted" field, because there is
+         * none.
+         *
+         * What clicking it does is log a real touch, and the chip follows on the
+         * next read. Ryder, 30 Aug 2026 — two clicks, and the data is there.
+         *
+         * `blocked.text` carries the one-text rule as a REASON on a disabled
+         * row rather than a hidden row. A rule you cannot see is a rule nobody
+         * learns; the drawer has shown it this way since Aug 27. */
         const c = row.contacted;
+        const chip = <Chip label={c.short} color={c.color} />;
+        if (!onTouch || locked(row)) {
+          return (
+            <button
+              type="button" className="adm-db-btn adm-sh-readonly"
+              title={c.why}
+              onClick={(e) => { e.stopPropagation(); onOpen(l.id); }}
+            >
+              {chip}
+            </button>
+          );
+        }
+        /* BOTH SEND RULES, not just the text one. `canEmail` refuses a
+           bounced address and was written the same evening and then wired
+           nowhere — a checker found it had exactly one caller, its own test.
+           A rule that nothing reads is a rule that is not in force. */
+        const tGate = textGate(l);
+        const eGate = canEmail(l);
+        const blocked = {};
+        if (!tGate.allowed) blocked.text = tGate.reason;
+        if (!eGate.allowed) blocked.email = eGate.reason;
         return (
-          <button
-            type="button" className="adm-db-btn adm-sh-readonly"
-            title={c.why}
-            onClick={(e) => { e.stopPropagation(); onOpen(l.id); }}
-          >
-            <Chip label={c.short} color={c.color} />
-          </button>
+          <TouchPicker
+            current={chip}
+            blocked={blocked}
+            onPick={(channel, outcome) => onTouch(row, channel, outcome)}
+            onDone={onTouchDone ? (payload) => onTouchDone(row, payload) : null}
+          />
         );
       }
 
@@ -429,6 +543,21 @@ export default function SalesSheet({
             label="Sales cycle status"
             value={l.stage}
             options={stageOptions}
+            /* A ROW HOLDING A DERIVED STAGE STILL SHOWS IT.
+               The picker offers six now, so a lead sitting on `contacted` matched
+               no option and the closed cell rendered the "—" placeholder — three
+               thousand rows suddenly claiming to have no stage at all. Found by
+               looking at the page, not by a test.
+               The label is drawn muted, because it is real history you can read
+               and not a thing you can set. What it means today is in the two
+               columns either side, live. 30 Aug 2026 */
+            current={stageIsDerived(l.stage)
+              ? (
+                <span className="adm-sh-stage-derived" title="The system works this one out from the timeline — open the record to move it on.">
+                  {LEAD_STAGE_LABELS[l.stage] || l.stage}
+                </span>
+              )
+              : undefined}
             disabled={locked(row)}
             disabledWhy={`${row.heldBy || "Somebody else holds this lead"} — you can read it, not move it.`}
             onPick={(v) => onPatch(l, { stage: v })}
@@ -495,6 +624,19 @@ export default function SalesSheet({
         return (
           <FirmCell
             row={row} others={others} headcount={n} teamName={teamName}
+            /* THE TWO FIRM WARNINGS ARE ONE CELL, ON PURPOSE.
+               `others` is "two or more people hold contacts here", which needs
+               the reader to hold one of them to be true. `row.firmBusy` is the
+               case that rule can never see: an UNCLAIMED row at a firm somebody
+               else is inside, where there is exactly one owner and it is not
+               you. Before 30 Aug that case did not need saying, because the
+               other rep's row was on screen. It is not any more. */
+            busy={row.firmBusy}
+            /* NO NAMES FOR A REP. A rep is told a firm is taken; who is in it is
+               the thing that was just hidden from them, and printing it in a
+               popover would hand it straight back. Owners and admins keep the
+               names — the whole point of their page is knowing who has what. */
+            hideNames={hideNames}
             filter={filterFor("company", row)} onOpen={() => onOpen(l.id)}
           />
         );
@@ -546,6 +688,47 @@ export default function SalesSheet({
               {on.length > 3 ? <span className="adm-sh-headn">+{on.length - 3}</span> : null}
             </span>
           </span>
+        );
+      }
+
+      case "draft_email": {
+        /* AN ACTION, NOT A VALUE — Ryder, 31 Aug 2026: "add a row for email that
+         * drafts up an email based on stage, notes, timeline and everything else
+         * thats known about the client."
+         *
+         * Nothing is stored behind this cell. It asks the server to write one,
+         * from that lead's stage, notes, timeline, tags, proposals and the
+         * newest scan of their site, and opens it in a panel a person edits.
+         * IT NEVER SENDS — see api/lead-email.js.
+         *
+         * Three states, and each one says something different:
+         *   no address        → nothing to write to
+         *   bounced           → refused, with the date, because canEmail refuses
+         *   otherwise         → Draft email
+         * The bounce case is a REFUSAL WITH A REASON rather than a hidden
+         * button: a rule you cannot see is a rule nobody learns. */
+        const eg = canEmail(l);
+        if (!l.email) {
+          return (
+            <span className="adm-db-empty" title="No email address on this contact.">no email</span>
+          );
+        }
+        if (!eg.allowed) {
+          return (
+            <span className="adm-sh-refused" title={eg.reason}>
+              {eg.bounced ? "bounced" : "cannot email"}
+            </span>
+          );
+        }
+        return (
+          <button
+            type="button" className="adm-db-btn adm-sh-draftbtn"
+            disabled={!onDraftEmail || drafting === l.id}
+            title="Write the next email to this person, from everything on their record. It drafts — it never sends."
+            onClick={(e) => { e.stopPropagation(); onDraftEmail?.(row); }}
+          >
+            {drafting === l.id ? "Writing…" : "Draft email"}
+          </button>
         );
       }
 
@@ -937,25 +1120,49 @@ export default function SalesSheet({
 
 /** Firm name, how many of its people we hold, and the one-firm-one-rep
  *  warning that used to live on the group header. */
-function FirmCell({ row, others, headcount, teamName, filter, onOpen }) {
+function FirmCell({ row, others, headcount, teamName, filter, onOpen, busy = false, hideNames = false }) {
   const [anchor, setAnchor] = useState(null);
   const name = row.companyName;
+  /* ONE MARK, NOT TWO. `others` is the stronger statement and swallows the
+   * weaker one where both are true, so a cell never carries two triangles
+   * saying the same thing in different words. */
+  /* ONE MARK, NOT TWO, and `busy` wins on a rep's page because `others` cannot
+   * be true there — see the popover below. */
+  const mark = (others && !hideNames) ? "others" : busy ? "busy" : null;
+  const hint = mark === "others"
+    ? `${others.length} reps are working this firm`
+    : mark === "busy" ? FIRM_BUSY_LABEL : undefined;
   return (
     <>
       <button
         type="button" className="adm-db-btn"
         onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
-        title={others ? `${others.length} reps are working this firm` : undefined}
+        title={hint}
       >
         {name
           ? <span className="adm-sh-firm">{name}</span>
           : <span className="adm-db-empty">No firm on file</span>}
         {headcount > 1 ? <span className="adm-sh-headn">{headcount}</span> : null}
-        {others ? <span className="adm-sh-warn" aria-hidden="true">⚠</span> : null}
+        {mark ? <span className="adm-sh-warn" aria-hidden="true">⚠</span> : null}
       </button>
       {anchor && (
         <Popover anchor={anchor} width={264} onClose={() => setAnchor(null)}>
-          {others ? (
+          {mark === "busy" ? (
+            <div className="adm-sh-pop-warn">
+              <strong>{FIRM_BUSY_LABEL}.</strong> {FIRM_BUSY_WHY}
+            </div>
+          ) : null}
+          {/* THIS BRANCH CANNOT FIRE ON A REP'S PAGE and that is by construction,
+              not by luck: contestedCompanies needs two different owners in the
+              list it is given, and since 30 Aug the sheet hands it the rep's own
+              set, which can hold at most one. The ⚠ a rep sees is the `busy`
+              block above. Kept, unchanged, for the owner's page, where naming
+              the two people is the entire point.
+
+              An earlier draft printed "Their contacts are not on your floor"
+              here for a rep. One of the two owners is always the reader, so that
+              sentence was false about the row it was on. */}
+          {others && !hideNames ? (
             <div className="adm-sh-pop-warn">
               <strong>{others.length} reps are working this firm.</strong>{" "}
               {others.map((id) => teamName(id) || "someone").join(" and ")}. The Rules of
@@ -1000,26 +1207,44 @@ function SheetHead({ col, rows, groupBy, sort, onSort, onClearSort, activeValue,
   const [anchor, setAnchor] = useState(null);
   const canFilter = FILTERABLE.has(col.key);
   const canGroup = GROUPABLE.has(col.key);
-  const sorted = sort && sort.key === col.key ? sort.dir : null;
+  /* A COLUMN THAT DECLARES ITSELF UNSORTABLE MUST NOT OFFER TO SORT.
+   *
+   * This header never read SORTABLE — every column got a sort button — and it
+   * went unnoticed because every column in the sheet was sortable until 31 Aug.
+   * `draft_email` is the first that is not: it stores nothing, so there is
+   * nothing to order by, and clicking its header sorted the whole table by a
+   * value that does not exist. A control that does nothing is worse than no
+   * control, because the person who pressed it now distrusts the order. */
+  const canSort = SORTABLE.has(col.key);
+  const sorted = canSort && sort && sort.key === col.key ? sort.dir : null;
 
   const values = useMemo(() => (canFilter ? facetValues(rows, col.key) : []), [rows, canFilter, col.key]);
 
   return (
     <span className="adm-db-thwrap">
-      <button
-        type="button"
-        className={`adm-db-th${sorted ? " sorted" : ""}${activeValue !== undefined ? " on" : ""}`}
-        onClick={onSort}
-        title={sorted === "asc" ? `Sorted by ${col.label} — click for the other way`
-          : sorted === "desc" ? `Sorted by ${col.label}, reversed — click to stop sorting`
-            : `Sort by ${col.label}`}
-      >
-        {col.label}
-        {activeValue !== undefined ? <span className="adm-db-th-dot" aria-hidden="true">●</span> : null}
-        <span className="adm-db-th-arrow" aria-hidden="true">
-          {sorted === "asc" ? "↑" : sorted === "desc" ? "↓" : ""}
+      {canSort ? (
+        <button
+          type="button"
+          className={`adm-db-th${sorted ? " sorted" : ""}${activeValue !== undefined ? " on" : ""}`}
+          onClick={onSort}
+          title={sorted === "asc" ? `Sorted by ${col.label} — click for the other way`
+            : sorted === "desc" ? `Sorted by ${col.label}, reversed — click to stop sorting`
+              : `Sort by ${col.label}`}
+        >
+          {col.label}
+          {activeValue !== undefined ? <span className="adm-db-th-dot" aria-hidden="true">●</span> : null}
+          <span className="adm-db-th-arrow" aria-hidden="true">
+            {sorted === "asc" ? "↑" : sorted === "desc" ? "↓" : ""}
+          </span>
+        </button>
+      ) : (
+        /* Not a button at all. Disabled-looking-but-clickable is the shape that
+           teaches people the header is broken; a plain label says the column is
+           an action and there is nothing to order. */
+        <span className="adm-db-th adm-db-th-plain" title={`${col.label} — an action, so there is nothing to sort by`}>
+          {col.label}
         </span>
-      </button>
+      )}
       {(canFilter || canGroup) && (
         <button
           type="button"

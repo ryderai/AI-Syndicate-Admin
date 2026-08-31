@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  LEAD_STAGES, LEAD_STAGE_LABELS, LEAD_STAGE_HELP,
+  LEAD_STAGES, LEAD_STAGE_LABELS, LEAD_STAGE_HELP, PICKABLE_STAGES,
   listLeadActivity, addLeadActivity, listProposals, upsertProposal, deleteProposal,
   claimLead, releaseLead, upsertLead, upsertCompany, claimTextSend, logActivity,
   listTasks, listWeekly, listClientReports, listTickets,
@@ -10,7 +10,7 @@ import { listInvoices } from "../../lib/finance.js";
 import { buildPersonTimeline, timelineSummary } from "../../../lib/person-timeline.js";
 import {
   claimState, cadenceState, scoreGate, textGate, companyClaimWarning,
-  CADENCE, SEVEN_MOVES, ROE,
+  CADENCE, CADENCE_STOPS, SEVEN_MOVES, ROE,
 } from "../../../lib/sales-rules.js";
 import { apiFetch } from "../../lib/adminApi.js";
 import { toast } from "../../lib/toast.js";
@@ -68,6 +68,12 @@ export default function SalesProfile({
    * line; nothing in this file writes a tag or closes a deal itself. */
   tags = [], allTags = [], onTag = null, onRefreshTags = null,
   report = null, onScan = null, onCloseDeal = null,
+  /* onStage(stage, note, extra) — THE ONLY WAY THIS DRAWER MOVES A LEAD, and it
+   * is the page's gated path, not this file's local `patch`. Every stage write
+   * in here used to call `upsertLead` directly, which meant the Follow up /
+   * Meeting / Proposal requirements existed on the sheet and nowhere else.
+   * Restricting one control is not restricting the act. 30 Aug 2026 */
+  onStage = () => {},
 }) {
   const [tab, setTab] = useState("work");
   const [activity, setActivity] = useState(null);
@@ -135,7 +141,21 @@ export default function SalesProfile({
   const cadence = cadenceState(lead, now, touches);
   const gate = scoreGate(company?.site_score);
   const text = textGate(lead);
-  const warning = companyClaimWarning(lead, siblings, teamName, now, member.user_id);
+  /* THE FIRM WARNING NAMES NOBODY FOR A REP — 30 Aug 2026.
+   *
+   * A rep no longer sees another rep's rows (visibleToMember in
+   * src/lib/salesSheet.js), so printing that rep's NAME in a warning would hand
+   * back through a sentence exactly what was hidden as a record. The warning
+   * itself stays — it is the whole reason the rows can be hidden safely — and
+   * it stays counted from every contact at the firm.
+   *
+   * Done by swapping the naming function rather than by adding a branch inside
+   * companyClaimWarning: that function is pure, tested, and shared with the
+   * owner's page, where the names are the point. */
+  const warnName = member.role === "sales"
+    ? () => "Somebody on the team"
+    : teamName;
+  const warning = companyClaimWarning(lead, siblings, warnName, now, member.user_id);
 
   const patch = async (p, note) => {
     setBusy(true);
@@ -361,13 +381,19 @@ export default function SalesProfile({
               a live deal is "not a prospect" — because somebody scored the
               website after the conversation started — is advice nobody can act
               on, and it teaches people to scroll past the banner. */}
-          {gate.skip && ["new", "researching"].includes(lead.stage) && (
+          {/* "BEFORE A CONVERSATION EXISTS" IS `first_contact_at`, not a stage
+              list. salesQueue stopped using the stage list on 30 Aug — the four
+              early stages became unsettable, so a lead worked for a month still
+              reads `new` — and this banner kept the old test for a few hours,
+              which is how one screen came to disagree with the queue about the
+              same lead. */}
+          {gate.skip && !lead.first_contact_at && (
             <div className="adm-sl-warn adm-sl-warn-flat" role="status">
               <strong>Not a prospect.</strong> {gate.why} The rules say mark it Skip and move on rather than
               spend a touch here.
             </div>
           )}
-          {gate.skip && !["new", "researching"].includes(lead.stage) && (
+          {gate.skip && lead.first_contact_at && (
             <div className="adm-sl-warn adm-sl-warn-flat" role="status">
               <strong>This firm scores {gate.score}.</strong> Normally that is a pass — but you are already
               in conversation, so keep going. Just do not lead with the gap.
@@ -393,6 +419,11 @@ export default function SalesProfile({
               busy={busy} onClaim={doClaim} onRelease={doRelease}
               siblings={siblings} onLog={setLogOpen} onPatch={patch}
               onFlip={flipToClient} onWin={doWin} teamName={teamName}
+              /* THE GATED PATH, threaded down rather than reached for. Two
+                 buttons in here set Meeting and Follow up — the exact two
+                 stages that need a date — and they were writing them straight
+                 through this file's local `patch`. */
+              onStage={onStage}
               onCloseDeal={doClose} readOnly={readOnly}
             />
           )}
@@ -440,7 +471,7 @@ export default function SalesProfile({
 
 function WorkTab({
   lead, member, team, claim, cadence, text, gate, busy,
-  onClaim, onRelease, siblings, onLog, onPatch, onFlip, onWin, teamName,
+  onClaim, onRelease, siblings, onLog, onPatch, onStage, onFlip, onWin, teamName,
   /* Both closes ask for a reason first — see doClose in the parent. Passed down
    * rather than reached for, so this component still has no idea how a deal is
    * recorded, which is what stops it growing a fourth way of doing it. */
@@ -536,6 +567,38 @@ function WorkTab({
               <button className="btn" disabled={busy} onClick={onRelease}>Hand it back</button>
             </div>
           </>
+        ) : cadence.stop === "replied" ? (
+          /* ABOVE the expired-claim branch below — see the ordering note there. */
+          /* ---- THEY WROTE BACK. THE SEQUENCE IS OVER. ----
+             This branch sits ABOVE the finished/step ones because a reply beats
+             the schedule rather than being ranked against it. The buttons are
+             the two things you actually do next; there is deliberately no "log
+             the email" here, because the pre-written email is the exact thing
+             that must not go out now. 30 Aug 2026 */
+          <>
+            <div className="adm-sl-next-t">They replied — answer them</div>
+            <div className="adm-sl-next-b">{CADENCE_STOPS.replied}</div>
+            <div className="adm-sl-next-a">
+              <button className="btn btn-accent" onClick={() => onLog("email")}>Log your reply</button>
+              {/* NOT a direct stage write. Meeting needs a date in the diary
+                  (STAGE_REQUIRES), and this button was the fastest way in the
+                  console to produce a Meeting with nothing booked — on the very
+                  panel that exists because somebody replied. It routes through
+                  the page's gate now, which refuses and says what is missing. */}
+              <button className="btn" onClick={() => onStage("meeting", "They replied and we are booking a meeting.")}>
+                Book a meeting
+              </button>
+            </div>
+          </>
+        ) : cadence.stop === "bounced" ? (
+          <>
+            <div className="adm-sl-next-t">That address is dead</div>
+            <div className="adm-sl-next-b">{CADENCE_STOPS.bounced}</div>
+            <div className="adm-sl-next-a">
+              <button className="btn btn-accent" onClick={() => onLog("call")}>Log a call instead</button>
+              <button className="btn" onClick={() => onCloseDeal("lost")}>Mark it Not a fit</button>
+            </div>
+          </>
         ) : cadence.finished ? (
           <>
             <div className="adm-sl-next-t">All five touches are done</div>
@@ -552,7 +615,7 @@ function WorkTab({
               <button className="btn" onClick={() => onCloseDeal("lost")}>
                 Mark it lost
               </button>
-              <button className="btn" onClick={() => onPatch({ stage: "follow_up" }, "Kept for a later follow-up.")}>
+              <button className="btn" onClick={() => onStage("follow_up", "Kept for a later follow-up.")}>
                 Keep for later
               </button>
             </div>
@@ -634,12 +697,33 @@ function WorkTab({
                whole feature exists to stop. */
             if (e.target.value === "won") { if (!busy) onWin(); return; }
             if (e.target.value === "lost") { if (!busy) onCloseDeal("lost"); return; }
-            onPatch(
-              { stage: e.target.value, ...(["lost", "skip_90", "bad_contact"].includes(e.target.value) ? { closed_at: new Date().toISOString() } : { closed_at: null }) },
-              `${LEAD_STAGE_LABELS[lead.stage]} → ${LEAD_STAGE_LABELS[e.target.value]}`
+            /* THROUGH THE PAGE'S GATE. This called `onPatch` — the drawer's own
+               upsert — so Follow up, Meeting and Proposal were gated on the
+               sheet and free here. `closed_at` still rides along, because this
+               is the only stage path in the console that sets it. */
+            onStage(
+              e.target.value,
+              `${LEAD_STAGE_LABELS[lead.stage] || lead.stage} → ${LEAD_STAGE_LABELS[e.target.value] || e.target.value}`,
+              ["lost", "skip_90", "bad_contact", "not_a_fit"].includes(e.target.value)
+                ? { closed_at: new Date().toISOString() }
+                : { closed_at: null },
             );
           }}>
-            {LEAD_STAGES.map((s) => <option key={s} value={s}>{LEAD_STAGE_LABELS[s]}</option>)}
+            {/* THE SAME SEVEN THE SHEET OFFERS — 30 Aug 2026.
+                This mapped every value in LEAD_STAGES, so the drawer was a way
+                to set the four derived stages the sheet had just stopped
+                offering, and to reach Proposal with no proposal on the record.
+                A checker found it within an hour of the sheet being changed:
+                restricting one control is not restricting the act.
+                The lead's CURRENT stage is added even when it is not pickable,
+                or a lead sitting on `contacted` would render with the first
+                option selected and one stray click would move it. */}
+            {[...new Set([...PICKABLE_STAGES, lead.stage].filter(Boolean))].map((s) => (
+              <option key={s} value={s} disabled={!PICKABLE_STAGES.includes(s)}>
+                {LEAD_STAGE_LABELS[s] || s}
+                {PICKABLE_STAGES.includes(s) ? "" : " — the system sets this one"}
+              </option>
+            ))}
           </select>
           <div className="adm-sl-help">{LEAD_STAGE_HELP[lead.stage]}</div>
         </label>

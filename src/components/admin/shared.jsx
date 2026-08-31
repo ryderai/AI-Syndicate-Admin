@@ -507,16 +507,12 @@ export function fmtNum(n) {
   return Number(n).toLocaleString();
 }
 
-export function timeAgo(iso) {
-  if (!iso) return "—";
-  const t = typeof iso === "number" ? iso : Date.parse(iso);
-  const s = Math.floor((Date.now() - t) / 1000);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  if (s < 86400 * 30) return `${Math.floor(s / 86400)}d ago`;
-  return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
+/* Moved to src/lib/timeAgo.js on 30 Aug 2026 and re-exported here so every
+ * existing `import { timeAgo } from "./shared.jsx"` keeps working. It left
+ * this file because node cannot import .jsx, so it had no test — and it was
+ * printing "just now" for a date in the FUTURE and "Invalid Date" for
+ * anything unparseable. tests/time-ago pins both. */
+export { timeAgo } from "../../lib/timeAgo.js";
 
 /** The current time, as state that ticks. Reading the clock straight out of a
  * render is impure — the same render would produce different output on a

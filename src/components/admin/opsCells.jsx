@@ -427,6 +427,15 @@ export function PersonCell({ value, options, onChange, filter = null }) {
       <button
         type="button" className="adm-db-btn" aria-haspopup="listbox"
         aria-label={`Assigned to ${opt ? opt.label : "nobody"} — click to change`}
+        /* The cell is a fixed width and a disambiguated label —
+         * "Ryder Schilling (ryderschilling)", drawn when two teammates share a
+         * name — does not fit in it. Truncated to "Ryder Schilling (ry…" the
+         * two people look identical again, which is the exact thing the label
+         * was widened to stop. The picker itself has the room and is where the
+         * choice is made; this puts the whole label one hover away in the row
+         * as well, rather than pretending the cut string is readable.
+         * 30 Aug 2026. */
+        title={opt ? opt.label : "Unassigned"}
         onClick={(e) => setAnchor(e.currentTarget.getBoundingClientRect())}
       >
         {opt ? (

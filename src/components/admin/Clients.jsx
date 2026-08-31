@@ -13,6 +13,7 @@ import { isOverdue } from "./opsTable.jsx";
 import { canSync } from "../../../lib/connectors.js";
 import { useScreenContext } from "../../lib/screenContext.js";
 import { useRoute, stampRoute } from "../../lib/router.js";
+import { teamDayStartOf } from "../../lib/teamDay.js";
 
 /* CLIENTS — everyone, in one list.
  *
@@ -232,7 +233,13 @@ export default function ClientsPage({ member, query = "" }) {
         stripe: null,
         name: c.name,
         email: c.contact_email || null,
-        since: c.start_date ? Date.parse(`${c.start_date}T00:00:00Z`) : (c.created_at ? Date.parse(c.created_at) : null),
+        /* MIDNIGHT IN CHICAGO, NOT IN LONDON. `Date.parse("2026-08-31T00:00:00Z")`
+         * is 7pm the evening BEFORE, team time, so the "With us" column read the
+         * start date five hours early: a client who starts tomorrow showed
+         * "1h ago" — as if they had already been with us for an hour. Caught in
+         * the 30 Aug 2026 dry run, on the first client ever created here.
+         * teamDayStartOf() is the same function every lateness number uses. */
+        since: c.start_date ? teamDayStartOf(c.start_date) : (c.created_at ? Date.parse(c.created_at) : null),
       });
     }
 

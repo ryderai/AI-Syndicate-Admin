@@ -503,8 +503,15 @@ t("no contacts, or a junk list, parks nothing and throws nothing", () => {
 
 t("what was left alone is reported, and only conversations that never started are parked", () => {
   assert.ok(SRC.includes("held by another rep"), "the rep has to be told what did not happen");
-  assert.ok(SRC.includes('.in("stage", ["new", "researching"])'),
+  /* WAS the stage list. The four early stages stopped being settable on 30 Aug,
+   * so a lead worked for a month still reads `new` — and parking on the stage
+   * list would have moved a live conversation to Skip because of a website
+   * scan. `first_contact_at` is written by a trigger from a real logged touch
+   * and is the honest test of "no conversation has started". */
+  assert.ok(SRC.includes('.is("first_contact_at", null)'),
     "marking somebody Skip mid-conversation would throw away a live deal");
+  assert.ok(!SRC.includes('.in("stage", ["new", "researching"])'),
+    "the abandoned stage-list test must not still be here");
   assert.ok(SRC.includes("THE TIMELINE LINE IS NOT SCOPED"),
     "the trade-off between the two side effects is written down, not silently picked");
 });

@@ -4887,6 +4887,10 @@ The only shape where both halves are true:
 
 ### 45.3 THE LOCK IS ON THE ROW, NOT ON THE PAGE
 
+> ⚠️ **SUPERSEDED ON VISIBILITY BY §52 (30 Aug 2026, evening).** A rep no longer sees a lead
+> somebody else holds. Everything below about the greyed row and the read-only drawer describes
+> a state that can no longer be reached on the Floor. The EDITABILITY half is unchanged.
+
 **Visibility: every lead, every role.** **Editability: mine, or nobody's, or I am owner/admin.**
 
 - `canEditLead(lead, member)` in `src/lib/salesSheet.js` is the ONLY editability check. Nothing
@@ -5847,3 +5851,656 @@ vertical centre, or read the container height.
 
 1. `0026_grants_repair.sql` run in Supabase (0025 is already run). Clicks in SETUP.md.
 2. Deployed. Nothing in §49 or §50 is pushed.
+
+---
+
+## §51. STATS BY REP, AND THE SHEET AS A ONE-CLICK WORKFLOW — Sun Aug 30 2026, evening (append-only section)
+
+Two builds in one evening, both on the Sales side, both **built and NOT deployed**.
+Read this before touching `SalesStats.jsx`, `salesSheet.jsx`, `SalesPage.jsx`'s
+`PipelineView`, or either of the two new pure modules.
+
+### 51.1 Stats · By rep is a bar chart with filter chips
+
+> *"i want it to be more like bar graphs for each rep with filters at the top to click to
+> show different stats to see who performed the best."*
+
+**13 chips in one band above the chart**, grouped Results / Effort / Watch, then one
+horizontal bar per rep sorted best-first with a `BEST` chip on the leader. The full
+table stays underneath as the chart's plain-text twin.
+
+`lib/rep-metrics.js` (pure) is the metric list and the ranking. `tests/rep-metrics`
+is 45 checks.
+
+**Four rules it enforces.**
+
+1. **No per-rep number is new.** Every `read()` pulls a field `repStats` or
+   `outreachFor` already produced, from the one `getSalesBoard()` the page already ran.
+   The one thing counted on the page is the TEAM line, over every lead — it has to be,
+   because 3,650 of 3,663 contacts have no owner and summing the reps would give a
+   fraction of the truth.
+2. **Three stats are lower-is-better** — Speed to first touch, At risk, Lost — and sort
+   ascending. One sort direction for everything puts the slowest rep at the top of a
+   leaderboard.
+3. **A raw count with no denominator is not a performance.** `crown: false` on **Lost**,
+   **At risk** and **Open right now**. A rep who claimed nothing has lost nothing and
+   holds nothing at risk, so the smallest-number rule was putting a BEST chip on the
+   person who did the least work. Those three draw a bar and a number, name no winner,
+   and print the book the number came out of ("of 200 they have claimed"). Close rate is
+   the version of that question with a denominator, and it is still winnable.
+4. **Null is not zero.** An unreadable number is held out of the ranking, sorted to the
+   bottom, never crowned.
+
+**Who may be crowned:** the metric must be crownable, at least two reps measured, and —
+on a more-is-better stat — a winning value above zero. On a fewer-is-better stat zero
+DOES win. Ties all carry the mark.
+
+**Six defects a separate adversarial checker found, all fixed:**
+
+- **The page could not tell you a read had FAILED.** `getSalesBoard()` does not reject —
+  `src/lib/data.js` turns every reader's failure into `{rows: [], error}` and records it
+  in `errors` / `failed`. So a broken read rendered "Contacted 0 · Won 0", said *"that is
+  an empty list, not a missing one"*, signed off *"every figure here is counted from real
+  rows"*, and ranked the reps anyway. **Any page that reads the board needs the
+  `errors` + `truncated` banner pair** SalesPage and repOverview have carried since
+  Aug 27. This page shipped without them.
+- **The null-is-not-zero contract was unreachable here** because the page passed `[]`
+  either way. It passes `null` per failed reader now, off `board.failed`.
+- Lost / At risk / Open crowning the wrong person — see rule 3.
+- **The heading said "all time"** when `PERIOD_ALL` means every row the page managed to
+  READ. It says "over everything loaded", and `periodWords` has no silent default.
+- **Three of the 34 tests could not fail.** One assertion was `!A || B` with `B`
+  unconditionally true; the chips test grepped the file for `<button` and `aria-pressed`
+  separately; the mutation test only re-checked an input array's order, which `.map()`
+  cannot change.
+- Chip group headings unassociated, chip meaning only in a hover `title`, and a row `key`
+  that fell back to a display name.
+
+Two more were found by **loading the page**: *"only no reps have this number"* (three
+states, two sentences) and calling every unmeasured row *"a number this page could not
+read"* when a rate is also null with nothing sent.
+
+Also: `_to_delete` is in `eslint.config.js`'s ignores now — an untracked deliberately
+broken file from Aug 26 was making `npm run lint` fail for the whole repo.
+
+### 51.2 The sheet: click a row to open, click a chip to move
+
+> *"a normal row that when you click anything that isnt a tag it opens the client card …
+> one click movement through the pipeline … i dont want to be able to add tags … in the
+> pipeline i want to be able to drag the client over into new pipes … when you scroll
+> down i still need to be able to see the title of the row … make sure the rows on the
+> end dont get cut off"*
+
+And, on what "the tags" are: *"any collumn that has pre set lead stage like contacted or
+won or lost … we have friggin 3000+ leads, we need to be able to do this at scale."*
+
+**Two kinds of thing on a row, and they must keep looking like two kinds of thing.**
+
+- **Reading cells** — plain `<span>`s, so the click passes up to the `<tr>`, which opens
+  the client card. Name, title, email, phone, city, the next step, the dates, the firm.
+- **The Sales Cycle Status chip and the List chip** — the only inline controls left.
+  One click writes the move; the optional note comes **after**, and walking away from it
+  loses nothing. That order is the whole design.
+- **The Pipeline board takes drags.** The column lights while a card is over it, the drop
+  writes the stage, the same note box follows.
+
+`lib/stage-move.js` (pure) holds the rules all three screens ask. `tests/stage-move` is
+29 checks.
+
+**Five rules not to break.**
+
+1. **All three screens ask `lib/stage-move.js`** — chip, drop target, card dropdown.
+2. **The board writes through `patchLead`, never its own `upsertLead`.** Otherwise a lead
+   dragged onto Won would not create a client record and nobody would notice for a month.
+   A test asserts the board calls neither `upsertLead` nor `addLeadActivity`.
+3. **Won and Lost skip the note box** and open the reason box from Aug 27 — that box IS
+   the note. `patchLead` returns **false** for them now (it used to return undefined), so
+   the picker cannot say "moved, add a note?" about a move that has not happened.
+4. **No way to invent a status or a tag.** The picker renders a fixed list, has no text
+   input anywhere, and says *"This list is fixed"* on itself. The Tags column is
+   display-only — most of those come from rules in `lib/sales-rules.js`.
+5. **Nothing became uneditable.** Everything that left the row is on the card, which is
+   one click from anywhere on the row. A test asserts `TextCell`, `PopoutCell`,
+   `PersonCell` and `SelectCell` are all gone from the sheet.
+
+**Three traps, all of which were real bugs:**
+
+- **A React event bubbles through the REACT tree, not the DOM one.** With the row
+  clickable, a click on an option inside the popover reached the `<tr>` underneath and
+  opened the client card on top of the menu — every single time. Both popovers stop their
+  own `onClick` **and** `onMouseDown`.
+- **A sticky `<th>` sticks to its nearest SCROLLING ancestor.** `.adm-db-scroll` has
+  always had `overflow-x: auto`, which makes it that ancestor in both directions, so a
+  header stuck to the page stuck to nothing. It is a bounded scroll box now
+  (`max-height: calc(100vh - 330px)`) — which is also what stops 3,663 rows pushing the
+  toolbar off the top of the screen.
+- **`table-layout: fixed` reads the COLGROUP and ignores the `<th>`.** The Do column was
+  `46` in the colgroup and `210` in its header, so Claim / Email / ⋯ / ⤢ were cut off the
+  right edge of every row. One constant, `DO_COLUMN_WIDTH`.
+
+Plus: flexbox shrank the chip to fit its own help text — "In conversation" rendered as
+"In conversa" until it got `flex: 0 0 auto`.
+
+**The strip above the table.** *"remove this text"* — the `N PEOPLE · Contacted? and
+Touches count the last 90 days` line is gone. Both halves duplicated something already on
+screen. The **window fact moved onto the two column headings it is about** as their
+tooltip; `WINDOWED_COLUMNS` in `salesSheet.jsx` is the list. `.adm-sh-count` and
+`.adm-sh-window` were deleted from `admin.css` with the markup.
+
+### 51.3 Spacing
+
+`.dash-content` 28/36/56 → **40/48/80** and `.dash-header` 28/36/24 → **34/48/26**, set in
+`admin.css` (not `index.css`, which is the platform's design system copied in verbatim).
+Applied console-wide, because a page whose cards start 48px from the edge next to one
+whose cards start 36px reads as a broken layout. **Side padding is the risky one** —
+every pixel is taken off the Sales sheet and the Operations table, both of which wrap
+their controls when they run out. Re-measured after: `.adm-sl-bar` is 67px, still one
+line, at 1470px. Stats also got a scoped roomier block (`.adm-st-page`), deliberately not
+shared with the sheet: the sheet is a screen somebody works, tight rows are the point
+there.
+
+### 51.4 Two ways a browser check lied this session
+
+- **`navigate` to a URL whose hash is already current does not reload a hash-router SPA.**
+  React state survives, and a drawer left open by the previous test looked exactly like a
+  bug the change had caused. Use `location.reload()`.
+- **An unloaded page passes every "is it gone?" assertion.** Wait for a real element
+  before asserting absence.
+
+### 51.5 Proof
+
+`npx eslint .` exits 0 · stage-move 29 · rep-metrics 45 · sales 112 · sales-sheet 139 ·
+lead-tags 220 · floor-scoping 231 · outreach-stats 177 · rep-brief 57 · rep-report 54 ·
+overview 44 · brain 78 — all passing, 0 failing.
+
+Driven in Chrome on the live 3,663-contact pipeline: sticky header measured at the same
+`top` after a 1,200px scroll; the Do cell's right edge equal to the scroll box's; a **real
+stage move written and read back off the timeline** (Dana Del'marmol, restored afterwards);
+a **real drag** (Deborah Howell New → Researching → New); bar widths read out of the DOM on
+the Stats chart; and the removed strip text absent from a fully loaded page.
+
+### Blocked until
+
+1. Deployed. Nothing in §49, §50 or §51 is pushed.
+2. `0026_grants_repair.sql` still needs running in Supabase (0025 is already run).
+
+
+## §52. THE FLOOR STOPS SHOWING ANOTHER REP'S LEADS — Sun Aug 30 2026, evening (append-only section)
+
+**Ryder, in his own words:** *"first is the floor needs to be synced with both rep and owner and
+admin. they should all have the same lead list and display all the same stuff. same with if any
+or claimed that needs to be seen everywhere. but on the reps page if something becomes claimed by
+someone else then it gets removed from the floor and the rep doesnt see those leads, only the
+claimed rep and the owner/admin see it. that way the reps never comingle."*
+
+**This reverses §45.3.** Read §45 first, then this.
+
+### What is true now
+
+| Who | Sees |
+|---|---|
+| Sales rep | The leads they hold **plus** every unclaimed lead. Nothing else. |
+| Owner / admin | Every lead. Unchanged. |
+
+The narrowing is `visibleToMember()` at the bottom of `src/lib/salesSheet.js`, applied in exactly
+ONE place — `scopeLeads` in `SalesPage.jsx`, before any filter runs. A tile, tab, dropdown, search
+box or `?lead=<id>` address cannot widen it; the deep-link guard, the `?lead=` pre-check and the
+drawer all read that same set.
+
+### The firm collision the old rule was protecting did NOT get dropped
+
+§45.3 showed a rep every row precisely so two reps could not work one firm. That requirement moved
+rather than went away: `firmsHeldByOthers()` works out — **from the whole board, before the
+narrowing** — which firms somebody else has an OPEN claim at, and the sheet's firm cell puts a ⚠
+on those rows. **It names nobody.** A rep is told a firm is taken; who is in it is the thing that
+was just hidden.
+
+Open stages only, the same filter `contestedCompanies` and `companyClaimWarning` already use — a
+contact somebody marked Lost in March must not mark that firm busy for ever.
+
+### The two pages now show the same things
+
+- The rep's Floor has the same four views as the owner's: My Day · The sheet · Pipeline · Firms.
+- The Mine / Available / All switch stays, alongside them. **"All" now means yours plus unclaimed**
+  — the whole of what a rep may work — and the page **opens on All**, not Mine. Opening on Mine put
+  a rep who holds nothing in front of an empty table with every list tab reading 0, over a page
+  whose own subtitle said it held thousands. That is the screen Ryder was looking at.
+- Four tiles came back on the Floor (owed · at risk · meetings + proposals · won). The two that
+  duplicate the availability switch stay off.
+
+### THE AI WAS A SECOND DOOR, AND IT WAS STANDING OPEN
+
+Found by an adversarial checker on the same day, and this is the finding worth remembering:
+**hiding rows on a page is not hiding rows.** A rep could open **AI Brain** and ask "which leads
+are going cold" — and `lib/brain-context.js` handed the model every other rep's open leads *with
+the holder's name on each line*, while the panel's own caption said "Reads your leads, your firms
+and your own follow-ups. Nothing else." `lib/assistant-tools.js`'s `search` tool was a second way
+to the same rows.
+
+Both files run on the **service role**, which ignores row-level security, so the code IS the guard.
+The same rule is now written in three places, and each one names the other two:
+
+| File | What it guards |
+|---|---|
+| `src/lib/salesSheet.js` → `visibleToMember()` | the Sales page |
+| `lib/brain-context.js` → `repLeadFilter` | the AI's context block (both lead reads, plus the lead activity, pruned to what came back) |
+| `lib/assistant-tools.js` → the `search` case | the AI's own lookups |
+
+**Change one and change all three.** `tests/floor-scoping` asserts that they point at each other.
+
+### Enforcement is SCREEN-ONLY, on purpose, and it is written down as a gap
+
+Ryder's call, asked and answered on 30 Aug. The read policy on `admin_leads` is still wide (0001,
+untouched by 0020), so a rep's browser can still fetch another rep's row by hand. `0020_rep_scoping.sql`
+got a **comment-only** update saying so — no SQL changed, still safe to re-run. If it should become
+real: a NEW migration with
+`select ... using (public.admin_is_admin() or owner_id = auth.uid() or owner_id is null)`, never an
+edit to 0020.
+
+### Twelve defects a separate checker found in the first draft
+
+Worth listing, because most were the change being *incomplete* rather than wrong:
+
+1. **The AI leak above** — the whole feature, walked around.
+2. `firmsHeldByOthers` ignored stage, so a Lost contact marked a firm busy for ever — and the
+   drawer, which does filter, showed nothing on the same firm on the same click.
+3. The sheet's firm headcount still counted the board: *"We hold 4 people at this firm — group the
+   table by Company to see them together"*, over a firm with one visible row.
+4. The firm popover told a rep *"their contacts are not on your floor"* about a list that included
+   the reader.
+5. The Floor's hint still promised greyed read-only rows — **and a test asserted it**, so fixing the
+   sentence broke the build.
+6. The four restored tiles counted through the availability switch; the list under them did not.
+7. My Day ignored the switch above it and offered "Free to claim" cards while it said Mine.
+8. The Firms view said *"Working it: nobody"* about a firm the sheet marked ⚠.
+9. `emptyNote` told a rep with a fully-claimed book that no contacts had been imported — over 3,663 rows.
+10. Eleven stale comments still asserting the Aug 27 rule, in five files.
+11. Dead code the change orphaned, incl. `heldByLabel` printing **"Held by another rep"** on an
+    *unclaimed* row.
+12. `ownerFilter` seeded to `undefined` on a locked page (`lock.owner` has not existed since Aug 27),
+    which made `canClear` permanently true and made the "Nothing open here right now" empty screen
+    unreachable; and `MODES[mode] || MODES.mine` falling back to `undefined` — i.e. **unlocked** —
+    because there is no `mine` mode any more.
+
+### The rules this one is worth remembering for
+
+- **Hiding a record on one screen is not hiding the record.** Count the doors: a page, an AI context
+  block, a tool the AI can call, an endpoint, a report. The service role opens all of them.
+- **A test can pin the wrong behaviour in place.** `tests/sales` asserted the word "read-only" in a
+  hint describing rows that can no longer exist. Rewrite it against the behaviour you want.
+- **When you reverse a rule, the reason the old rule existed does not go away.** Move it, or say out
+  loud that you dropped it. Here it moved onto the firm.
+- **A comment that survives a reversal will reverse the reversal.** Eleven of them.
+
+### Proof
+
+Lint clean across `lib src api tests`. **2,136 checks in 22 suites, all passing** — `floor-scoping`
+is 291 (was 231) and `sales` 112. `auth-gate` and `inbox` still do not run on the Mac bridge; both
+predate this work. Files touched: `src/lib/salesSheet.js`, `src/components/admin/SalesPage.jsx`,
+`salesSheet.jsx`, `salesProfile.jsx`, `lib/brain-context.js`, `lib/assistant-tools.js`,
+`tests/floor-scoping`, `tests/sales`, `supabase/migrations/0020_rep_scoping.sql` (comments only).
+
+### Blocked until
+
+1. Deployed. Nothing in §49-§52 is pushed.
+2. `0026_grants_repair.sql` still needs running in Supabase (0025 is already run).
+3. **The rep's own screen has not been driven end to end.** The owner's Sales page was verified live
+   in a browser after this change (sheet, tabs, Firms view, 3,657 people at 2,765 firms). The rep
+   view needs a `VITE_NO_SIGNIN=true` run and the Sales-rep card on the picker — see
+   §52 in the work log for the four steps.
+
+
+## §53. TWO CLICKS ON THE CONTACTED? CELL LOGS THE TOUCH — Sun 30 Aug 2026, evening (append-only)
+
+**Ryder:** *"when you click contacted i want a popup with the available options that you went
+through and the questions required very simply so its a couple clicks and all the data is there.
+similar to sales cycle status"*
+
+### The shape
+
+| Click | What |
+|---|---|
+| 1 | Called · Emailed · LinkedIn · Texted |
+| 2 | the outcomes for THAT channel — and this is where the write happens |
+| 3 | an optional note, skippable, on a touch that is already saved |
+
+Two levels because a call can go six ways and an email cannot go any of them. One flat list has to
+ask every channel the same question, which is how the drawer's Log box ended up defaulting every
+email to **"Talked to them"** — every email logged through it carries an outcome describing a phone
+call.
+
+`lib/touch-log.js` is the pure half (the menu, and what a pick MEANS). `logTouch()` in
+`src/lib/data.js` is the write. `src/components/admin/touchPicker.jsx` draws it.
+`tests/touch-log` attacks it — 58 checks.
+
+### THE CELL'S VALUE IS STILL DERIVED
+
+Nothing writes a "contacted" field, because there is none. `contactedState` counts the timeline.
+That is the entire reason the column can be trusted — in the outreach sheet it was a dropdown
+saying the same thing as Sales Cycle Status, reps filled one or the other, and neither could be
+believed. Clicking it logs a real touch; the chip follows.
+
+### AN INBOUND EVENT IS WRITTEN AS A NOTE — read this before adding an outcome
+
+`admin_lead_activity_touch()` (0009) fires on every row of type `call`/`email`/`text`/`linkedin`
+and sets `last_touch_at`, `first_contact_at` and `claim_contacted_at`. **It cannot tell direction**
+— 0009 says so and calls it an honest limit.
+
+So "they replied" logged as type `email` tells the database WE reached out: cold timer reset,
+cadence advanced, `first_contact_at` possibly stamped by a message the prospect sent. Twenty
+replies, twenty reset timers.
+
+Every `inbound: true` outcome is therefore written as type **`note`**, the one type that trigger
+ignores. The meaning lives in the stamps and the timeline wording. No migration, and nothing in
+this console reads activity direction.
+
+### WHAT THIS FIXED THAT NOBODY ASKED ABOUT
+
+**Nothing had ever written `first_reply_at` or `bounced_at`.** Both have existed since 0021 and the
+Stats page computes reply rate and time-to-reply from them, so every reply figure the console has
+shown could only read zero or null. This control fills them. `stampIfEmpty` writes each one once
+and never overwrites — and it is a `== null` check, not a truthiness check, because an empty string
+is falsy and would get stamped with today's date over a send from May.
+
+Marking a reply also **unlocks the single text**: `textGate` refuses every text until
+`first_reply_at` is set.
+
+### The order of the five writes IS the design
+
+1. **The text counter first** (`claimTextSend`) — a single statement, so two tabs cannot both send.
+   Failing here logs nothing, which is recoverable.
+2. **The claim**, and only for an outbound touch on an unclaimed lead, with `expectUnclaimed` so
+   the query decides. Lost race → stop; a rep who cannot hold the lead cannot write its activity
+   (0020) either. **It never re-claims**, so logging a touch can never move a firm between reps.
+3. **The timeline row.** 4. **The first-* stamps.** 5. The console feed.
+
+**Nothing moves the Sales Cycle Status.** Ryder's call: the status is a thing the rep decides, not
+a thing the system infers from a voicemail.
+
+### A bug caught before it shipped, worth remembering
+
+The note step first re-called the write with `(channel, outcome, note)` — the shape `ChipPicker`
+uses, where it is harmless because setting a stage twice is setting it once. **Two touches are two
+touches.** `onNote` now takes the text only, so the call site *cannot* re-log.
+
+### A test that pinned a number, and the fix
+
+`tests/sales` asserted the "Somebody got there first" toast appeared **exactly twice**. A third
+claim path broke it while being correct. It now counts the toasts against the `if (res.taken)`
+branches — a count of one thing against another keeps meaning what it was written to mean; a count
+of the code has to be edited every time the code is right.
+
+### Proof
+
+Driven live in a browser on the real 3,663-row pipeline: menu → Called → Left a voicemail → toast
+"Logged · claimed for you" → row moved into the owner's group, Contacted? No→Yes, Claim → Being
+worked, first contact and last touch stamped, header counts moved, **Sales Cycle Status stayed
+New**, drawer cadence read "1 of 5 logged", timeline showed both rows. Written to one junk `Schmo`
+test row on purpose; not released afterwards, because undoing it writes a second timeline line.
+
+Lint clean. **2,294 checks in 23 suites.** Nothing committed, nothing deployed.
+
+### Open
+
+- A reply does not pause the cadence. `last_touch_at` still means "when did WE last touch them",
+  which is correct, but a lead that has written back still reads as owed a touch. A decision, not a
+  bug.
+- A FIFTH channel needs a migration — `admin_lead_activity.type` is a check constraint (0018).
+  `outcome` is free text, so new outcomes do not.
+
+
+## §54. THE PIPELINE REBUILT TO THE SPEC — Sun 30 Aug 2026, late (append-only section)
+
+**Ryder:** *"build that into the sales on all sales on both admin owner and the actual rep page."*
+
+Owner and rep are one component, so this lands on both. Read §52 and §53 first.
+
+### The rule the whole thing runs on
+
+**If the system can work it out, the rep is never asked.** A rep answers three questions and no
+others: *what did you do*, *how did it go*, *what's next*.
+
+### What is now true
+
+| | |
+|---|---|
+| Stages a person can pick | **7** (was 12). Follow up · Meeting · Proposal · Won · Lost · the two Not-a-fit reasons |
+| Stages the system derives | New · Researching · Contacted · In conversation · Reopened — **settable nowhere** |
+| A reply | Stops the cadence, and is the top card in My Day until answered |
+| A bounce | Stops the cadence and refuses the email option |
+| Every touch | Ends with "and next?" — a date on `next_follow_up_at` |
+| The safety net | Three saved filters: `no_next`, `quiet`, `stuck` (owners only) |
+| The gate | Follow up + Meeting need a FUTURE date; Proposal needs a proposal with an amount |
+
+`lib/sales-rules.js` holds the rules (`CADENCE_STOPS`, `canEmail`, `answeredAfterReply`,
+`LEAD_LISTS`/`onLeadList`/`leadListCounts`). `src/lib/data.js` holds `PICKABLE_STAGES`,
+`DERIVED_STAGES`, `STAGE_REQUIRES`, `stageRequirementMet`. `lib/stage-move.js` holds
+`WORKING_COLUMN` and `PARKED_COLUMN`. `tests/pipeline-spec` attacks all of it — 96 checks.
+
+### RESTRICTING ONE CONTROL IS NOT RESTRICTING THE ACT
+
+The single most useful thing from this build. I cut the sheet's stage picker to seven. A checker
+found **three more doors open within the hour**:
+
+- the drawer's `<select>` still offered all twelve AND wrote through its own `upsertLead`, skipping
+  the gate entirely;
+- two buttons in that drawer set Meeting and Follow up — the exact two stages that need a date —
+  with no date;
+- `lib/assistant-tools.js` kept its own hardcoded stage list, so "move Acme to contacted" in AI
+  Brain still worked.
+
+Every stage write now goes through `patchLead`. The drawer is handed `onStage`, which is that
+function. The assistant's list is a hand-kept copy it cannot import, and `tests/pipeline-spec`
+reads both out of source and fails if they drift.
+
+**Same lesson as §52's AI leak, in a different shape: count the writers, not the screens.**
+
+### A TIMESTAMP CAPTURED BEFORE A WRITE IS NOT THE TIMESTAMP OF THAT WRITE
+
+The flagship feature was dead on arrival and every test passed. `logTouch` took `now` at the top;
+the trigger (0009) then stamped `last_activity_at` from the activity row's own, later,
+`created_at`. `answeredAfterReply` compares the two — so it was true the instant a reply was
+logged, and the "They replied" card could never appear from the control built to feed it. The
+drawer meanwhile DID show it, so two screens disagreed about one lead.
+
+Stamps now come from `act.row.created_at`, making them equal, and the comparison is a strict `>`.
+
+### KNOWING A STAGE IS NOT WRITING ONE
+
+`not_a_fit` is in `LEAD_STAGES` and `CLOSED_STAGES` **before migration 0027 creates it**, and
+deliberately: without that, every lead 0027 merges would come back as an OPEN stage the moment it
+ran — back on the cadence, back in My Day, back in every count, with no label. It is kept out of
+`PICKABLE_STAGES`, so nothing can write it until the constraint accepts it.
+
+The migration's first draft said "nothing breaks when it runs". It was wrong, and a checker caught
+the comment, not the code.
+
+### Migration 0027 — WRITTEN, NOT RUN
+
+Merges `skip_90` + `bad_contact` into `not_a_fit` (recording the old value on each lead's timeline
+first), retires 20 derived tags to `active = false`, and adds the four human ones: **Gatekeeper ·
+Wrong person · Competitor already in · Call back later**. Deletes nothing. Safe to re-run.
+
+**Known failure mode:** the timeline insert needs a non-null actor and falls back to the first
+active owner. On a database with an unclaimed `skip_90` lead and no active owner row it aborts.
+Check `select count(*) from admin_users where role='owner' and active` before running it.
+
+### The other seventeen findings
+
+Chip counts came from a different set than the list behind them · My Day was the one view the watch
+filter did not reach · the gate accepted a date in the past while the "No next step" list correctly
+treated one as no plan · `api/sales-score.js` still parked on the stage list `salesQueue` abandoned
+the same day, so a website scan could Skip a live conversation · `canEmail` had one caller, its own
+test · the date presets used the browser's timezone while every rule counts in Chicago ·
+`WORKING_COLUMN`'s comment claimed to fix three invisible stages and fixed one (hence
+`PARKED_COLUMN`) · and six stale comments.
+
+**One finding was wrong**, and checking beat accepting: a rep's own never-contacted expired claim
+DOES appear on `no_next`. Verified by running it, not by reading it.
+
+### Proof
+
+Lint clean. **2,394 checks in 24 suites.** Driven live as owner on the real pipeline: the chips and
+their counts, the list filtering to exactly the right leads, the gate refusing with the fix named,
+a full touch → "and next?" → "Booked — Wednesday, Sep 2" → chip 3 → 2 and the lead leaving the list
+live, and the rebuilt board. The chips-invisible-on-Pipeline bug was found by clicking, not by a
+test — there is a test for it now.
+
+**The rep Floor is still not driven.** Same blocker as §52: live keys, no sales-role account. Same
+component, same paths; `stuck` is hidden from reps by `isAdmin` and the suite asserts it.
+
+### Blocked until
+
+1. Deployed. Nothing from §49-§55 is pushed.
+2. ~~0026 and 0027 both need running.~~ **Both were run on 31 Aug 2026 — see §55.** 0025, 0026 and
+   0027 are all in.
+3. The rep view needs one `VITE_NO_SIGNIN=true` run — four steps at the bottom of the §52 work log.
+\n
+
+## §55. THE EMAIL DRAFTER, AND SENDING ONE LOGS IT — Mon 31 Aug 2026 (append-only section)
+
+**Ryder:** *"add a row for email that drafts up an email based on stage, notes, timeline and
+everything else thats known about the client."* Then: *"i want to make sure that when i send a draft
+that was made for me that it marks them as contacted by email with the date and notes, then the rep
+just clicks the follow up date."*
+
+Also: **"i ran both migrations."**
+
+### 0025, 0026 AND 0027 ARE ALL RUN
+
+Confirmed on the live board. The stage picker offers **six** — Follow up · Meeting · Proposal · Won ·
+Lost · **Not a fit**. `PICKABLE_STAGES` is those six; the two-reason workaround labels are gone;
+`lib/assistant-tools.js`'s hand-kept copy matches.
+
+`skip_90` and `bad_contact` stay in `LEAD_STAGES` and `CLOSED_STAGES` deliberately. 0027 rewrote
+every row, but a value that sat in the database for a week can still surface in an old timeline line
+or a backup, and reading one must not produce a blank label. **Known, not offered** — the same rule
+`not_a_fit` was added under the day before the migration ran.
+
+### The column
+
+`draft_email`, on by default. It asks the server to write the next email to that person from their
+stage, notes, timeline, tags, proposals and the newest scan of their site, and opens it in a panel.
+
+| | |
+|---|---|
+| `lib/lead-email.js` | pure — the job per stage, the fact sheet, the instruction, the gate, the fallback |
+| `api/lead-email.js` | reads the facts server-side, shows the model that and nothing else |
+| `src/components/admin/emailDraft.jsx` | the panel, with a disclosure showing what it was written from |
+| `tests/lead-email` | 93 checks |
+
+**The job comes from the TIMELINE, not the stage.** The four early stages stopped being settable on
+30 Aug, so a lead worked for a month still reads `new`. `first_contact_at` — written by a trigger
+from a real logged touch — is what tells a first email from a follow-up.
+
+### IT DRAFTS. IT NEVER SENDS.
+
+No send path in the endpoint, no send button in the panel, and **both say so where somebody would
+look to add one**. The console has had that rule since Aug 24 about the Gmail button; this is the
+same rule about a new door. A model wrote the text and a person has to read it before it reaches a
+prospect with our name on it.
+
+A **bounced address is refused** before any work is done — `canEmail`, the same rule the Contacted?
+picker reads. The cell shows "bounced" with the date instead of a button.
+
+### THE GATE IS STRICTER THAN THE REPORT GATES, ON PURPOSE
+
+A report that overstates is read by us. An email that overstates is read by the prospect. The two
+things a model reaches for first are the two we cannot back: a number about their website nobody
+scanned, and a promise.
+
+So a draft is **thrown away, never edited**, if it states a number or date not in the facts,
+promises anything, or opens with a line that gets emails deleted. When nobody has scanned, the fact
+sheet says **"There is NO score"** in as many words and the gate refuses every way of implying one —
+checked as a **phrase list, not a number check**, because the dangerous version has no digits in it:
+*"your site is falling behind"*. Quoting is not claiming, through the shared `withoutQuotes` the
+other three report gates use.
+
+### SENDING ONE LOGS IT
+
+**The console cannot watch a mail client**, so it cannot observe a send. The nearest honest moment
+is the one where the rep takes the words away — the copy. So the primary button says exactly that:
+
+**Copy & mark it sent** — copies, logs an email touch dated now with the full *edited* email as the
+note, then switches the panel to the follow-up date row. One more click and the rep is done.
+**Copy only** sits beside it. Neither label is a guess dressed up as a fact.
+
+- **Copy first, then log.** A refused clipboard means the rep has not got the email, so nothing
+  claims they sent it.
+- **Through `logTouch`**, the same path the Contacted? cell uses, so the claim, the trigger's date
+  stamps, the cadence step and the timeline line cannot differ by which control was pressed.
+  `logTouch` gained an optional `note` that goes **on the touch row**, not a second one — one act,
+  one timeline entry.
+- **Booking the date is its own callback**, not `onSent` with a flag. One callback doing two things
+  depending on an argument is how the second press logs a second email.
+
+### THE 500 THAT WAS NOT A BUG — read this before adding an export to a lib/ file
+
+The route returned 500 on every request, including with an invalid id that should have been refused
+before any work. Node imported the file fine. A probe route that imported each dependency and
+printed its export list named it in one request:
+
+**`sales-rules canEmail: undefined`.**
+
+`canEmail` was added to `lib/sales-rules.js` the same evening. The dev server had already loaded that
+module, and **Node's ESM loader caches a module by URL for the life of the process** — so the named
+import threw "does not provide an export named" every time. **The vite dev plugin cache-busts the
+`api/` file on its mtime and NOTHING ELSE**, so editing the route does not reload its dependencies.
+
+Nothing was wrong with the code. **Restart `npm run dev`.** Vercel deploys a fresh process, so it
+never arises there.
+
+**A route's own try/catch must start at the TOP.** The first version started below the auth and body
+reads, the real crash happened above it, and it still fell through to the plugin's "the reason is in
+the terminal" — which a Mac-bridge session cannot read. A catch that does not cover the whole route
+only reports the failures you already understand.
+
+### apiFetch: `{ ok, data }`, and it stringifies for you
+
+Two mistakes at that boundary in one session, both found by opening the panel and seeing it blank:
+
+1. **The payload is under `.data`.** Spreading the response gave the panel no subject, no body, no job.
+2. **`body` takes an OBJECT.** Passing `JSON.stringify()` sent a JSON string of a JSON string. It
+   survived locally because the dev plugin parses once and `readJson` parses again — **worse than
+   failing**, since Vercel parses once.
+
+### Three older gaps this landed on
+
+- **A saved preference can hide a new column completely.** `draft_email` went into
+  `DEFAULT_SHEET_COLUMNS` and did not appear, because a saved localStorage list beats today's
+  defaults. Spotted by the header reading "Columns · 14". `withNewColumns` adds any default column
+  that did not exist when the preference was saved, in its proper place, and the preference records
+  `seen` so the next column needs no hard-coded list. A column somebody actually switched off stays
+  off. **Second time** — a saved preference deleted every Claim button in August.
+- **`.adm-cp-foot` is defined TWICE in `admin.css`** — one a flex row with `space-between`, one a
+  plain caption. In a modal the flex one wins, so a sentence rendered as three chunks pushed to the
+  edges. New footnotes get their own class.
+- **The sheet header never read `SORTABLE`.** Every column got a sort button, unnoticed because every
+  column was sortable until this one. Clicking `draft_email`'s header sorted the table by a value
+  that does not exist. A non-sortable column renders a plain label now — not a dead button, which is
+  the shape that teaches people the header is broken.
+
+Also: `admin_lead_tag_events` orders by **`at`**, not `created_at` (0018 named it that on purpose).
+Wrong name is a 500 from PostgREST, not an empty list.
+
+### Proof
+
+Lint clean across `lib src api tests`. **2,489 checks in 25 suites, all passing.**
+
+Driven end to end on the live board, on a junk `Schmo` test row: Draft email → panel with the
+follow-up job named, the counted-skeleton warning, subject and body → **Copy & mark it sent** →
+"Logged as emailed, dated today" with the four date presets → **In 3 days** → Book it. The timeline
+then reads **Email · sent** with the full email as the note.
+
+It drafted as a **follow-up** rather than a first contact, because that lead has a first-contact date
+from an earlier test — the job comes from the timeline, exactly as designed.
+
+**There is no ANTHROPIC_API_KEY on Ryder's machine** — `/api/rep-report` answers with its counted
+version and says so. The drafter returns its skeleton until a key is set, and the panel says which
+one it is rather than letting the two look alike.
+
+### Blocked until
+
+1. Deployed. Nothing from §49-§55 is pushed.
+2. An `ANTHROPIC_API_KEY` for the drafter to write rather than skeleton.
+3. The rep view has still never been driven — see §52.

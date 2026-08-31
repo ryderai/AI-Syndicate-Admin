@@ -17,6 +17,8 @@ import {
   EMAIL_STATUS_LABELS,
 } from "../../lib/data.js";
 import { useScreenContext } from "../../lib/screenContext.js";
+import { explainConnectFailure, COMPANY_ADDRESS_NOTE } from "../../lib/connectProblem.js";
+import { peopleOptions } from "../../lib/people.js";
 
 /* INBOX — a mailbox worked inside the console.
  *
@@ -326,7 +328,7 @@ export default function Inbox({ member, mine = false }) {
     const g = params.get("gmail");
     if (!g) return;
     if (g === "connected") toast.success("Mailbox connected", params.get("account") || "");
-    else toast.error("Connecting failed", params.get("reason") || "unknown reason");
+    else toast.error("Connecting failed", explainConnectFailure(params.get("reason")));
     window.history.replaceState({}, "", `${window.location.pathname}${hash.slice(0, qIndex)}`);
     loadMailboxes();
   }, [loadMailboxes]);
@@ -364,7 +366,9 @@ export default function Inbox({ member, mine = false }) {
   const openThread = useMemo(() => merged.find((t) => t.id === openId) || null, [merged, openId]);
 
   const people = useMemo(
-    () => team.map((m) => ({ value: m.user_id, label: m.full_name || m.email })),
+    // peopleOptions: a second teammate with the same name must not draw a
+    // second identical row here either. src/lib/people.js
+    () => peopleOptions(team),
     [team]
   );
 
@@ -886,6 +890,20 @@ export default function Inbox({ member, mine = false }) {
 
           <p style={{ margin: "10px auto 0", fontSize: 14, color: "var(--ink-dim)", maxWidth: 420, lineHeight: 1.6 }}>
             Takes about twenty seconds. You only do it once.
+          </p>
+
+          {/* SAID BEFORE THE BUTTON, NOT AFTER — this is the one failure the
+            * console can never report. Google's Audience for this app is
+            * Internal, so a personal Gmail is refused on GOOGLE'S OWN PAGE
+            * ("Error 403: org_internal") and the browser is never sent back
+            * here. There is no callback, no ?gmail=error, nothing to catch. A
+            * sentence before the click is the only warning that can exist.
+            * Ryder hit it on 31 Aug 2026 and read it as our bug. */}
+          <p style={{
+            margin: "16px auto 0", fontSize: 13, color: "var(--ink-2)", maxWidth: 420,
+            lineHeight: 1.6, fontWeight: 600,
+          }}>
+            {COMPANY_ADDRESS_NOTE}
           </p>
 
           <button
