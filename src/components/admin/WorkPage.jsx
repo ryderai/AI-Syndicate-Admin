@@ -4,13 +4,45 @@ import {
   TextInput, TextArea, Select, timeAgo,
 } from "./shared.jsx";
 import {
-  getMyWork, upsertTask, upsertNote, deleteNote, listNotes,
+  getMyWork, upsertTask, deleteTask, upsertNote, deleteNote, listNotes, listTeam,
   upsertReminder, deleteReminder, upsertLead, addLeadActivity,
-  TASK_STATUS_LABELS, LEAD_STAGE_LABELS,
+  TASK_STATUS_FLOW, TASK_STATUS_LABELS, LEAD_STAGE_LABELS,
 } from "../../lib/data.js";
 import { toast } from "../../lib/toast.js";
 import { useScreenContext } from "../../lib/screenContext.js";
 import RepBrief from "./repBrief.jsx";
+import TaskDrawer from "./taskDrawer.jsx";
+import { useRoute } from "../../lib/router.js";
+
+/* THE SAME PANEL AS OPERATIONS — 2 Sep 2026.
+ *
+ * Ryder: "i need any row like this to be able to click it and it have a sidebar
+ * that goes over everything."
+ *
+ * "Any row" is the point. The panel was built for the Operations table on 31
+ * Aug; a second design here would be a second set of rules for the same task,
+ * and the two would drift within a week. So this page imports THAT panel and
+ * hands it the same three things it already takes: the task, a way to save, and
+ * a way to tell the row behind it what changed.
+ *
+ * WHAT IS DIFFERENT ON THIS PAGE. The Work page shows only OPEN tasks — that is
+ * what makes it a list of what is on you right now. So marking one Done from
+ * the panel takes it off this page, and the panel has nothing left to show. It
+ * closes and says so, rather than sitting open over a row that is gone.
+ */
+
+/* Postgres rejects the WHOLE row when sent a column the table does not have, so
+ * a console deployed before its migration ran cannot save ANY task edit — a due
+ * date change dies on a field nobody touched.
+ *
+ * THESE ARE CHARACTER-FOR-CHARACTER THE ONES IN Operations.jsx, and a test
+ * compares the two files and fails if they ever differ. A loose /assignees/i
+ * would fire on ANY error whose text happens to contain the word — an RLS
+ * refusal, a check constraint, a network message quoting the row — and then
+ * silently drop everybody but the first person while saying "Saved". That is
+ * the loose-regex rule this console has been bitten by before. */
+const MISSING_DESCRIPTION = /(column|schema cache)[^]*?description|description[^]*?(column|schema cache|does not exist)/i;
+const MISSING_ASSIGNEES = /(column|schema cache)[^]*?assignees|assignees[^]*?(column|schema cache|does not exist)/i;
 
 /* WORK — the page you open to get through the day.
  *
@@ -128,6 +160,14 @@ export default function WorkPage({ member }) {
   const [work, setWork] = useState(null);
   const [notes, setNotes] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [team, setTeam] = useState([]);
+  /* HELD BY ID, NOT BY THE OBJECT — same rule as Operations. The panel redraws
+   * from this page's own list, so a change made in the row behind it is already
+   * right in the panel. Holding the object would show a copy that went stale. */
+  const [openTaskId, setOpenTaskId] = useState(null);
+  /* Opening the client from the panel is a real navigation, so it goes through
+   * the app's own router rather than setting the hash by hand. */
+  const [, go] = useRoute();
 
   useScreenContext(() => ({
     page: "Work",
@@ -145,9 +185,12 @@ export default function WorkPage({ member }) {
   const [contactDraft, setContactDraft] = useState({ type: "call", outcome: "talked", body: "", next: "", stage: "" });
 
   const load = useCallback(async () => {
-    const [w, n] = await Promise.all([getMyWork(userId), listNotes(userId)]);
+    /* The roster comes with the rest so the panel's people picker is never a
+     * spinner inside a panel that is already open. */
+    const [w, n, t] = await Promise.all([getMyWork(userId), listNotes(userId), listTeam()]);
     setWork(w);
     setNotes(n.rows);
+    setTeam(t.rows || []);
     if (w.error) toast.error("Some of this page didn't load", w.error);
   }, [userId]);
 
@@ -174,12 +217,77 @@ export default function WorkPage({ member }) {
   };
 
   /* ---------------- tasks ---------------- */
-  async function setTaskStatus(task, status) {
+
+  /* THE ONE SAVE PATH FOR THIS PAGE. The panel and the row's own chips both go
+   * through it, so they cannot save differently — the same optimistic write,
+   * the same undo, the same two migration fallbacks. Two save paths for one
+   * field on one page is how the two end up behaving differently in exactly the
+   * case nobody tested: the failure.
+   *
+   * Returns { ok } so a caller can tell whether the words it was given actually
+   * landed. Reporting success on a failed write is worse than the failure. */
+  const patchTask = async (task, patch) => {
     setBusyId(task.id);
-    const res = await upsertTask({ id: task.id, status });
+    setWork((cur) => cur && ({ ...cur, tasks: cur.tasks.map((t) => (t.id === task.id ? { ...t, ...patch } : t)) }));
+    let res = await upsertTask({ id: task.id, ...patch });
+    if (!res.ok && MISSING_ASSIGNEES.test(String(res.error || ""))) {
+      const { assignees, ...rest } = patch;
+      res = await upsertTask({ id: task.id, ...rest, assigned_to: (assignees || [])[0] || null });
+      if (res.ok) {
+        toast.warn("Saved — but only one person",
+          "This database has no assignees column yet. Run supabase/migrations/0028_task_assignees.sql, then set the rest.");
+      }
+    }
     setBusyId(null);
-    if (!res.ok) return toast.error("Couldn't save that", res.error);
-    toast.success(status === "done" ? "Done — nice" : `Moved to ${TASK_STATUS_LABELS[status]}`, task.name);
+    if (!res.ok) {
+      /* UNDO ONLY THE FIELDS THIS CALL TOUCHED. Restoring the whole `work`
+       * object would also throw away anything that landed while this write was
+       * in flight — an update posted in the panel, a second chip clicked, a
+       * finished reload. Same rule as Operations. */
+      const undo = Object.fromEntries(Object.keys(patch).map((k) => [k, task[k] ?? null]));
+      setWork((cur) => cur && ({ ...cur, tasks: cur.tasks.map((t) => (t.id === task.id ? { ...t, ...undo } : t)) }));
+      if (MISSING_DESCRIPTION.test(String(res.error || ""))) {
+        toast.error("The Description column does not exist yet",
+          "Run supabase/migrations/0012_task_description.sql in Supabase, then try again.");
+      } else {
+        toast.error("Couldn't save that", res.error);
+      }
+      return { ok: false, error: res.error };
+    }
+
+    if (patch.status === "done") {
+      /* Done takes it off this page — this page is open work — so the panel over
+         it would be sitting on a row that is about to disappear. */
+      if (openTaskId === task.id) setOpenTaskId(null);
+      toast.success("Done — off your list", `${task.name}. It is still on the client's Operations page.`);
+    } else if (patch.status) {
+      toast.success(`Moved to ${TASK_STATUS_LABELS[patch.status]}`, task.name);
+    }
+
+    /* THE ROW CARRIES FIELDS THE DATABASE DOES NOT — `bucket`, `due_ms` and
+     * `client_name` are worked out by getMyWork(), not stored. Merging a patch
+     * into the row leaves those at their old values, so a due date moved from
+     * last week to next month would stay under LATE still reading "6 days
+     * late". Anything that changes one of them is re-read rather than guessed
+     * at, and everything else is left alone so the page does not flicker on
+     * every keystroke committed in the panel. */
+    const DERIVED = ["status", "due_date", "client_id", "assignees", "assigned_to"];
+    if (DERIVED.some((k) => k in patch)) load();
+    return { ok: true };
+  };
+
+  /* The panel's own line-changed callback: the 0029 trigger has already written
+     the task's one line, this only makes the row behind the panel agree — no
+     second database write, and no reload. */
+  const mergeLine = (task, line) => {
+    setWork((cur) => cur && ({ ...cur, tasks: cur.tasks.map((t) => (t.id === task.id ? { ...t, latest_report: line } : t)) }));
+  };
+
+  async function removeTask(task) {
+    const res = await deleteTask(task.id);
+    if (!res.ok) return toast.error("Couldn't delete that", res.error);
+    setOpenTaskId(null);
+    toast.info("Task deleted", task.name);
     load();
   }
 
@@ -379,27 +487,65 @@ export default function WorkPage({ member }) {
                       borderTop: i ? "1px solid var(--line)" : "none", flexWrap: "wrap",
                     }}
                   >
-                    <div style={{ flex: "1 1 280px", minWidth: 0 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{t.name}</div>
-                      <div style={{ fontSize: 11.5, color: "var(--ink-dim)", marginTop: 3, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {/* THE WHOLE BLOCK OF WORDS IS THE WAY IN — 2 Sep 2026.
+                     *
+                     * Ryder, drawing a ring round the title, the client line AND
+                     * the report line: "i need the whole text area for that job
+                     * so that if i click it it opens the sidebar. that way i can
+                     * view the whole task without clicking start or blocked or
+                     * anything."
+                     *
+                     * It was the name only, which is a one-line target above two
+                     * more lines that look just as much part of the same thing
+                     * and did nothing. So this is ONE button holding all three
+                     * lines: nothing inside it is a control, so there is no
+                     * "click anywhere that is not a control" guess to get wrong
+                     * and nothing for a click to be stolen by. That guard is
+                     * what made the Operations row unreachable on 31 Aug — its
+                     * cells were 100% filled by their own buttons. Here the
+                     * controls are OUTSIDE the target, which is why the whole
+                     * target can be live.
+                     *
+                     * A <button> and not a div with onClick: it is reachable by
+                     * Tab, it fires on Enter and Space, and a screen reader
+                     * announces it as the thing that opens the task. */}
+                    <button
+                      type="button"
+                      className="adm-work-openrow"
+                      style={{ flex: "1 1 280px", minWidth: 0 }}
+                      onClick={() => setOpenTaskId(t.id)}
+                      aria-label={`Open ${t.name}`}
+                      title="Open this task"
+                    >
+                      <span className="adm-work-openrow-name">{t.name}</span>
+                      <span style={{ fontSize: 11.5, color: "var(--ink-dim)", marginTop: 3, display: "flex", gap: 8, flexWrap: "wrap" }}>
                         {t.client_name && <span>{t.client_name}</span>}
                         <span>·</span>
                         <span>{dueLabel(t.due_ms)}</span>
                         {t.priority === "high" && <><span>·</span><span style={{ color: "#b42318", fontWeight: 700 }}>high</span></>}
                         {t.category && <><span>·</span><span>{t.category}</span></>}
-                      </div>
+                      </span>
                       {t.latest_report && (
-                        <div style={{ fontSize: 11.5, color: "var(--ink-2)", marginTop: 4, fontStyle: "italic" }}>{t.latest_report}</div>
+                        <span style={{ fontSize: 11.5, color: "var(--ink-2)", marginTop: 4, fontStyle: "italic" }}>{t.latest_report}</span>
                       )}
-                    </div>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {t.status !== "in_progress" && (
-                        <button className="btn btn-sm" disabled={busyId === t.id} onClick={() => setTaskStatus(t, "in_progress")}>Start</button>
-                      )}
-                      {t.status !== "blocked" && (
-                        <button className="btn btn-sm" disabled={busyId === t.id} onClick={() => setTaskStatus(t, "blocked")}>Blocked</button>
-                      )}
-                      <button className="btn btn-sm btn-primary" disabled={busyId === t.id} onClick={() => setTaskStatus(t, "done")}>Done</button>
+                    </button>
+                    {/* THE SAME FOUR CHIPS AS THE PANEL. It used to be Start /
+                        Blocked / Done, and which of them a task was in had to be
+                        read off the section heading above it. Four chips with
+                        the current one filled says where it stands and moves it
+                        anywhere in one click — including BACK to To do, which
+                        this row could not do at all. */}
+                    <div className="adm-status-chips" role="group" aria-label={`Status of ${t.name}`}>
+                      {TASK_STATUS_FLOW.map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          className={`adm-status-chip s-${v}${t.status === v ? " on" : ""}`}
+                          aria-pressed={t.status === v}
+                          disabled={busyId === t.id}
+                          onClick={() => { if (t.status !== v) patchTask(t, { status: v }); }}
+                        >{TASK_STATUS_LABELS[v] || v}</button>
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -655,6 +801,23 @@ export default function WorkPage({ member }) {
           ))}
         </div>
       </Modal>
+
+      {/* THE TASK, OPEN. The same panel Operations uses — see the note at the
+          top of this file for why it is not a second one. */}
+      {openTaskId && (() => {
+        const t = work.tasks.find((x) => x.id === openTaskId);
+        if (!t) return null;
+        return (
+          <TaskDrawer
+            task={t} clients={work.clients || []} team={team} member={member}
+            onPatch={patchTask}
+            onLine={mergeLine}
+            onDelete={removeTask}
+            onOpenClient={(id) => { setOpenTaskId(null); go(`#/dashboard/clients?id=${id}`); }}
+            onClose={() => setOpenTaskId(null)}
+          />
+        );
+      })()}
     </>
   );
 }

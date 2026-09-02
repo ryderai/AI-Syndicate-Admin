@@ -7067,3 +7067,61 @@ them by rewriting them.**
 - **Check what is actually listening before believing a browser.** A stale dev server cost an
   hour on a bug that never existed.
 - **`claimed_at` and `cadence_started_at` are stamped together, and neither is "now".**
+
+---
+
+## §60. ANY ROW OPENS THE TASK · FOUR STATUS CHIPS · A TASK KEEPS ITS UPDATES — Tue 2 Sep 2026 (append-only section)
+
+Ryder, with a screenshot of the Work page: *"i need any row like this to be able to click it
+and it have a sidebar that goes over everything and allows easy editing of it and tagging it
+as to do, in progress, blocked, or done. and also adding reports and all that needs to be
+seamless through here… we can't have any gaps or missing info."*
+
+Full write-up:
+`WORK-LOG/2026-09-02--internal--any-row-opens-the-task-and-a-task-keeps-its-updates.md`.
+Project memory: `task-panel-and-task-updates_2026-09-02`.
+
+### What changed
+
+| | |
+|---|---|
+| `supabase/migrations/0029_task_updates.sql` | **NEW, NOT RUN.** `admin_task_updates` + two triggers + admin-only RLS |
+| `lib/task-updates.js` | the rules half — order, the carried-over label, `lineAgrees`, the missing-table match |
+| `src/components/admin/taskUpdates.jsx` | the Updates section inside the panel |
+| `src/components/admin/taskDrawer.jsx` | status is four chips, not a dropdown |
+| `src/components/admin/WorkPage.jsx` | rows open the SAME panel; one `patchTask`; the same four chips |
+| `src/components/admin/Operations.jsx` | `patchTask` now returns `{ ok }`; passes `member` and `onLine` |
+| `src/lib/data.js` | `listTaskUpdates` / `addTaskUpdate` / `editTaskUpdate` / `deleteTaskUpdate`, `TASK_STATUS_FLOW`, preview rows |
+| `lib/client-delete.js` | the warning screen now names the update history it destroys |
+| `src/admin.css` | appended — chips, the updates log, the two "this line is not an update" boxes |
+| `tests/task-updates/` | 131 checks · `run.sh` 24 SQL checks on real Postgres · `walkthrough.mjs` 30 browser checks · `shots/` |
+
+### The shape
+
+`admin_tasks.latest_report` is read in ~10 places, so it was **not** replaced. It stays and
+now means **the newest update**, kept in step by a trigger — the same shape 0028 used for
+`assigned_to` / `assignees`, for the same reason. The migration backfills every existing line
+as a `carried_over` update dated to the task's own `updated_at`, so nothing starts empty and
+no made-up posting time is shown.
+
+`TASK_STATUSES` still matches the 0001 check constraint word for word. `TASK_STATUS_FLOW` is
+derived from it for the button order (To do → In progress → Blocked → Done) and **appends**
+anything it does not name, so a fifth status can never be savable and unselectable at once.
+
+### Rules this section adds
+
+- **A NEW TABLE HOLDING A FIELD OF AN EXISTING TABLE MUST COPY THAT TABLE'S GATE.** 0029
+  first used `admin_is_member()` where `admin_tasks` uses `admin_is_admin()`, and a sales rep
+  could read and write every task's progress text. Proved on Postgres before it shipped.
+  Count the doors.
+- **A SCREEN MUST NOT ASSERT WHAT IT HAS NOT CHECKED.** Five live writers still set
+  `latest_report` directly. The panel now asks `lineAgrees()` and says which it is.
+- **TWO COPIES OF A RULE NEED A TEST THAT COMPARES THEM**, not one that finds each. A comment
+  saying "these must not drift" did not stop them drifting in the same commit.
+- **ASK OF EVERY SOURCE-MATCHING CHECK: WHAT WOULD HAVE TO BE TRUE FOR THIS TO FAIL?** Three
+  could not fail, one of them the build-under-test guard.
+- **A ROW CARRIES FIELDS THE DATABASE DOES NOT.** Re-read after changing anything they are
+  derived from.
+- **A ROLLBACK RESTORES THE FIELDS THE CALL TOUCHED, NEVER THE WHOLE PAGE.**
+- **A SAVE FUNCTION RETURNS WHETHER IT SAVED.** `undefined` reads as success.
+- **`innerText` APPLIES `text-transform`** — a browser check against an uppercase label needs `/i`.

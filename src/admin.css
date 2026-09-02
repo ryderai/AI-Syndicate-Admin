@@ -4144,3 +4144,103 @@ select.adm-input { cursor: pointer; }
 .adm-db-openname { width: 100%; justify-content: flex-start; text-align: left; font-weight: 600; }
 .adm-db-openname:hover { text-decoration: underline; }
 .adm-db-openname .adm-db-strike { text-decoration: line-through; opacity: 0.6; }
+
+/* ==================================================================
+   STATUS CHIPS AND THE UPDATES LOG — 2 Sep 2026
+   ================================================================== */
+
+/* Four buttons, not a dropdown. Every state is on screen and the one it is in
+   is filled in, so "where does this stand" is answered without a click. */
+.adm-drawer-f-wide { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
+.adm-drawer-f-wide > span {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-2);
+}
+.adm-status-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.adm-status-chip {
+  border: 1px solid var(--rule); background: var(--bg-1); color: var(--ink-2);
+  border-radius: 999px; padding: 5px 12px; font-size: 12px; font-weight: 600;
+  cursor: pointer; line-height: 1.2; transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.adm-status-chip:hover { background: var(--bg-2); color: var(--ink-1); }
+.adm-status-chip:focus-visible { outline: 2px solid var(--accent, #6d5bd0); outline-offset: 1px; }
+/* The filled state carries the same colours the Work page buckets already use,
+   so "blocked" is the same purple in both places. */
+.adm-status-chip.on.s-todo        { background: var(--bg-3); border-color: var(--ink-2); color: var(--ink-1); }
+.adm-status-chip.on.s-in_progress { background: #fffaeb; border-color: #b54708; color: #b54708; }
+.adm-status-chip.on.s-blocked     { background: #f4f3ff; border-color: #6941c6; color: #6941c6; }
+.adm-status-chip.on.s-done        { background: #ecfdf3; border-color: #067647; color: #067647; }
+
+/* The updates log. */
+.adm-upd-new { display: flex; flex-direction: column; gap: 6px; }
+.adm-upd-newfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.adm-upd-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.adm-upd {
+  border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px;
+  background: var(--bg-1);
+}
+/* The newest one is the sentence every other screen is showing right now, so
+   it is the one that gets the accent edge. */
+.adm-upd.newest { border-left: 3px solid var(--accent, #6d5bd0); }
+.adm-upd-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 5px; }
+.adm-upd-who { font-size: 12px; font-weight: 700; color: var(--ink-1); }
+.adm-upd-when { font-size: 11px; color: var(--ink-2); font-family: var(--mono); }
+.adm-upd-tag {
+  font-size: 9.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
+  font-family: var(--mono); padding: 2px 6px; border-radius: 4px;
+  background: var(--accent-soft, #f4f3ff); color: var(--accent-deep, #6941c6);
+}
+.adm-upd-tag.carried { background: var(--bg-3); color: var(--ink-2); }
+.adm-upd-body { font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: var(--ink-1); }
+.adm-upd-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 7px; }
+.adm-upd-act {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-size: 11.5px; font-weight: 600; color: var(--ink-2); text-decoration: underline;
+}
+.adm-upd-act:hover { color: var(--ink-1); }
+
+/* A line the task already had that nobody posted. Dashed, because it is not
+   part of the history until somebody says it is. */
+.adm-upd-orphan {
+  margin-top: 12px; border: 1px dashed var(--rule); border-radius: 8px;
+  padding: 10px 12px; background: var(--bg-2);
+}
+.adm-upd-orphan-lab {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
+  font-family: var(--mono); color: var(--ink-2); margin-bottom: 5px;
+}
+.adm-drawer-note {
+  margin-top: 8px; font-size: 12px; line-height: 1.6; color: var(--ink-2);
+  border-left: 3px solid var(--rule); padding-left: 10px;
+}
+.adm-drawer-note code { font-family: var(--mono); font-size: 11.5px; }
+
+/* The task name on the Work page row — the way into the panel (2 Sep 2026).
+   A plain button so it is reachable by keyboard and by a screen reader, styled
+   as the heading it already looked like. */
+.adm-work-openname {
+  background: none; border: none; padding: 0; margin: 0; text-align: left;
+  font: inherit; font-size: 13.5px; font-weight: 600; color: var(--ink);
+  cursor: pointer; width: 100%;
+}
+.adm-work-openname:hover { text-decoration: underline; }
+.adm-work-openname:focus-visible { outline: 2px solid var(--accent, #6d5bd0); outline-offset: 2px; border-radius: 3px; }
+
+/* THE WHOLE BLOCK OF WORDS ON A WORK ROW IS THE WAY IN (2 Sep 2026).
+   A button, not a div with a click handler, so Tab reaches it and Enter and
+   Space work. Laid out as a column so the title, the client line and the report
+   line stack exactly as they did when they were three separate divs. */
+.adm-work-openrow {
+  display: flex; flex-direction: column; align-items: flex-start;
+  background: none; border: none; margin: 0;
+  /* Padding, negative-margined back out, so the highlight covers the words
+     without moving them a pixel from where they were. */
+  padding: 6px 8px; margin: -6px -8px;
+  font: inherit; text-align: left; cursor: pointer;
+  border-radius: 6px; width: 100%;
+  transition: background 0.12s;
+}
+.adm-work-openrow:hover { background: var(--bg-2); }
+.adm-work-openrow:focus-visible { outline: 2px solid var(--accent, #6d5bd0); outline-offset: 0; }
+.adm-work-openrow-name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.adm-work-openrow:hover .adm-work-openrow-name { text-decoration: underline; }

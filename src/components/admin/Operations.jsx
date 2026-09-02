@@ -198,7 +198,9 @@ export default function Operations({ member }) {
       } else {
         toast.error("Couldn't save that", res.error);
       }
-      return;
+      /* { ok } so a caller can tell whether the words it handed over landed.
+         Reporting success on a failed write is worse than the failure. */
+      return { ok: false, error: res.error };
     }
     if (res.row) setTasks((cur) => cur.map((t) => (t.id === task.id ? { ...t, ...res.row } : t)));
     if (patch.status === "done" && task.status !== "done") {
@@ -206,6 +208,7 @@ export default function Operations({ member }) {
       await logActivity({ actor: member.user_id, kind: "task_done", title: `Task done: ${task.name}`, body: client?.name || null });
       toast.success("Done ✓", task.name);
     }
+    return { ok: true };
   };
 
   const createTask = async (patch) => {
@@ -516,8 +519,13 @@ export default function Operations({ member }) {
         if (!t) return null;
         return (
           <TaskDrawer
-            task={t} clients={clients.rows} team={team}
+            task={t} clients={clients.rows} team={team} member={member}
             onPatch={patchTask}
+            /* The panel posts the update; the TRIGGER writes the task's line.
+               This only makes the page's own copy agree, with no second write —
+               otherwise the table behind the panel keeps last week's sentence
+               until somebody reloads. */
+            onLine={(task, line) => setTasks((cur) => cur.map((x) => (x.id === task.id ? { ...x, latest_report: line } : x)))}
             onDelete={async (task) => { await removeTask(task); setOpenTaskId(null); }}
             onOpenClient={(id) => { setOpenTaskId(null); go(`#/dashboard/clients?id=${id}`); }}
             onClose={() => setOpenTaskId(null)}

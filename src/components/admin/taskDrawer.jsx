@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  TASK_STATUSES, TASK_STATUS_LABELS, TASK_CATEGORIES, TASK_PHASES,
+  TASK_STATUS_FLOW, TASK_STATUS_LABELS, TASK_CATEGORIES, TASK_PHASES,
   TASK_PRIORITIES, TASK_PRIORITY_LABELS,
 } from "../../lib/data.js";
 import { deliveryPeopleOptions, personLabel } from "../../lib/people.js";
 import { assigneesOf } from "../../../lib/task-assignees.js";
+import TaskUpdates from "./taskUpdates.jsx";
 import { Avatar } from "./opsCells.jsx";
 
 /* THE TASK, OPEN — a side panel, 31 Aug 2026.
@@ -32,7 +33,7 @@ import { Avatar } from "./opsCells.jsx";
  * 3. IT NEVER STEALS THE ROW'S CONTROLS. The chips in the table still work
  *    where they are. This is the long way in, not the only way.
  */
-export default function TaskDrawer({ task, clients, team, onPatch, onDelete, onClose, onOpenClient }) {
+export default function TaskDrawer({ task, clients, team, member, onPatch, onDelete, onClose, onOpenClient, onLine }) {
   const [draft, setDraft] = useState({ name: "", latest_report: "", description: "" });
   const [confirmDelete, setConfirmDelete] = useState(false);
   const panelRef = useRef(null);
@@ -112,12 +113,28 @@ export default function TaskDrawer({ task, clients, team, onPatch, onDelete, onC
         />
 
         <div className="adm-drawer-grid">
-          <label className="adm-drawer-f">
+          {/* STATUS IS FOUR BUTTONS, NOT A DROPDOWN. Ryder, 2 Sep 2026:
+              "allows easy editing of it and tagging it as to do, in progress,
+              blocked, or done." A select hides three of the four answers behind
+              a click and gives no sense of where the work stands; every state
+              is on screen here and the one it is in is filled in. Same four
+              values as the database check constraint in 0001, read from
+              TASK_STATUSES so a fifth state can never appear in one place and
+              not the other. */}
+          <div className="adm-drawer-f adm-drawer-f-wide">
             <span>Status</span>
-            <select className="adm-input" value={task.status} onChange={(e) => onPatch(task, { status: e.target.value })}>
-              {TASK_STATUSES.map((v) => <option key={v} value={v}>{TASK_STATUS_LABELS[v] || v}</option>)}
-            </select>
-          </label>
+            <div className="adm-status-chips" role="group" aria-label="Status">
+              {TASK_STATUS_FLOW.map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  className={`adm-status-chip s-${v}${task.status === v ? " on" : ""}`}
+                  aria-pressed={task.status === v}
+                  onClick={() => { if (task.status !== v) onPatch(task, { status: v }); }}
+                >{TASK_STATUS_LABELS[v] || v}</button>
+              ))}
+            </div>
+          </div>
           <label className="adm-drawer-f">
             <span>Priority</span>
             <select className="adm-input" value={task.priority} onChange={(e) => onPatch(task, { priority: e.target.value })}>
@@ -184,15 +201,13 @@ export default function TaskDrawer({ task, clients, team, onPatch, onDelete, onC
           {!ids.length ? <div className="adm-drawer-hint">Nobody is on this task.</div> : null}
         </div>
 
-        <div className="adm-drawer-sec">
-          <div className="adm-drawer-lab">Where it stands <span className="adm-drawer-hint">· the one line the table shows</span></div>
-          <textarea
-            className="adm-input adm-drawer-ta" rows={3} placeholder="12 of 26 pages done."
-            value={draft.latest_report}
-            onChange={(e) => setDraft((d) => ({ ...d, latest_report: e.target.value }))}
-            onBlur={commit("latest_report")}
-          />
-        </div>
+        <TaskUpdates
+          task={task} team={team} member={member}
+          onPatch={onPatch} onLine={onLine}
+          fallbackDraft={draft.latest_report}
+          onFallbackChange={(v) => setDraft((d) => ({ ...d, latest_report: v }))}
+          onFallbackCommit={commit("latest_report")}
+        />
 
         <div className="adm-drawer-sec">
           <div className="adm-drawer-lab">The brief <span className="adm-drawer-hint">· what the work is, and what done means</span></div>

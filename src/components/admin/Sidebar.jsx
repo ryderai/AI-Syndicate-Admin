@@ -61,10 +61,28 @@ const SECTIONS = [
     ["finance", "Finance", [["invoices", "Invoices"], ["ai-cost", "AI Cost"]]],
     ["clients", "Clients"],
   ]},
-  // Work is the owner's and the admin's landing page. It is NOT a rep's any
-  // more — see the note below.
-  { group: "Yours", roles: ["owner", "admin"], items: [
+  /* WORK AND OPERATIONS SIT TOGETHER — Ryder, 2 Sep 2026: "make work and
+   * operations right next to each other, they both do a very similar task and
+   * work together on all projects."
+   *
+   * They are two views of ONE set of rows. `admin_tasks` is the table behind
+   * both: Work is "the open ones with my name on them, soonest first" and
+   * Operations is "all of them, by client". Since 2 Sep the same side panel
+   * opens from a row on either page, and ticking a task off on one moves it on
+   * the other. They were two groups apart — Work under YOURS at the top,
+   * Operations under DELIVERY below SALES — which read as two unrelated
+   * features.
+   *
+   * Work stays FIRST and this group stays where Work already was, directly
+   * under Command: it is the owner's and the admin's landing page, and moving
+   * it below Sales to reach Operations would have fixed the wrong half.
+   *
+   * A rep has neither of these — their own YOURS group is a separate SECTIONS
+   * entry below, and a sales rep has no Operations page at all
+   * (`canDoDeliveryWork`, lib/people.js). */
+  { group: "Delivery", roles: ["owner", "admin"], items: [
     ["work", "Work"],
+    ["operations", "Operations"],
   ]},
   /* A REP'S WHOLE CONSOLE IS FOUR PAGES — Ryder, Aug 27 2026.
    *
@@ -124,9 +142,6 @@ const SECTIONS = [
    * actually holds. A hidden link is not a permission. */
   { group: "Sales", roles: ["owner", "admin"], items: [
     ["sales", "Sales", [["sales-stats", "Stats"]]],
-  ]},
-  { group: "Delivery", roles: ["owner", "admin"], items: [
-    ["operations", "Operations"],
   ]},
   { group: "Comms", roles: ["owner", "admin"], items: [
     ["inbox", "Inbox"],

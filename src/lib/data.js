@@ -11,6 +11,7 @@
 import { getSupabase, isConfigured } from "./supabase.js";
 import { fetchPaged, PAGE } from "../../lib/paging.js";
 import { isAssignedTo, assigneePatch } from "../../lib/task-assignees.js";
+import { cleanUpdateBody, latestLineFrom, isMissingUpdatesTable } from "../../lib/task-updates.js";
 /* Shared with the server endpoint api/client-standing.js. It is pure (no
  * imports, no database, no fetch) precisely so both sides can use the same
  * counting rules — a client page that counted differently from the saved
@@ -244,6 +245,20 @@ export function stageRequirementMet(stage, lead, { proposals = [] } = {}) {
 export { CLOSED_STAGES as LEAD_CLOSED_STAGES, isOpenStage as isLeadOpen } from "../../lib/sales-rules.js";
 export const TASK_STATUSES = ["todo", "in_progress", "done", "blocked"];
 export const TASK_STATUS_LABELS = { todo: "To do", in_progress: "In progress", done: "Done", blocked: "Blocked" };
+/* THE ORDER THE FOUR ARE OFFERED IN — the order work actually moves through
+ * them: To do → In progress → Blocked → Done. TASK_STATUSES above is the
+ * database's own list and its order matches the check constraint in 0001;
+ * re-ordering that to suit a screen would make the two files look different
+ * for no reason, and the next person to compare them would not know which was
+ * deliberate.
+ *
+ * Anything in TASK_STATUSES that is not named here is APPENDED rather than
+ * dropped, so a fifth status added to the database can never quietly disappear
+ * from the buttons while still being savable. */
+export const TASK_STATUS_FLOW = [
+  ...["todo", "in_progress", "blocked", "done"].filter((s) => TASK_STATUSES.includes(s)),
+  ...TASK_STATUSES.filter((s) => !["todo", "in_progress", "blocked", "done"].includes(s)),
+];
 /* Notion parity — these are the Operations database's own option lists, copied
  * word for word (data source f9655de0-c309-4335-bd74-75b71bdb5089) so a task
  * means the same thing in both places and a copy-over needs no translation. */
@@ -313,6 +328,14 @@ const previewStore = {
     { id: "t10", client_id: "c2", name: "Two FAQ pages for the AI answers", status: "in_progress", category: "Content", priority: "medium", phase: "Ongoing", assigned_to: "preview-user", due_date: daysAgo(-6).slice(0, 10), latest_report: "First draft written, needs the firm's numbers.", created_at: daysAgo(4) },
     { id: "t11", client_id: "c1", name: "Ask about the second office address", status: "todo", category: "Client Comms", priority: "low", phase: "Month 2", assigned_to: "preview-user", due_date: daysAgo(-5).slice(0, 10), latest_report: null, created_at: daysAgo(7) },
     { id: "t12", client_id: "c3", name: "Baseline AI Access scan", status: "done", category: "Business Intel", priority: "low", phase: "Onboarding", assigned_to: "preview-user", due_date: daysAgo(3).slice(0, 10), latest_report: "Scored 61 on the first run.", created_at: daysAgo(4) },
+  ],
+  /* THE UPDATES ON A TASK (0029). Preview mode has to show the same shape the
+   * database does, including a CARRIED-OVER row, or the panel's "this date is
+   * the task's own last-changed date" line is never seen before go-live. */
+  taskUpdates: [
+    { id: "tu1", task_id: "t2", author: "preview-user", body: "Schema template agreed with the client. Starting on the newest 6 listings.", carried_over: false, created_at: daysAgo(5) },
+    { id: "tu2", task_id: "t2", author: "preview-user", body: "12 of 26 pages done.", carried_over: false, created_at: daysAgo(1) },
+    { id: "tu3", task_id: "t1", author: "preview-user", body: "All three AI files live and verified 200.", carried_over: true, created_at: daysAgo(10) },
   ],
   weekly: [
     { id: "w1", client_id: "c1", week_no: 1, target_date: daysAgo(17).slice(0, 10), week_status: "complete", readiness: "client_ready", what_we_did: "Baseline audit run. AI Access 74.", what_moved: "Baseline set.", whats_next: "Head package.", talking_points: "74 is a solid starting point for this market.", created_at: daysAgo(17) },
@@ -793,6 +816,109 @@ export async function deleteTask(id) {
   }
   const { error } = await getSupabase().from("admin_tasks").delete().eq("id", id);
   return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/* ------------------------------------------------------------------ */
+/* THE UPDATES ON A TASK (migration 0029)                               */
+/*                                                                      */
+/* `admin_tasks.latest_report` is the NEWEST of these, kept in step by a  */
+/* trigger — so nothing here writes that field itself. A second writer    */
+/* would be a second place for the task's one line to be wrong, and the   */
+/* console and the database would take turns winning.                     */
+/*                                                                        */
+/* Every caller must handle `missing: true`, which means 0029 has not been */
+/* run on this database yet. It is NOT an error: the console is deployed   */
+/* before its migration every time, and a red toast on a normal state      */
+/* teaches people to ignore red toasts.                                   */
+/* ------------------------------------------------------------------ */
+
+export async function listTaskUpdates(taskId) {
+  if (!taskId) return { rows: [], sample: false };
+  if (!live()) {
+    const rows = previewStore.taskUpdates
+      .filter((u) => u.task_id === taskId)
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    return { rows, sample: true };
+  }
+  const { data, error } = await getSupabase()
+    .from("admin_task_updates").select("*")
+    .eq("task_id", taskId)
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) {
+    if (isMissingUpdatesTable(error.message)) return { rows: [], missing: true, sample: false };
+    return { rows: [], error: error.message, sample: false };
+  }
+  return { rows: data || [], sample: false };
+}
+
+export async function addTaskUpdate({ taskId, author = null, body }) {
+  const text = cleanUpdateBody(body);
+  if (!taskId) return { ok: false, error: "No task to add that to." };
+  if (!text) return { ok: false, error: "An update needs at least a line of text." };
+  if (!live()) {
+    const row = { id: pid("tu"), task_id: taskId, author: author || "preview-user", body: text, carried_over: false, created_at: new Date().toISOString() };
+    previewStore.taskUpdates.unshift(row);
+    /* Preview has no trigger, so do here exactly what 0029 does there — the
+     * panel and the row behind it must agree in both modes. */
+    const i = previewStore.tasks.findIndex((t) => t.id === taskId);
+    if (i >= 0) previewStore.tasks[i] = { ...previewStore.tasks[i], latest_report: text };
+    return { ok: true, row, sample: true };
+  }
+  const { data, error } = await getSupabase()
+    .from("admin_task_updates").insert({ task_id: taskId, author, body: text }).select().maybeSingle();
+  if (error) {
+    if (isMissingUpdatesTable(error.message)) return { ok: false, missing: true, error: error.message };
+    return { ok: false, error: error.message };
+  }
+  return { ok: true, row: data };
+}
+
+export async function editTaskUpdate(id, body) {
+  const text = cleanUpdateBody(body);
+  if (!id) return { ok: false, error: "No update to change." };
+  if (!text) return { ok: false, error: "An update needs at least a line of text." };
+  if (!live()) {
+    const i = previewStore.taskUpdates.findIndex((u) => u.id === id);
+    if (i < 0) return { ok: false, error: "That update is already gone." };
+    /* Preview has no trigger, so it does here exactly what 0029 does there —
+     * including the edit stamp, or the "edited" mark could never be seen before
+     * the keys are set. */
+    previewStore.taskUpdates[i] = { ...previewStore.taskUpdates[i], body: text, edited_at: new Date().toISOString() };
+    syncPreviewLatest(previewStore.taskUpdates[i].task_id);
+    return { ok: true, row: previewStore.taskUpdates[i], sample: true };
+  }
+  /* THE WHOLE ROW BACK, not just the id. The 0029 trigger stamps `edited_at`
+   * as part of this write, and the screen has to show that mark — working it
+   * out on this side would be the console guessing at what the database did. */
+  const { data, error } = await getSupabase()
+    .from("admin_task_updates").update({ body: text }).eq("id", id).select();
+  if (error) return { ok: false, error: error.message };
+  if (!data?.length) return { ok: false, error: "Nothing changed — that update is gone, or it is not yours to edit." };
+  return { ok: true, row: data[0] };
+}
+
+export async function deleteTaskUpdate(id) {
+  if (!id) return { ok: false, error: "No update to remove." };
+  if (!live()) {
+    const row = previewStore.taskUpdates.find((u) => u.id === id);
+    if (!row) return { ok: false, error: "That update is already gone." };
+    previewStore.taskUpdates = previewStore.taskUpdates.filter((u) => u.id !== id);
+    syncPreviewLatest(row.task_id);
+    return { ok: true, sample: true };
+  }
+  const { data, error } = await getSupabase().from("admin_task_updates").delete().eq("id", id).select("id");
+  if (error) return { ok: false, error: error.message };
+  if (!data?.length) return { ok: false, error: "Nothing was removed — that update is gone, or it is not yours to remove." };
+  return { ok: true };
+}
+
+/* Preview mode's stand-in for the 0029 trigger. Deleting the newest update must
+ * put the one BEFORE it back on the task, not leave the deleted sentence there. */
+function syncPreviewLatest(taskId) {
+  const rows = previewStore.taskUpdates.filter((u) => u.task_id === taskId);
+  const i = previewStore.tasks.findIndex((t) => t.id === taskId);
+  if (i >= 0) previewStore.tasks[i] = { ...previewStore.tasks[i], latest_report: latestLineFrom(rows) };
 }
 
 export async function listWeekly(clientId) {

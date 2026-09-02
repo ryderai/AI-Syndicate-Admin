@@ -1,3 +1,9 @@
+# START HERE (2) — SUPERSEDED, read START-HERE-2026-09-01.md first
+
+> Superseded on the evening of 31 Aug 2026. Its deploy and migration lines are out of
+> date — 0025-0027 are run, 0028 is not, and the morning push is live. Kept for its
+> traps and its history.
+
 # START HERE (2) — the night session, Sun 30 Aug ~8–10pm Chicago
 
 **Read this AFTER `START-HERE-2026-08-31.md`, not instead of it.** That file is still right about
