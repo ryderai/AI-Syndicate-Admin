@@ -1502,18 +1502,34 @@ kbd {
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
   border-bottom: 1px solid var(--rule);
-  position: sticky;
-  top: 0;
-  z-index: 20;
+  /* IT SCROLLS AWAY WITH THE PAGE — Ryder, 2 Sep 2026: "i dont like how the top
+     nav stays where it is because it blocks the screen, can that just be a part
+     of the page where its just on the page at the top so you only see it when
+     youre at the top?"
+     It was `position: sticky; top: 0; z-index: 20`, so it sat over the content
+     for the whole scroll — 123px of the window, measured — and painted over any
+     overlay inside .dash-content, which is why the task panel's top was cut off.
+     Static: it is a band at the top of the page and nothing else. The SIDEBAR is
+     still sticky, because that is navigation and you need it wherever you are. */
+  position: static;
   gap: 24px;
   flex-wrap: wrap;
 }
 .dash-content {
   padding: 28px 36px 56px;
-  animation: dash-fade-in 0.3s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  /* `backwards`, NOT `both`. With `both` the last keyframe stays applied for
+     ever, and its `transform: translateY(0)` is still a transform: it makes this
+     element the containing block for every `position: fixed` child AND a
+     stacking context that traps their z-index. Measured 2 Sep 2026: the task
+     panel, `position: fixed; inset: 0; z-index: 61`, came out at top -214px with
+     height 1114px and sat UNDER a header whose z-index is 20. Both symptoms,
+     one cause. `backwards` fades the page in exactly the same way and leaves
+     nothing behind. */
+  animation: dash-fade-in 0.3s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
 }
 .dash-content > * + * {
-  animation: dash-fade-in 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  /* `backwards` for the same reason as .dash-content above. */
+  animation: dash-fade-in 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
 }
 @media (prefers-reduced-motion: reduce) {
   .dash-content, .dash-content > * + * { animation: none; }

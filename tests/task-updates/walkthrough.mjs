@@ -98,6 +98,32 @@ ok("...labelled To do, In progress, Blocked, Done",
 const onCount = await page.locator(".adm-status-chips").first().locator(".adm-status-chip.on").count();
 ok("exactly one chip is filled in — where the task stands, without reading the heading", onCount === 1, `${onCount} filled`);
 
+/* ---- 1c. THE TOP BAR IS ON THE PAGE, NOT PINNED OVER IT ----
+ * Ryder: "i dont like how the top nav stays where it is because it blocks the
+ * screen, can that just be a part of the page … so you only see it when youre
+ * at the top?" Both directions are checked, because a `position: static` test
+ * on its own would also pass on a header that had simply gone missing. */
+const headerAtTop = await page.evaluate(() => {
+  const h = document.querySelector(".dash-header");
+  return { bottom: Math.round(h.getBoundingClientRect().bottom), position: getComputedStyle(h).position };
+});
+ok(`the top bar is visible at the top of the page (bottom edge ${headerAtTop.bottom}px)`,
+  headerAtTop.bottom > 0, JSON.stringify(headerAtTop));
+ok("...and it is part of the page, not pinned to the window", headerAtTop.position === "static", headerAtTop.position);
+
+await page.mouse.wheel(0, 400);
+await page.waitForTimeout(400);
+const headerScrolled = await page.evaluate(() => {
+  const h = document.querySelector(".dash-header");
+  return { bottom: Math.round(h.getBoundingClientRect().bottom), scrollY: Math.round(window.scrollY) };
+});
+ok(`...SO IT SCROLLS AWAY: ${headerScrolled.scrollY}px down, its bottom edge moved from ${headerAtTop.bottom} to ${headerScrolled.bottom}`,
+  headerScrolled.scrollY > 50 && headerScrolled.bottom < headerAtTop.bottom - 50,
+  JSON.stringify({ headerAtTop, headerScrolled }));
+ok("...and the sidebar is still there, because that is navigation",
+  await page.locator(".dash-sidebar").isVisible());
+await shot("01c-the-top-bar-scrolls-with-the-page");
+
 /* ---- 2. MEASURE THE TARGET, then click the furthest corner of it ----
  * The 31 Aug defect was a row that said clickable and had nowhere to click,
  * found by measuring rather than by looking. So measure: the words block must
@@ -141,6 +167,55 @@ ok("...over everything, with the page behind it dimmed", await page.locator(".ad
 const title = await page.locator(".adm-drawer-title").inputValue();
 ok(`...showing THAT task ("${title}")`, title.trim() === firstName.trim(), `panel: ${title} / row: ${firstName}`);
 await shot("02-panel-open-from-the-work-page");
+
+/* ---- 2b. THE PANEL COVERS THE WINDOW, AND THE TOP BAR IS NOT OVER IT ----
+ * Ryder: "make the sidebar popup on top so that the top screen thing doesnt
+ * cover it." Measured, because the cause was invisible: .dash-content used to
+ * keep a leftover `transform` from its page-fade (animation-fill-mode: both),
+ * which made it the containing block for `position: fixed` AND a stacking
+ * context. The panel came out at top -214px, height 1114, under a header at
+ * z-index 20 while its own was 61. */
+const layout = await page.evaluate(() => {
+  const d = document.querySelector(".adm-drawer");
+  const h = document.querySelector(".dash-header");
+  const c = document.querySelector(".dash-content");
+  const r = d.getBoundingClientRect();
+  const at = (x, y) => { const e = document.elementFromPoint(x, y); return e ? !!e.closest(".adm-drawer") : null; };
+  return {
+    parentIsBody: d.parentElement === document.body,
+    top: Math.round(r.top),
+    height: Math.round(r.height),
+    viewport: window.innerHeight,
+    headerBottom: Math.round(h.getBoundingClientRect().bottom),
+    headerPosition: getComputedStyle(h).position,
+    contentTransform: getComputedStyle(c).transform,
+    panelTopIsThePanel: at(r.left + 40, r.top + 30),
+    panelMidIsThePanel: at(r.left + 40, r.top + Math.round(r.height / 2)),
+  };
+});
+ok("the panel is rendered on document.body, so no page wrapper can trap it",
+  layout.parentIsBody, JSON.stringify(layout));
+ok(`...it starts at the top of the window (top ${layout.top}px)`, layout.top === 0, JSON.stringify(layout));
+ok(`...and is exactly the window's height (${layout.height} vs ${layout.viewport})`,
+  layout.height === layout.viewport, JSON.stringify(layout));
+ok("...and what is drawn at the top of the panel IS the panel, not the page's top bar",
+  layout.panelTopIsThePanel === true && layout.panelMidIsThePanel === true, JSON.stringify(layout));
+ok("...and the page wrapper no longer keeps a transform, which is what caused both",
+  layout.contentTransform === "none", layout.contentTransform);
+/* THE TASK NAME IS THE MOST IMPORTANT THING ON THE PANEL, and it was squashed
+ * to a 14px sliver in every screenshot taken today without anyone noticing —
+ * the panel is a flex column taller than the window, so its children were
+ * shrinking. Checked by measurement because it reads as "the top of the panel
+ * is cut off" rather than as a sizing bug. */
+const nameBox = await page.evaluate(() => {
+  const t = document.querySelector(".adm-drawer-title");
+  const r = t.getBoundingClientRect();
+  return { value: t.value, height: Math.round(r.height), needs: t.scrollHeight, fontSize: getComputedStyle(t).fontSize };
+});
+ok(`the task name is tall enough to actually be read (${nameBox.height}px for ${nameBox.needs}px of text at ${nameBox.fontSize})`,
+  nameBox.height >= nameBox.needs, JSON.stringify(nameBox));
+ok("...and it is the name of the task that was opened", nameBox.value.trim() === firstName, JSON.stringify(nameBox));
+await shot("02b-the-panel-covers-the-window");
 
 /* ---- 3a. a task nobody has reported on says so, rather than showing blank ---- */
 await page.locator(".adm-drawer").evaluate((el) => { el.scrollTop = el.scrollHeight; });

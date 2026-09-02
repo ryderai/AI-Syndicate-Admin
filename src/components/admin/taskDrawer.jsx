@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   TASK_STATUS_FLOW, TASK_STATUS_LABELS, TASK_CATEGORIES, TASK_PHASES,
   TASK_PRIORITIES, TASK_PRIORITY_LABELS,
@@ -87,7 +88,25 @@ export default function TaskDrawer({ task, clients, team, member, onPatch, onDel
     assignees: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
   });
 
-  return (
+  /* RENDERED AT document.body, NOT WHERE IT IS WRITTEN — 2 Sep 2026.
+   *
+   * Measured, after Ryder said the top bar was covering the panel: this panel is
+   * `position: fixed; inset: 0`, and it came out at top **-214px** with height
+   * 1114px instead of filling the window, sitting UNDER a header whose z-index
+   * is 20 while its own is 61.
+   *
+   * One cause for both. `.dash-content` fades the page in with
+   * `animation: … both`, so the last keyframe stays applied for ever — and that
+   * keyframe's `transform: translateY(0)` is still a transform. A transformed
+   * ancestor becomes the containing block for `position: fixed` (so "the
+   * window" became "this div") AND a stacking context (so z-index 61 could
+   * never rise past a sibling at 20).
+   *
+   * The animation no longer leaves a transform behind, which fixes it there
+   * too. This portal is the belt: an overlay that lives on `document.body`
+   * cannot be trapped by anything a page does to its own wrapper, now or in six
+   * months. Every future overlay should be written this way. */
+  return createPortal(
     <>
       <div className="adm-drawer-scrim" onClick={onClose} aria-hidden="true" />
       <aside className="adm-drawer" ref={panelRef} role="dialog" aria-label={task.name || "Task"}>
@@ -232,6 +251,7 @@ export default function TaskDrawer({ task, clients, team, member, onPatch, onDel
           <span className="adm-drawer-hint">Everything here saves as you go.</span>
         </footer>
       </aside>
-    </>
+    </>,
+    document.body,
   );
 }

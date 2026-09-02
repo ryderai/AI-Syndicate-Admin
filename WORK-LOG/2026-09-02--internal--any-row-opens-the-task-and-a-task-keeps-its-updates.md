@@ -180,11 +180,58 @@ real Postgres 16 and read every file. Thirteen findings; these are the ones that
   newest putting the one before it back, an update moving tasks resyncing both, the edit
   stamp, the sales rep getting nothing, an admin not being able to rewrite somebody else's
   words, an owner being able to, and both cascades.
-- **37 browser checks against the built bundle**, screenshots in
+- **48 browser checks against the built bundle**, screenshots in
   `tests/task-updates/shots/`. The guard now compares the served file to the one
   `dist/index.html` names AND checks it was built after the last source edit.
 - Build clean, 176 modules — **in the cloud container, not the Mac bridge** (rollup's native
   binary is the wrong platform there; this has now cost two sessions).
+
+## 1c. The top bar covered the panel, and one leftover transform explained both
+
+`src/index.css` · `src/components/admin/taskDrawer.jsx` · `src/admin.css`
+
+> "make the sidebar popup on top so that the top screen thing doesnt cover it. i also dont
+> like how the top nav stays where it is because it blocks the screen, can that just be a part
+> of the page where its just on the page at the top so you only see it when youre at the top?"
+
+**Measured before changing anything, and the numbers did not add up.** The panel is
+`position: fixed; inset: 0; z-index: 61`. The top bar is `z-index: 20`. 61 beats 20, so the
+bar should not have been able to cover it — and yet the panel came out at **top −214px with
+height 1114px** in a 900px window instead of filling it.
+
+**One cause for both.** `.dash-content` fades each page in with
+`animation: dash-fade-in … both`. `both` keeps the last keyframe applied for ever, and that
+keyframe is `transform: translateY(0)` — still a transform. A transformed ancestor does two
+things: it becomes the **containing block for `position: fixed`** (so "the window" quietly
+became "this div"), and it becomes a **stacking context**, so the panel's 61 was sealed
+inside a wrapper painting at 0 and could never rise past a sibling at 20.
+
+Three changes, none of them a z-index guess:
+
+1. **The top bar is `position: static`.** It was `sticky; top: 0`, so it sat over the content
+   for the whole scroll — 123px of the window, measured. It is now a band at the top of the
+   page. **The sidebar is still sticky**, because that is navigation and you need it wherever
+   you are.
+2. **The page fade uses `backwards`, not `both`**, so it leaves no transform behind. Same
+   fade, and every future overlay is out of the trap.
+3. **The panel renders at `document.body` through a portal.** That is the belt: an overlay on
+   the body cannot be trapped by anything a page does to its own wrapper, now or in six
+   months. Its z-index is 1250/1260 — above the modal layer, deliberately **below** the
+   toaster at 9600, because posting an update raises a toast and a toast you cannot see is a
+   toast that did not happen.
+
+### And the defect that was in every screenshot I took today
+
+With the panel measured properly, the task NAME was **14px tall for 38px of text** — the most
+important thing on the panel squashed to a sliver. The panel is a flex column whose content is
+taller than the window, so every child was a candidate for shrinking, and a textarea's
+`min-height` is `auto`. Fixed with `.adm-drawer > * { flex-shrink: 0 }` plus an explicit
+`min-height` on the title.
+
+**It was visible in shots 02, 03c and 05 from this morning and I did not see it**, because it
+reads as "the top of the panel is cut off" rather than as a sizing bug. The browser check now
+asserts the name box is at least as tall as its own text. **A screenshot is proof that
+something rendered, not proof that it rendered correctly — measure the elements you claim.**
 
 ## The commit was blocked by the credential scanner, and it was a false positive
 
