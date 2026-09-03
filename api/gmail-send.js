@@ -34,6 +34,19 @@ export default async function handler(req, res) {
   const body = await readJson(req);
   const box = await resolveMailbox(member, body?.account);
   if (box.error) return res.status(box.status).json({ error: box.error });
+  /* THE GRANT HAS TO COVER SENDING — 2 Sep 2026, found by an adversarial
+   * checker. api/gmail-drafts.js and api/gmail-modify.js have refused this for
+   * weeks; this endpoint read `resolveMailbox` and ignored the flag, so a
+   * mailbox connected before the send scope existed reached Google and came
+   * back as a raw "insufficient authentication scopes" AFTER the rep had
+   * written the email. Said before anything is sent, in words that name the
+   * fix. */
+  if (box.needsReconnect) {
+    return res.status(409).json({
+      needsReconnect: true,
+      error: "This mailbox was connected before sending was supported. Disconnect it and connect it again once — Google will ask for the extra permission.",
+    });
+  }
 
   const to = parseRecipients(body?.to);
   if (to.error) return res.status(400).json({ error: `To: ${to.error}` });
@@ -76,6 +89,20 @@ export default async function handler(req, res) {
       text,
       clientId: body?.clientId || null,
       leadId: body?.leadId || null,
+      /* THE CALLER ALREADY LOGGED THE TOUCH — 2 Sep 2026.
+       *
+       * The Sales page sends through here and then logs the email itself, on
+       * the same logTouch path the Contacted? cell uses, because that path also
+       * claims the lead and sets the date stamps the stats read — things this
+       * endpoint does not do. Without this flag BOTH would write a touch, and
+       * two touches for one email advance the 5-step cadence twice and count the
+       * email twice on the Overview.
+       *
+       * ONLY the touch is skipped. The thread link and first_email_at below are
+       * still written here, because only this endpoint knows the Gmail thread.
+       *
+       * Default is to log, so the Inbox and every other caller are unchanged. */
+      touchLoggedByCaller: body?.touchLoggedByCaller === true,
     });
 
     return res.status(200).json({ ok: true, id: sent.id, threadId: sent.threadId });
@@ -132,6 +159,39 @@ async function leadWeMayWrite(admin, member, leadId) {
   return (data.owner_id === me || data.owner_id === null) ? data.id : null;
 }
 
+/**
+ * WHAT A SEND IS ALLOWED TO WRITE ABOUT A PERSON. Pure, exported, and the only
+ * place the answer is worked out.
+ *
+ * It exists because the two rules it encodes had no executing test — a checker
+ * on 2 Sep 2026 inverted the flag in recordSend so that the Sales page
+ * double-logged every email and the Inbox logged none, and the whole suite
+ * still passed: every assertion about it was a regex looking at the file.
+ * tests/lead-email now calls this function instead.
+ *
+ * THE TWO RULES:
+ *   lead      — only an id this person may write (see leadWeMayWrite). A
+ *               refused id is dropped rather than erroring: the mail has gone,
+ *               and the mail was not the part that was wrong.
+ *   touch     — written here UNLESS the caller says it logged one itself. The
+ *               Sales page does, on the same logTouch path the Contacted? cell
+ *               uses, because that path also claims the lead and sets the date
+ *               stamps the stats read. Two touches for one email advance the
+ *               5-step cadence twice and count the email twice on the Overview.
+ *               Every other caller — the Inbox — gets the touch from here.
+ */
+export function sendWritePlan({ mayWriteLead = null, existingThreadLeadId = null, touchLoggedByCaller = false } = {}) {
+  /* The thread row's own link is trusted: whoever wrote it was allowed to. A
+   * refused id must not beat it, and must not suppress it either. */
+  const lead = mayWriteLead || existingThreadLeadId || null;
+  return {
+    lead,
+    linkThreadToLead: mayWriteLead || null,
+    stampFirstEmail: Boolean(lead),
+    writeTouch: Boolean(lead) && !touchLoggedByCaller,
+  };
+}
+
 /* Bookkeeping after a send. Deliberately never throws: the email HAS gone out,
  * and telling someone the send failed because a status write failed would make
  * them send it twice. Failures land in the activity log instead.
@@ -147,10 +207,47 @@ async function leadWeMayWrite(admin, member, leadId) {
  * make every duration wrong, and a lead's first_email_at would drift forward for
  * ever until it said we had only just started talking to somebody we had been
  * chasing for a month. */
-async function recordSend({ member, mailbox, threadId, messageId, to, subject, text, clientId, leadId }) {
+/* A LOG LINE THAT CANNOT ITSELF BREAK THE SEND — 2 Sep 2026, found by an
+ * adversarial checker.
+ *
+ * The three log writes below were written as `admin.from(...).insert(...)
+ * .catch(() => {})`. A PostgREST query builder is `PromiseLike` — it has
+ * `then` and NO `catch` — so that line throws `TypeError: q.catch is not a
+ * function` the moment it RUNS. It only runs when something has already gone
+ * wrong, which is why nothing caught it: the outer catch then hit the same line
+ * again and recordSend rejected, so the handler answered 502 for an email Gmail
+ * had already accepted, and the panel invited the rep to send it again.
+ *
+ * `await` first, then a real try/catch. Nothing in here may ever throw. */
+async function logQuietly(admin, row) {
+  try { await admin.from("admin_activity_log").insert(row); } catch { /* the send already happened; a log line is not worth failing it */ }
+}
+
+async function recordSend({ member, mailbox, threadId, messageId, to, subject, text, clientId, leadId, touchLoggedByCaller = false }) {
   const admin = getAdminSupabase();
   const now = new Date().toISOString();
-  let leadForFirstEmail = leadId || null;
+
+  /* CHECKED ONCE, BEFORE ANYTHING IS WRITTEN — 2 Sep 2026, found by an
+   * adversarial checker.
+   *
+   * The Aug 27 fix put `leadWeMayWrite()` in front of `first_email_at` and
+   * stopped there, so the THREAD ROW below still took `lead_id` straight from
+   * the request body on the service key. That was the same hole one block
+   * later: link a thread to a lead somebody else holds, and when the prospect
+   * replies api/gmail-threads.js stamps `first_reply_at` — and `bounced_at` on
+   * a bounce — onto that lead. Both are one-shot `.is(null)` writes with no
+   * screen that can undo them, so it permanently moves another rep's reply rate
+   * and stops their cadence.
+   *
+   * COUNT THE DOORS: `lead_id` on the thread insert, `lead_id` on the thread
+   * patch, `first_email_at` on the lead, and the touch. All four now come from
+   * this one answer.
+   *
+   * A refused id is dropped, not an error: the mail HAS gone, and the mail was
+   * not the part that was wrong. The refusal is recorded below. */
+  const mayWriteLead = await leadWeMayWrite(admin, member, leadId);
+  const refusedLeadId = leadId && !mayWriteLead ? leadId : null;
+  let plan = sendWritePlan({ mayWriteLead, touchLoggedByCaller });
   try {
     if (threadId) {
       const { data: existing } = await admin
@@ -171,7 +268,7 @@ async function recordSend({ member, mailbox, threadId, messageId, to, subject, t
         const patch = { ...common };
         // Only fill a link in, never overwrite one someone chose by hand.
         if (clientId && !existing.client_id) patch.client_id = clientId;
-        if (leadId && !existing.lead_id) patch.lead_id = leadId;
+        if (plan.linkThreadToLead && !existing.lead_id) patch.lead_id = plan.linkThreadToLead;
         // Fill only. See the rule above this function.
         if (messageId && !existing.gmail_message_id) patch.gmail_message_id = messageId;
         if (!existing.first_out_at) patch.first_out_at = now;
@@ -180,14 +277,16 @@ async function recordSend({ member, mailbox, threadId, messageId, to, subject, t
          * earlier rather than one the browser passed in. Prefer what was passed,
          * fall back to what is on the row — otherwise a reply to a thread that is
          * already linked to a person would write the send onto nobody. */
-        leadForFirstEmail = leadId || existing.lead_id || null;
+        /* Re-asked with what the row turned out to carry. sendWritePlan is the
+         * one place the precedence lives. */
+        plan = sendWritePlan({ mayWriteLead, existingThreadLeadId: existing.lead_id, touchLoggedByCaller });
       } else {
         await admin.from("admin_email_threads").insert({
           mailbox,
           thread_id: threadId,
           ...common,
           client_id: clientId,
-          lead_id: leadId,
+          lead_id: plan.linkThreadToLead,
           gmail_message_id: messageId || null,
           // A brand new thread row means this is the first thing we sent on it.
           first_out_at: now,
@@ -212,16 +311,24 @@ async function recordSend({ member, mailbox, threadId, messageId, to, subject, t
      * closes. A refusal is recorded rather than swallowed: the mail went, and
      * whoever reads the log later needs to know the send was not counted against
      * anybody. */
-    const writableLead = await leadWeMayWrite(admin, member, leadForFirstEmail);
-    if (leadForFirstEmail && !writableLead) {
-      await admin.from("admin_activity_log").insert({
+    const writableLead = plan.lead;
+    if (refusedLeadId) {
+      await logQuietly(admin, {
         actor: member.user.id,
         kind: "email_send_lead_refused",
-        title: "Email sent, but not recorded against a contact",
-        body: `The contact id on the request is not one this person may write (${String(leadForFirstEmail).slice(0, 64)}). The email went out; nothing was written on any lead.`,
-      }).catch(() => {});
+        title: "Email sent, contact id on the request refused",
+        /* SAYS WHAT WAS WRITTEN, NOT WHAT WAS ASKED FOR. When the thread was
+         * already linked to somebody, the plan falls back to that link and this
+         * send IS recorded — against them. An earlier version of this line said
+         * flatly that nothing was recorded, which would have sent the next
+         * person reading the log looking in the wrong place. */
+        body: `The contact id on the request is not one this person may write (${String(refusedLeadId).slice(0, 64)}); it was ignored.`
+          + (plan.lead
+            ? ` The send was recorded against the contact this thread was ALREADY linked to (${String(plan.lead).slice(0, 64)}).`
+            : " Nothing was written against any contact."),
+      });
     }
-    if (writableLead) {
+    if (plan.stampFirstEmail) {
       await admin
         .from("admin_leads")
         .update({ first_email_at: now })
@@ -241,34 +348,35 @@ async function recordSend({ member, mailbox, threadId, messageId, to, subject, t
        *
        * `actor` is the real person, which is what 0001's activity policy demands
        * of a browser write and what makes the rep numbers countable. */
-      const { error: touchErr } = await admin.from("admin_lead_activity").insert({
+      /* THE PLAN DECIDES, not a condition retyped here. See sendWritePlan. */
+      const { error: touchErr } = !plan.writeTouch ? { error: null } : await admin.from("admin_lead_activity").insert({
         lead_id: writableLead,
         actor: member.membership?.user_id || member.user.id,
         type: "email",
         body: `Sent from ${mailbox}${subject ? `: ${subject}` : ""}`,
       });
       if (touchErr) {
-        await admin.from("admin_activity_log").insert({
+        await logQuietly(admin, {
           actor: member.user.id,
           kind: "email_send_touch_failed",
           title: "Email sent, touch not logged",
           body: touchErr.message.slice(0, 400),
-        }).catch(() => {});
+        });
       }
     }
 
-    await admin.from("admin_activity_log").insert({
+    await logQuietly(admin, {
       actor: member.user.id,
       kind: "email_sent",
       title: `Email sent from ${mailbox} to ${to.join(", ")}`,
       body: subject || null,
     });
   } catch (err) {
-    await admin.from("admin_activity_log").insert({
+    await logQuietly(admin, {
       actor: member.user.id,
       kind: "email_send_bookkeeping_failed",
       title: `Email sent, status not saved (${mailbox})`,
       body: String(err?.message || err).slice(0, 400),
-    }).catch(() => {});
+    });
   }
 }

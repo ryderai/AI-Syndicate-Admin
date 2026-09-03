@@ -27,6 +27,9 @@ const ok = (name, cond, extra) => {
 };
 const eq = (name, a, b) => ok(name, JSON.stringify(a) === JSON.stringify(b), `got ${JSON.stringify(a)}, wanted ${JSON.stringify(b)}`);
 
+/* Imported and CALLED, not read as text. See section 6. */
+import { sendWritePlan } from "../../api/gmail-send.js";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const src = (p) => readFileSync(join(HERE, "..", "..", p), "utf8");
 
@@ -159,14 +162,89 @@ console.log("\n5 · THE FALLBACK CANNOT FAIL ITS OWN CHECK");
   ok("...and it leaves the new angle blank rather than inventing one", d2.body.includes("[One NEW angle"));
 }
 
-console.log("\n6 · IT DRAFTS. IT DOES NOT SEND.");
+console.log("\n6 · THE ENDPOINT DRAFTS. THE PANEL SENDS.");
 {
   const API = src("api/lead-email.js");
   const PANEL = src("src/components/admin/emailDraft.jsx");
   ok("the endpoint never sends mail", !/gmail-send|sendMessage|\bsend\(/.test(API));
   ok("...and says so where somebody would look to add it", /IT DRAFTS\. IT NEVER SENDS\./.test(API));
-  ok("the panel has no send button", !/>\s*Send/.test(PANEL) && !/Send it<|>Send</.test(PANEL));
-  ok("...and says why in the panel itself", /Nothing is sent from here/i.test(PANEL));
+  /* REPINNED 2 Sep 2026, TO THE OPPOSITE RULE, AND ON PURPOSE.
+   *
+   * Until today these two lines pinned "the panel has no send button", because
+   * a console that cannot watch a mail client cannot honestly claim an email
+   * left. Ryder: "emails need to be able to be sent from the crm from the email
+   * that is connected." That answer changed the fact the rule rested on — a
+   * mailbox IS connected now, and `/api/gmail-send` gets Gmail's own message id
+   * back, so the console CAN know. The old rule was right for a console with no
+   * mailbox; it is wrong for this one.
+   *
+   * What has not changed is the endpoint that writes the draft: it still never
+   * sends, which is the line above and stays. Drafting and sending are two
+   * doors, and only one of them may put mail on the internet.
+   *
+   * These lines are not deleted. They now pin the four things that make a send
+   * button safe, and each one is here because its absence was a real bug in
+   * something else on this page. */
+  ok("the panel has a send button, and the address is on it",
+    /Send to \$\{draft\.to\}/.test(PANEL));
+  ok("...it sends ONLY through the callback, never straight to the endpoint",
+    /await onSend\(\{ from, subject, body \}\)/.test(PANEL) && !/gmail-send/.test(PANEL));
+  ok("...the send happens BEFORE anything is logged",
+    /SEND FIRST, LOG SECOND/.test(PANEL));
+  ok("...and a refusal is readable beside the button, not only in a toast",
+    /setSendFailed\(/.test(PANEL) && /Your words are still here/.test(PANEL));
+  /* ONE TOUCH PER EMAIL — RUN, NOT READ.
+   *
+   * These four checks were regexes over api/gmail-send.js until 2 Sep 2026,
+   * when a checker inverted the flag inside recordSend — so the Sales page
+   * double-logged every email and the Inbox logged none — and all of them still
+   * passed. A guard that reads the file cannot tell `x ?` from `!x ?`. The
+   * decision now lives in an exported pure function and this CALLS it. */
+  {
+    const plan = (o) => sendWritePlan(o);
+    eq("the Inbox (no flag) gets its touch written by the endpoint",
+      plan({ mayWriteLead: "lead-1" }).writeTouch, true);
+    eq("the Sales page (flag set) does NOT get a second one",
+      plan({ mayWriteLead: "lead-1", touchLoggedByCaller: true }).writeTouch, false);
+    eq("...but the lead link is still written for it, because only the endpoint knows the thread",
+      plan({ mayWriteLead: "lead-1", touchLoggedByCaller: true }).linkThreadToLead, "lead-1");
+    eq("...and first_email_at is still stamped for it",
+      plan({ mayWriteLead: "lead-1", touchLoggedByCaller: true }).stampFirstEmail, true);
+    /* THE PERMISSION HOLE THE SAME CHECKER FOUND: the thread row took lead_id
+     * from the request body with no ownership check, so a rep could link a
+     * thread to another rep's lead and the reply sweep would then stamp
+     * first_reply_at on it — one-shot, with no screen that can undo it. */
+    eq("a lead id this person may NOT write links nothing",
+      plan({ mayWriteLead: null }).linkThreadToLead, null);
+    eq("...and writes nothing about any person",
+      plan({ mayWriteLead: null }), { lead: null, linkThreadToLead: null, stampFirstEmail: false, writeTouch: false });
+    /* ...while the link the THREAD already carried is still trusted, because
+     * whoever wrote it was allowed to. A refused id must not suppress it —
+     * `leadId || existing.lead_id` did exactly that. */
+    eq("a refused id does not suppress the thread's own link",
+      plan({ mayWriteLead: null, existingThreadLeadId: "lead-9" }).lead, "lead-9");
+  }
+  {
+    /* AND THE WIRING, on the code with the prose taken out — a guard that
+     * fires on its own comment is worthless, and this repo has lost an hour to
+     * two of them. */
+    const stripJs = (t) => t.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/.*$/gm, "$1 ");
+    const PAGE = stripJs(src("src/components/admin/SalesPage.jsx"));
+    const SEND_API = stripJs(src("api/gmail-send.js"));
+    ok("the page tells the endpoint the touch is already logged",
+      /touchLoggedByCaller: true/.test(PAGE));
+    ok("...and passes the contact id, so the reply can be filed against them later",
+      /leadId: lead\.id/.test(PAGE));
+    ok("the endpoint defaults to logging, so the Inbox is unchanged",
+      /touchLoggedByCaller = false/.test(SEND_API));
+    ok("...and the touch it writes is decided by the plan, not a retyped condition",
+      /!plan\.writeTouch \?/.test(SEND_API));
+    /* A mailbox connected before the send scope existed reached Google and came
+     * back "insufficient authentication scopes" after the words were gone. Its
+     * two sibling endpoints have refused this for weeks. */
+    ok("a mailbox whose Google grant cannot send is refused BEFORE anything is sent",
+      /box\.needsReconnect/.test(SEND_API));
+  }
   /* THE PRIMARY BUTTON SAYS EXACTLY WHAT IT DOES — 31 Aug 2026. The console
    * cannot watch a mail client, so the nearest honest moment to a send is the
    * copy. The label claims the copy and the log, and nothing else; a bare

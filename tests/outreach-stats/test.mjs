@@ -345,7 +345,12 @@ eq("the number of days that makes a claim cold comes from the Rules of Engagemen
   DIRECT.coldAfterDays, ROE.COLD_REOPEN_DAYS);
 eq("the stage ladder is printed in the ladder's own order, with the empty rungs shown as 0",
   DIRECT.stages.map((s) => `${s.stage}:${s.count}`),
-  ["new:2", "researching:0", "contacted:3", "in_conversation:0", "follow_up:0", "meeting:0", "proposal:1"]);
+  /* `reopened` and the pre-0030 `meeting` were added to the ladder on 2 Sep
+     2026: both are open, legal stages, and a stage missing from that list is
+     drawn NOWHERE while still counting in the header — so the breakdown did
+     not add up to its own total. */
+  ["new:2", "researching:0", "contacted:3", "in_conversation:0", "follow_up:0",
+    "meeting_booked:0", "meeting_complete:0", "proposal:1", "reopened:0", "meeting:0"]);
 eq("the open stages add up to the book", DIRECT.stages.reduce((n, s) => n + s.count, 0), DIRECT.holding);
 
 console.log("\nPROPOSALS — ONLY THE ONES THAT ARE ACTUALLY OUT");

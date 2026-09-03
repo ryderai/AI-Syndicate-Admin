@@ -195,10 +195,22 @@ export function TextInput(props) {
 export function TextArea(props) {
   return <textarea {...props} className={`adm-input ${props.className || ""}`} style={{ minHeight: 90, resize: "vertical", ...(props.style || {}) }} />;
 }
-export function Select({ options, ...props }) {
+/**
+ * `options` is [[value, label], …]. `groups` is [{ label, options }, …] and
+ * draws real <optgroup>s — added 2 Sep 2026 for the industry picker, which is
+ * 56 trades long and unusable as one flat list. Both may be given: the flat
+ * options are drawn first, which is how "— none —" and anything already on the
+ * record stay at the top.
+ */
+export function Select({ options = [], groups = null, ...props }) {
   return (
     <select {...props} className={`adm-input ${props.className || ""}`}>
       {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      {groups?.map((g) => (
+        <optgroup key={g.label} label={g.label}>
+          {g.options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </optgroup>
+      ))}
     </select>
   );
 }

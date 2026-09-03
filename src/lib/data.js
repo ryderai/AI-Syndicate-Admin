@@ -69,7 +69,15 @@ import { newestReportByCompany, readCompanyReport } from "./salesSheet.js";
  * the two have not drifted. */
 export const LEAD_STAGES = [
   "new", "researching", "contacted", "in_conversation", "follow_up",
-  "meeting", "proposal", "won", "lost", "skip_90", "bad_contact", "reopened",
+  "meeting_booked", "meeting_complete", "proposal",
+  "won", "lost", "skip_90", "bad_contact", "reopened",
+  /* HISTORICAL, and it must stay readable. Migration 0030 split `meeting` into
+   * booked and complete and moved every row, so nothing can be in it any more
+   * — but a value that sat in the database for months turns up in an old
+   * timeline line, an export or a backup, and reading one must not produce a
+   * blank label and must not fall outside the open/closed test. Known, not
+   * offered: it is not in PICKABLE_STAGES and the 0030 constraint refuses it. */
+  "meeting",
   /* KNOWN BEFORE IT IS WRITABLE — 30 Aug 2026.
    *
    * Migration 0027 merges skip_90 and bad_contact into this one. It is listed
@@ -86,19 +94,36 @@ export const LEAD_STAGES = [
 export const LEAD_STAGE_LABELS = {
   new: "New", researching: "Researching", contacted: "Contacted",
   in_conversation: "In conversation", follow_up: "Follow up",
-  meeting: "Meeting", proposal: "Proposal", won: "Won", lost: "Lost",
+  meeting_booked: "Meeting booked", meeting_complete: "Meeting complete",
+  proposal: "Proposal", won: "Won", lost: "Lost",
+  meeting: "Meeting",   /* historical only — see LEAD_STAGES */
   skip_90: "Skip – 90+", bad_contact: "Bad contact info", reopened: "Reopened",
   not_a_fit: "Not a fit",
 };
 /* What each one means, shown in the picker. Same reason as the email statuses:
  * a status nobody can explain out loud does not get used. */
+/**
+ * VALUES A ROW CAN HOLD BUT NOTHING MAY SET OR FILTER BY.
+ *
+ * `skip_90` and `bad_contact` were merged into `not_a_fit` by migration 0027;
+ * `meeting` was split into the two halves by 0030. All three are kept in
+ * LEAD_STAGES so an old timeline line, an export or a restored backup still
+ * reads with a label instead of a blank — and all three must be kept OUT of
+ * every picker and every filter, because a control whose only possible outcome
+ * is an empty list is worse than no control. A checker found three of them in
+ * the stage filter on 2 Sep 2026.
+ */
+export const HISTORICAL_STAGES = ["meeting", "skip_90", "bad_contact"];
+
 export const LEAD_STAGE_HELP = {
   new: "Nobody has worked this yet.",
   researching: "Claimed. Reading up on them before the first touch.",
   contacted: "We have reached out. No reply yet.",
   in_conversation: "They answered. This is a live conversation.",
   follow_up: "Waiting on them, with a reason to chase.",
-  meeting: "A meeting is booked or has happened.",
+  meeting_booked: "It is in the diary. Needs the date of the meeting.",
+  meeting_complete: "The meeting happened. Needs the date it happened.",
+  meeting: "The old single Meeting stage, before it was split in two.",
   proposal: "A proposal is out with them.",
   won: "They signed. Flip them to a client from here.",
   lost: "Decided against us, or not a fit.",
@@ -134,8 +159,22 @@ export const LEAD_STAGE_HELP = {
  * that say they are the same outcome. Nothing here breaks when it runs.
  */
 export const PICKABLE_STAGES = [
-  "follow_up", "meeting", "proposal", "won", "lost", "not_a_fit",
+  "follow_up", "meeting_booked", "meeting_complete", "proposal", "won", "lost", "not_a_fit",
 ];
+
+/* SEVEN, AS OF 2 SEP 2026 — one Meeting became two.
+ *
+ * Ryder: "instead of meeting make it meeting booked and have a date that they
+ * have the meeting, then meeting complete, then the proposal stage."
+ *
+ * The old single stage meant both "booked for Tuesday" and "happened in June" —
+ * its own help text said so out loud — so no number taken from it meant
+ * anything. Booked and complete are two different facts about a deal and a rep
+ * decides each one, which is exactly the test a stage has to pass to exist.
+ *
+ * THE ORDER OF THIS ARRAY IS THE ORDER THEY ARE OFFERED IN, and it is the
+ * pipeline order. `lib/stage-move.js` BOARD_STAGES draws the columns in its own
+ * order and a test compares the two. */
 
 /* SIX, AS OF 31 AUG 2026 — migration 0027 is RUN.
  *
@@ -160,80 +199,18 @@ export function stageIsDerived(stage) {
   return DERIVED_STAGES.includes(stage);
 }
 
-/**
- * WHAT A STAGE WILL NOT LET YOU LEAVE WITHOUT.
+/* THE STAGE GATE MOVED TO lib/stage-move.js ON 2 SEP 2026, and is re-exported
+ * here so every existing import keeps working.
  *
- * HubSpot ships this as a Required checkbox on the stage that blocks the save;
- * Salesforce does it with a validation formula. We already do it for Won and
- * Lost — those two ask for a written reason and have since Aug 27, and that box
- * is deliberately NOT listed here because it is a different, richer flow.
+ * It had to move because the ASSISTANT could not reach it. `lib/assistant-tools.js`
+ * cannot import from `src/`, so it kept a hand-copied stage list and no copy of
+ * the requirement at all — and a checker found that "move Acme to meeting
+ * complete" in the chat box produced exactly the un-dated stage migration 0030
+ * exists to abolish. A rule enforced in one of four writers is not a rule.
  *
- * `field` is the column that must not be empty. `ask` is what the rep is asked
- * for, in their words. There is deliberately no gate on anything earlier: the
- * early stages are derived now, and nothing should ever stand between a rep and
- * logging a call.
- */
-/* WRITTEN AGAINST COLUMNS THAT EXIST. The first draft of this required
- * `meeting_at` and `proposal_amount`, and NEITHER IS A COLUMN — I invented both
- * while writing the rule. That is the exact failure this repo has a note about:
- * three files once wrote column names the tables do not have, and every fixture
- * agreed with them. Checked against the migrations before this shipped.
- *
- *   follow_up  → admin_leads.next_follow_up_at   (0002, real)
- *   meeting    → admin_leads.next_follow_up_at   (the same column: the meeting
- *                IS the next thing happening, and a meeting with no date in the
- *                diary is the thing this gate exists to stop)
- *   proposal   → a row in admin_proposals with an amount (0009, real). Not a
- *                column on the lead — proposals are their own records, and
- *                copying the number onto the lead would be a second copy that
- *                stops matching.
- */
-export const STAGE_REQUIRES = {
-  follow_up: {
-    kind: "date",
-    ask: "When are you picking this back up?",
-    why: "“Waiting on them” with no date is the definition of a forgotten lead.",
-  },
-  meeting: {
-    kind: "date",
-    ask: "When is the meeting?",
-    why: "Otherwise Meeting means both booked-for-Tuesday and happened-in-June, and nothing counted from it means anything.",
-  },
-  proposal: {
-    kind: "proposal",
-    ask: "Add the proposal and its amount first.",
-    why: "A pipeline you cannot total is a list.",
-  },
-};
-
-/**
- * Does this lead already satisfy the stage's requirement?
- *
- * `proposals` is the board's proposals array — passed in rather than fetched, so
- * this answers from the same snapshot the screen is drawing. An unreadable date
- * counts as MISSING, which is the safe direction: asking twice costs a click,
- * and letting a lead through on a date nothing can parse is a lead that never
- * comes back.
- */
-export function stageRequirementMet(stage, lead, { proposals = [] } = {}) {
-  const need = STAGE_REQUIRES[stage];
-  if (!need || !lead) return true;
-  if (need.kind === "date") {
-    /* IN THE FUTURE, not merely readable. A bare Date.parse accepted last
-     * March, so "When is the meeting?" was satisfied by a date that had already
-     * been and gone — and the lead then landed straight on the "No next step"
-     * list, which correctly treats a past date as no plan. Two rules about one
-     * column disagreeing is the defect this whole rebuild started with. */
-    const at = Date.parse(lead.next_follow_up_at);
-    return Number.isFinite(at) && at > Date.now();
-  }
-  if (need.kind === "proposal") {
-    return (proposals || []).some(
-      (p) => p.lead_id === lead.id && Number.isFinite(Number(p.amount_cents)) && Number(p.amount_cents) > 0,
-    );
-  }
-  return true;
-}
+ * lib/stage-move.js already held the pipeline's other rules, is pure, and is
+ * imported by src/, lib/ and the tests alike. One definition. */
+export { STAGE_REQUIRES, stageRequirementMet } from "../../lib/stage-move.js";
 
 /* The stages nobody should be chasing. `skip_90` and `bad_contact` are in here
  * on purpose — they are not failures, but a rep who keeps being nagged about a
@@ -1007,6 +984,16 @@ export async function upsertLead(patch) {
     : supabase.from("admin_leads").insert(patch).select().maybeSingle();
   const { data, error } = await q;
   if (error) return { ok: false, error: error.message };
+  /* AN UPDATE THAT MATCHED NO ROW IS NOT A SUCCESS — 2 Sep 2026, found by a
+   * checker. Postgres answers `{ data: null, error: null }` when the `eq` finds
+   * nothing, which happens when the lead was deleted or when a row policy hides
+   * it. Every caller reads `res.ok` only, so the console was writing a timeline
+   * line for a lead that no longer exists, closing the box and saying "saved" —
+   * the exact "clicked and it did not actually work" this session is about, in
+   * the one direction nobody can see. */
+  if (patch.id && !data) {
+    return { ok: false, error: "Nothing was written — that lead is gone, or it is not yours to change. Reload sales." };
+  }
   return { ok: true, row: data };
 }
 
@@ -1638,7 +1625,19 @@ function daysSince(iso) {
 /* How long a lead in each stage may sit untouched before it counts as owed a
  * contact. A lead nobody has ever called is more urgent than one you spoke to
  * yesterday, and a won or lost lead is never chased. */
-const STALE_AFTER_DAYS = { new: 1, contacted: 3, follow_up: 5, meeting: 5, proposal: 4 };
+/* BOTH HALVES OF THE MEETING SPLIT, and the pre-0030 value.
+ *
+ * Missed on the first pass of 2 Sep 2026 and found by a checker. A stage that
+ * is not a key here is `undefined` at buildCallQueue, and the guard there
+ * (`if (limit === undefined) return -1`) sorts it to the BOTTOM OF THE CALL
+ * QUEUE for ever, however long it has sat — so every meeting would have
+ * quietly dropped out of the queue's ranking. The other reader falls through to
+ * `?? 7`, which would have loosened the same leads from 5 days to 7. */
+const STALE_AFTER_DAYS = {
+  new: 1, contacted: 3, follow_up: 5,
+  meeting: 5, meeting_booked: 5, meeting_complete: 5,
+  proposal: 4,
+};
 
 /** Everything one person owes work on, in one read.
  *

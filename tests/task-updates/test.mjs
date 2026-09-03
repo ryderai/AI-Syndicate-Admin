@@ -475,7 +475,7 @@ console.log("\nTHE STYLES EXIST FOR WHAT THE MARKUP ASKS FOR");
 {
   const CSS = src("src/admin.css").replace(/\/\*[\s\S]*?\*\//g, " ");
   for (const c of ["adm-status-chips", "adm-status-chip", "adm-upd-list", "adm-upd-body",
-    "adm-upd-tag", "adm-upd-orphan", "adm-work-openname", "adm-drawer-note", "adm-drawer-f-wide"]) {
+    "adm-upd-tag", "adm-upd-orphan", "adm-work-openname", "adm-tp-note", "adm-tp-f-wide"]) {
     ok(`.${c} is styled`, new RegExp(`\\.${c}[\\s.,:{]`).test(CSS));
   }
   ok("every status has its own filled colour, so 'blocked' is not the same as 'done'",

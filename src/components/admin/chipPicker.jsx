@@ -48,6 +48,12 @@ export function ChipPicker({
   /* Wide enough for the longest stage name and its explanation side by side. */
   width = 320,
 }) {
+  /* WHILE THERE ARE WORDS IN THE NOTE BOX, THE POPOVER STAYS PUT. Only the note
+   * step knows whether anything has been typed, so it sets this and the Popover
+   * reads it — an outside click, a scroll or a resize is ignored while it is
+   * true. Before 2 Sep 2026, nudging the sheet's horizontal scrollbar while
+   * typing a note threw the note away with nothing said. */
+  const hold = useRef(false);
   const [anchor, setAnchor] = useState(null);
   /* null = the list. Otherwise the value we just wrote, and the note box. */
   const [noted, setNoted] = useState(null);
@@ -97,7 +103,7 @@ export function ChipPicker({
       </button>
 
       {anchor && (
-        <Popover anchor={anchor} width={width} onClose={() => setAnchor(null)}>
+        <Popover anchor={anchor} width={width} holdRef={hold} onClose={() => setAnchor(null)}>
           {/* THE PANEL STOPS ITS OWN CLICKS.
            *
            * The whole sheet row is a click target now, and a React event
@@ -134,6 +140,7 @@ export function ChipPicker({
           ) : (
             <NoteStep
               moved={options.find((o) => o.value === noted) || null}
+              holdRef={hold}
               busy={busy}
               onSave={async (text) => {
                 setBusy(true);
@@ -153,10 +160,16 @@ export function ChipPicker({
 /* The second step. It never blocks anything: the move is already saved by the
  * time this is on screen, and the panel says so in those words — otherwise a
  * rep who clicks away wonders whether they lost the move as well as the note. */
-function NoteStep({ moved, busy, onSave, onSkip }) {
+function NoteStep({ moved, busy, onSave, onSkip, holdRef }) {
   const [text, setText] = useState("");
   const ref = useRef(null);
   useEffect(() => { ref.current?.focus(); }, []);
+  /* Tell the popover whether there is anything worth protecting, and let go on
+   * the way out so the NEXT popover is not stuck open. */
+  useEffect(() => {
+    if (holdRef) holdRef.current = Boolean(text.trim());
+    return () => { if (holdRef) holdRef.current = false; };
+  }, [text, holdRef]);
 
   const save = () => { if (text.trim()) onSave(text); else onSkip(); };
 

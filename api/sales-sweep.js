@@ -77,7 +77,10 @@ export default async function handler(req, res) {
     .from("admin_leads")
     .select("id, name, company, stage, owner_id, claimed_at, claim_contacted_at, first_contact_at, last_touch_at, last_activity_at, created_at, company_id")
     .not("owner_id", "is", null)
-    .in("stage", ["new", "researching", "contacted", "in_conversation", "follow_up", "meeting", "proposal", "reopened"])
+    /* HAND-WRITTEN OPEN-STAGE LIST, and a stage missing from it is a stage the
+       nightly sweep never reclaims. Both halves of the Meeting split are here
+       (0030), and `meeting` stays for any row a backup restores. */
+    .in("stage", ["new", "researching", "contacted", "in_conversation", "follow_up", "meeting", "meeting_booked", "meeting_complete", "proposal", "reopened"])
     .order("claimed_at", { ascending: true, nullsFirst: true })
     .limit(CAP + 1);
   if (error) return res.status(500).json({ error: error.message });

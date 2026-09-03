@@ -11,6 +11,11 @@
  * no auth, sample data everywhere, big labels saying so. */
 
 import { useEffect, useState } from "react";
+/* The Sales board is cached for the life of the TAB so navigating away and back
+ * does not re-read eleven tables. That cache must not outlive the person it was
+ * read for: signing out, or a different account signing in without a page
+ * reload, has to start from nothing. */
+import { clearBoardCache } from "./salesSession.js";
 import { getSupabase, isConfigured } from "./supabase.js";
 
 const sharedAuth = {
@@ -79,7 +84,41 @@ function initSharedAuth() {
   supabase.auth.onAuthStateChange((_event, session) => {
     clearTimeout(fallback);
     const u = session?.user ?? null;
-    setAuthState({ user: u, loading: false, membership: u ? undefined : null });
+
+    /* THE SAME PERSON IS STILL THE SAME PERSON — 2 Sep 2026.
+     *
+     * Ryder: "even if they go to a different tab on their browser, it resets it
+     * and loads them all back again … that's gonna be really annoying if
+     * they're working on something."
+     *
+     * This is where that came from, and it was not a Sales bug at all. Supabase
+     * attaches its own `visibilitychange` listener and refreshes the token every
+     * time a tab comes back to the front; each refresh fires this callback with
+     * a SIGNED_IN or TOKEN_REFRESHED event for the person who was already
+     * signed in. This line then set `membership: undefined`, AuthGate reads
+     * undefined as "still checking" and returns the loading splash INSTEAD of
+     * the app — so the entire console unmounted and rebuilt: every page's data
+     * re-fetched, every open drawer closed, every filter cleared, every
+     * half-typed note gone. On a long-lived tab `autoRefreshToken` did it
+     * without anybody switching tabs at all.
+     *
+     * So: only go back to "still checking" when the person actually CHANGED,
+     * or when there is nothing checked yet. A refreshed token for the same user
+     * id is not new information about who they are, and the roster is still
+     * re-read below either way — quietly, without taking the screen away. */
+    const sameUser = u && sharedAuth.state.user && sharedAuth.state.user.id === u.id;
+    const known = sharedAuth.state.membership !== undefined;
+
+    /* A DIFFERENT PERSON, OR NOBODY, GETS A CLEAN SLATE. Only when the user
+     * actually changed — a token refresh for the same person must not throw away
+     * the board they are working in, which is the whole point of the check
+     * above. */
+    if (!sameUser) clearBoardCache();
+    setAuthState({
+      user: u,
+      loading: false,
+      membership: u ? (sameUser && known ? sharedAuth.state.membership : undefined) : null,
+    });
     if (u) loadMembership(u);
   });
 }

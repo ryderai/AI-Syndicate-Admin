@@ -20,11 +20,26 @@ if [ -z "${PGURL:-}" ]; then
   export PATH="$PATH:/usr/lib/postgresql/16/bin"
   export PGDATA=/tmp/pg-0029
   RUN=/tmp/pg-0029-run
-  if [ ! -d "$PGDATA" ]; then
-    mkdir -p "$PGDATA" "$RUN"
-    initdb -D "$PGDATA" -U postgres >/dev/null
+  # AS ROOT, POSTGRES REFUSES TO START AT ALL — 2 Sep 2026. This file was
+  # written on a machine that ran as a normal user; the cloud box runs as root,
+  # where `initdb` exits with "cannot be run as root" and every check below is
+  # then skipped with a connection error. A skip is not a pass, and this one
+  # looked like a database problem rather than a script problem. Same bootstrap
+  # as tests/db-columns/run.sh, which was written after this and got it right.
+  AS=""
+  if [ "$(id -u)" = 0 ]; then id postgres >/dev/null 2>&1 || useradd postgres; AS="su postgres -c"; fi
+  # `PG_VERSION`, NOT the directory. An empty /tmp/pg-* left behind by a failed
+  # initdb passed the `-d` test, so initdb was skipped and every check below
+  # died on a missing socket — a failure that reads like a broken database.
+  if [ ! -f "$PGDATA/PG_VERSION" ]; then
+    mkdir -p "$PGDATA" "$RUN"; chown -R postgres "$PGDATA" "$RUN" 2>/dev/null || true
+    if [ -n "$AS" ]; then $AS "PATH=$PATH initdb -D $PGDATA -U postgres" >/dev/null
+    else initdb -D "$PGDATA" -U postgres >/dev/null; fi
   fi
-  pg_ctl -D "$PGDATA" -o "-k $RUN -p 5433 -c listen_addresses=" -l /tmp/pg-0029.log start >/dev/null 2>&1 || true
+  chown -R postgres "$RUN" 2>/dev/null || true
+  START="pg_ctl -D $PGDATA -o \"-k $RUN -p 5433 -c listen_addresses=\" -l /tmp/pg-0029.log start"
+  if [ -n "$AS" ]; then $AS "PATH=$PATH $START" >/dev/null 2>&1 || true
+  else eval "$START" >/dev/null 2>&1 || true; fi
   sleep 2
   PSQL="psql -h $RUN -p 5433 -U postgres"
 else

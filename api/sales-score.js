@@ -738,7 +738,12 @@ export default async function handler(req, res) {
        * defect salesQueue's comment says was fixed; the fix had been applied in
        * one of the two places that make the decision. Found by a checker. */
       const { data: parked, error: parkErr } = await admin.from("admin_leads")
-        .update({ stage: "skip_90" })
+        /* `not_a_fit`, NOT `skip_90`. Migration 0027 merged the two and
+           narrowed the constraint, so this endpoint has been writing a value
+           Postgres refuses ever since — a scan that scored a firm 90+ then
+           failed to park it. Found 2 Sep 2026 by a checker auditing stage
+           WRITERS, not just readers. */
+        .update({ stage: "not_a_fit" })
         .in("id", allowed)
         .is("first_contact_at", null)
         .select("id");

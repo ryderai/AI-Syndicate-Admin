@@ -73,6 +73,10 @@ export function TouchPicker({
    * two booleans would allow a fourth that means nothing. */
   const [step, setStep] = useState(null);
   const [busy, setBusy] = useState(false);
+  /* Same protection the stage chip's note box got on 2 Sep 2026: while there
+   * are unsaved words in the "and next?" box, a scroll, a resize or a click
+   * elsewhere does not throw them away. See Popover in opsCells.jsx. */
+  const hold = useRef(false);
 
   const open = (e) => {
     e.stopPropagation();
@@ -110,7 +114,7 @@ export function TouchPicker({
       </button>
 
       {anchor && (
-        <Popover anchor={anchor} width={width} onClose={close}>
+        <Popover anchor={anchor} width={width} holdRef={hold} onClose={close}>
           {/* THE PANEL STOPS ITS OWN CLICKS. A React event bubbles through the
               REACT tree, not the DOM one, so a click in here reached the <tr>
               underneath and opened the record on top of the menu. That was a
@@ -165,6 +169,7 @@ export function TouchPicker({
 
             {step && typeof step === "object" && (
               <TouchNext
+                holdRef={hold}
                 busy={busy}
                 onSave={async (payload) => {
                   setBusy(true);
@@ -244,11 +249,16 @@ export function NextStepRow({ value, onChange, disabled = false }) {
   );
 }
 
-function TouchNext({ busy, onSave, onSkip }) {
+function TouchNext({ busy, onSave, onSkip, holdRef }) {
   const [next, setNext] = useState(null);
   const [text, setText] = useState("");
   const ref = useRef(null);
   useEffect(() => { ref.current?.focus(); }, []);
+  /* A date picked but not saved is worth protecting too, not just typed words. */
+  useEffect(() => {
+    if (holdRef) holdRef.current = Boolean(text.trim() || next);
+    return () => { if (holdRef) holdRef.current = false; };
+  }, [text, next, holdRef]);
 
   const save = () => onSave({ next: next || null, note: text.trim() || null });
 

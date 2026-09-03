@@ -79,7 +79,7 @@ export function Avatar({ name, size = 20 }) {
 
 /** A menu anchored to a rect, portaled to <body>, flipped up when it would
  *  fall off the bottom. Closes on outside click, Escape, resize, or scroll. */
-export function Popover({ anchor, onClose, width = 232, children }) {
+export function Popover({ anchor, onClose, width = 232, children, holdRef = null }) {
   const ref = useRef(null);
   const [pos, setPos] = useState({ left: -9999, top: -9999 });
 
@@ -105,7 +105,23 @@ export function Popover({ anchor, onClose, width = 232, children }) {
   const close = useCallback(() => closeRef.current?.(), []);
 
   useEffect(() => {
-    const down = (e) => { if (ref.current && !ref.current.contains(e.target)) close(); };
+    /* HOLD IT OPEN WHILE THERE ARE UNSAVED WORDS IN IT — 2 Sep 2026.
+     *
+     * `holdRef` is a mutable ref the CHILD sets, because only the child knows
+     * whether somebody has typed something into it. While it is true, an
+     * outside click, a scroll and a resize are all ignored.
+     *
+     * Ryder: "no button should ever be clicked and then it not actually work."
+     * This is the quieter version of the same complaint. The note box on the
+     * sheet's stage chip lives inside a popover, and a rep typing a note on a
+     * table wide enough that half its columns are off screen only had to nudge
+     * the horizontal scrollbar to lose it — nothing written and nothing said.
+     * Escape still closes, because that is a person deciding to. */
+    const held = () => Boolean(holdRef && holdRef.current);
+    const down = (e) => {
+      if (held()) return;
+      if (ref.current && !ref.current.contains(e.target)) close();
+    };
     const key = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
     document.addEventListener("mousedown", down, true);
     document.addEventListener("keydown", key, true);
@@ -131,7 +147,7 @@ export function Popover({ anchor, onClose, width = 232, children }) {
      * opening scroll. One leak per occurrence. Caught by a reviewer. */
     let armed = false;
     let tick = 0;
-    const onMove = () => { if (armed) close(); };
+    const onMove = () => { if (armed && !held()) close(); };
     const raf = requestAnimationFrame(() => {
       tick = setTimeout(() => {
         armed = true;
@@ -148,7 +164,11 @@ export function Popover({ anchor, onClose, width = 232, children }) {
       window.removeEventListener("resize", onMove);
       window.removeEventListener("scroll", onMove, true);
     };
-  }, [close]);
+    /* `holdRef` is a REF, so its identity never changes and its current value is
+     * read inside the listeners rather than captured. Listing it keeps the rule
+     * honest without re-arming the listeners — which is the whole reason the
+     * effect above runs once per open. */
+  }, [close, holdRef]);
 
   return createPortal(
     <div ref={ref} className="adm-db-pop" style={{ left: pos.left, top: pos.top, width }} role="dialog">

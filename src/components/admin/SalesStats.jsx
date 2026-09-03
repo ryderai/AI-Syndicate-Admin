@@ -332,7 +332,9 @@ export default function SalesStats({ member }) {
       if (isOpenStage(l.stage)) open += 1;
       if (l.stage === "won") won += 1;
       if (l.stage === "lost") lost += 1;
-      if (["meeting", "proposal", "won"].includes(l.stage)) meetings += 1;
+      /* Cumulative: got to a meeting or past it. Both halves of the 0030
+         split count, or a finished meeting reads as no meeting. */
+      if (["meeting", "meeting_booked", "meeting_complete", "proposal", "won"].includes(l.stage)) meetings += 1;
       if (l.first_contact_at) contacted += 1;
     }
     const decided = won + lost;

@@ -9,7 +9,30 @@
  */
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+
+/* THE STAGES THE DATABASE ACCEPTS TODAY.
+ *
+ * Read from the LAST `admin_leads_stage_check` across every migration in order,
+ * because that is literally what Postgres ends up holding — 0027 and 0030 each
+ * widen the constraint and then narrow it again, so any single file, and any
+ * concatenation of a hand-picked few, gives the wrong answer. This used to name
+ * 0009 and 0015 explicitly; that stopped being the current constraint the
+ * moment 0027 ran, and nobody noticed until 0030 split the Meeting stage. */
+function stagesTheDatabaseAccepts() {
+  const dir = new URL("../../supabase/migrations/", import.meta.url);
+  const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
+  let last = null;
+  for (const f of files) {
+    const sql = readFileSync(new URL(f, dir), "utf8");
+    for (const m of sql.matchAll(/admin_leads_stage_check[\s\S]{0,200}?check \(stage in \(([\s\S]*?)\)\)/g)) {
+      last = m[1];
+    }
+  }
+  if (!last) throw new Error("no admin_leads_stage_check found in any migration");
+  return new Set([...last.matchAll(/'([a-z_0-9]+)'/g)].map((x) => x[1]));
+}
+
 import {
   BOARD_STAGES, WORKING_COLUMN, REASON_STAGES, OFF_BOARD_STAGES, NOTE_MAX,
   isStageMove, needsReason, offersNote, cleanNote, stageMoveBody, dropCheck,
@@ -45,21 +68,28 @@ test("every board column is a stage the database will accept", () => {
   /* The stage list lives in 0009_sales.sql's check constraint. Named
    * explicitly rather than globbed: if somebody moves it, this test should
    * fail loudly rather than quietly pass against some other file. */
-  const live = readFileSync(new URL("../../supabase/migrations/0009_sales.sql", import.meta.url), "utf8")
-    + readFileSync(new URL("../../supabase/migrations/0015_sales_lifecycle.sql", import.meta.url), "utf8");
+  const allowed = stagesTheDatabaseAccepts();
   /* EVERY DROP TARGET must be a stage the database accepts TODAY. These are the
    * ones a person can write by dragging, so a value the constraint refuses is a
    * card that bounces back with a database error. */
   for (const stage of BOARD_STAGES) {
-    assert.ok(live.includes(`'${stage}'`), `${stage} is a drop target the database would refuse`);
+    assert.ok(allowed.has(stage), `${stage} is a drop target the database would refuse`);
   }
   /* The read-only columns are a softer bar on purpose: they DRAW a stage, they
    * never write one. `not_a_fit` is drawn before migration 0027 creates it, so
    * the board is already right the moment that runs — but it must at least be
    * named in a migration somebody can point at, or it is a typo. */
-  const pending = live + readFileSync(new URL("../../supabase/migrations/0027_pipeline_spec.sql", import.meta.url), "utf8");
+/* The read-only columns are a softer bar on purpose: they DRAW a stage, they
+   * never write one — so a stage the current constraint has since REMOVED is
+   * still legitimately drawn here. `skip_90`, `bad_contact` and `meeting` are
+   * all in that position: real values that lived in the database and can come
+   * back from a backup. The bar is that the name appears in SOME migration, so
+   * it cannot be a typo. */
+  const MIGDIR = new URL("../../supabase/migrations/", import.meta.url);
+  const everMentioned = readdirSync(MIGDIR).filter((f) => f.endsWith(".sql"))
+    .map((f) => readFileSync(new URL(f, MIGDIR), "utf8")).join("\n");
   for (const stage of OFF_BOARD_STAGES) {
-    assert.ok(pending.includes(`'${stage}'`), `${stage} appears in no migration at all`);
+    assert.ok(everMentioned.includes(`'${stage}'`), `${stage} appears in no migration at all`);
   }
 });
 
@@ -112,8 +142,8 @@ test("the resting stages are NOT board columns", () => {
 /* ================================================================== */
 
 test("dropping a card back where it came from is not a move", () => {
-  assert.equal(isStageMove("meeting", "meeting"), false);
-  assert.equal(offersNote("meeting", "meeting"), false);
+  assert.equal(isStageMove("meeting_booked", "meeting_booked"), false);
+  assert.equal(offersNote("meeting_booked", "meeting_booked"), false);
   assert.equal(needsReason("won", "won"), false, "a lead already Won must not re-open the reason box");
 });
 
@@ -197,13 +227,13 @@ test("a rep cannot drag somebody else's lead into another column", () => {
    * across the screen, only to have the write refused, is worse than a card
    * that will not lift — so the board asks before it writes, as well as the
    * database asking after. */
-  const r = dropCheck({ editable: false, from: "new", to: "meeting" });
+  const r = dropCheck({ editable: false, from: "new", to: "meeting_booked" });
   assert.equal(r.ok, false);
   assert.match(r.why, /holds this lead/);
 });
 
 test("dropping on the column it is already in changes nothing and says nothing", () => {
-  const r = dropCheck({ editable: true, from: "meeting", to: "meeting" });
+  const r = dropCheck({ editable: true, from: "meeting_booked", to: "meeting_booked" });
   assert.equal(r.ok, false);
   assert.equal(r.moved, false);
   assert.equal(r.why, "It is already there.");
@@ -218,7 +248,7 @@ test("a drop on something that is not a column is refused", () => {
 });
 
 test("a real drop is allowed and says whether the reason box is coming", () => {
-  const plain = dropCheck({ editable: true, from: "contacted", to: "meeting" });
+  const plain = dropCheck({ editable: true, from: "contacted", to: "meeting_booked" });
   assert.equal(plain.ok, true);
   assert.equal(plain.needsReason, false);
 
@@ -230,7 +260,7 @@ test("a real drop is allowed and says whether the reason box is coming", () => {
 test("the lock is checked AFTER the is-it-a-move check, so a no-op is never scolded", () => {
   /* Dropping somebody else's card back on its own column should say "it is
    * already there", not accuse the rep of trying to steal a lead. */
-  const r = dropCheck({ editable: false, from: "meeting", to: "meeting" });
+  const r = dropCheck({ editable: false, from: "meeting_booked", to: "meeting_booked" });
   assert.equal(r.why, "It is already there.");
 });
 

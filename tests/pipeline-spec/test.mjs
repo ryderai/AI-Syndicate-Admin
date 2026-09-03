@@ -157,9 +157,13 @@ console.log("\n5 · NOTHING DERIVED IS SETTABLE");
   for (const s of ["new", "researching", "contacted", "in_conversation"]) {
     ok(`${s} cannot be chosen by a person`, !pickable.includes(s));
   }
-  for (const s of ["follow_up", "meeting", "proposal", "won", "lost"]) {
+  for (const s of ["follow_up", "meeting_booked", "meeting_complete", "proposal", "won", "lost"]) {
     ok(`${s} still can`, pickable.includes(s));
   }
+  /* And the stage they REPLACED must not be offered any more. Migration 0030
+   * split Meeting in two and moved every row; a picker still offering the old
+   * single value would write one the constraint now refuses. */
+  ok("the old single Meeting stage is not offered", !pickable.includes("meeting"));
   /* THE BOARD IS THE OTHER DOOR. A drop target for a derived stage would put
    * it back within reach, and dropCheck is the only thing standing there. */
   for (const s of derived) {
@@ -171,21 +175,55 @@ console.log("\n5 · NOTHING DERIVED IS SETTABLE");
 
   /* THE GATE. Written against columns that exist — the first draft required
    * `meeting_at` and `proposal_amount` and NEITHER IS A COLUMN. */
-  const SQL = src("supabase/migrations/0002_work_page.sql") + src("supabase/migrations/0009_sales.sql");
+  const SQL = src("supabase/migrations/0002_work_page.sql") + src("supabase/migrations/0009_sales.sql")
+    + src("supabase/migrations/0030_meeting_split.sql");
   ok("the gate's date column is real", /next_follow_up_at/.test(SQL));
   ok("the gate's proposal amount is real", /amount_cents/.test(SQL));
-  /* The two invented names may appear ONLY in the comment that records the
-   * mistake — never in a line of code. Stripping comment lines rather than one
-   * hand-matched block, so the check cannot be defeated by rewording it. */
-  const codeOnly = DATA.split("\n").filter((ln) => !/^\s*(\*|\/\/|\/\*)/.test(ln)).join("\n");
-  ok("no invented column survived into actual code",
-    !/meeting_at|proposal_amount/.test(codeOnly),
-    codeOnly.split("\n").filter((ln) => /meeting_at|proposal_amount/.test(ln)).join(" | "));
-  ok("...and the mistake is still written down where the next person will read it",
-    /NEITHER IS A COLUMN/.test(DATA));
-  for (const s of ["follow_up", "meeting", "proposal"]) {
-    ok(`${s} is gated`, new RegExp(`\\b${s}: \\{`).test(DATA.slice(DATA.indexOf("export const STAGE_REQUIRES"))));
+  /* `meeting_at` STOPPED BEING AN INVENTED NAME ON 2 SEP 2026 — migration 0030
+   * creates it, and the gate reads it because a meeting that has already
+   * happened cannot share `next_follow_up_at` (a past date there means overdue
+   * everywhere). So the rule is unchanged and the check is repinned to it: every
+   * column the gate names has to EXIST IN A MIGRATION. That is stronger than the
+   * old two-name blacklist, which would have gone on passing if somebody
+   * invented a third name.
+   *
+   * `proposal_amount` is still invented and still forbidden. */
+  /* THE GATE LIVES IN lib/stage-move.js SINCE 2 SEP 2026, re-exported from
+   * data.js. It moved because lib/assistant-tools.js cannot import from src/,
+   * so the assistant could reach the stages and not the requirement — and a
+   * checker found it producing exactly the un-dated stage 0030 abolishes. Both
+   * files are read here, so this check follows the rule and not the address. */
+  const GATE = src("lib/stage-move.js");
+  const codeOnly = (DATA + "\n" + GATE).split("\n").filter((ln) => !/^\s*(\*|\/\/|\/\*)/.test(ln)).join("\n");
+  ok("proposal_amount is still not a column, and still not in the code",
+    !/proposal_amount/.test(codeOnly),
+    codeOnly.split("\n").filter((ln) => /proposal_amount/.test(ln)).join(" | "));
+  ok("meeting_at is a real column now — migration 0030 adds it",
+    /add column if not exists meeting_at/.test(src("supabase/migrations/0030_meeting_split.sql")));
+  {
+    /* EVERY column the gate names, checked against the migrations. */
+    const table = GATE.slice(GATE.indexOf("export const STAGE_REQUIRES"), GATE.indexOf("export function stageRequirementMet"));
+    const fields = [...table.matchAll(/field: "([a-z_]+)"/g)].map((m) => m[1]);
+    ok(`the gate names ${fields.length} columns and they are all real: ${fields.join(", ")}`,
+      fields.length >= 2 && fields.every((f) => SQL.includes(f)));
   }
+  ok("...and the mistake is still written down where the next person will read it",
+    /NEITHER IS A COLUMN/.test(GATE));
+  ok("...and data.js still points at where the gate went",
+    /export \{ STAGE_REQUIRES, stageRequirementMet \} from "\.\.\/\.\.\/lib\/stage-move\.js"/.test(DATA));
+  for (const s of ["follow_up", "meeting_booked", "meeting_complete", "proposal"]) {
+    ok(`${s} is gated`, new RegExp(`\\b${s}: \\{`).test(GATE.slice(GATE.indexOf("export const STAGE_REQUIRES"))));
+  }
+  /* EVERY WRITER OF A STAGE GOES THROUGH THE GATE, not just the screens. The
+   * assistant did not until 2 Sep 2026, and the importer produced three stages
+   * it could never satisfy. Both are checked here because "the rule is in one
+   * of four writers" is how this defect got shipped. */
+  ok("the assistant checks the requirement before it writes a stage",
+    /stageRequirementMet\(input\.stage/.test(src("lib/assistant-tools.js")));
+  ok("...and reads the columns the gate needs, not a partial row",
+    /meeting_at,next_follow_up_at/.test(src("lib/assistant-tools.js")));
+  ok("the importer cannot land a lead in a gated stage",
+    /landableStage\(stageFromSheet\(/.test(src("lib/sales-import.js")));
   /* Won and Lost are deliberately NOT in the gate table — they have the richer
    * reason box, and gating them twice would ask for the same sentence twice. */
   const gate = DATA.slice(DATA.indexOf("export const STAGE_REQUIRES"), DATA.indexOf("export function stageRequirementMet"));
@@ -202,7 +240,7 @@ console.log("\n5c · EVERY DOOR INTO THE STAGE IS THE SAME DOOR");
   ok("...and it writes through the page's gate, not its own upsert",
     /onStage\([\s\S]{0,40}e\.target\.value,/.test(PROF));
   ok("the drawer's two stage buttons go through the gate too",
-    (PROF.match(/onStage\("(meeting|follow_up)"/g) || []).length === 2);
+    (PROF.match(/onStage\("(meeting_booked|follow_up)"/g) || []).length === 2);
   /* A LOOSE PATTERN IS A GUARD THAT CANNOT FIRE. This was `/onPatch\(\{ stage:/`
    * and it PASSED while the select was still writing
    * `onPatch(\n  { stage: ... })` — the exact bypass it was written to catch.

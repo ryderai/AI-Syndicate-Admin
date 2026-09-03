@@ -128,6 +128,26 @@ async function run({ res, admin, member, role, userId, leadId, angle }) {
     return res.status(400).json({ ok: false, error: send.reason, bounced: Boolean(send.bounced) });
   }
 
+  /* ---- AND THE REPLY GATE — 2 Sep 2026 ----
+   *
+   * What this endpoint writes is OUTREACH: the next step of a five-touch
+   * sequence, worked out from a stage and a timeline. Once somebody has
+   * written back, the rules say that sequence stops (cadenceState's
+   * `stop: "replied"`), and the drawer has said so in words for weeks — the
+   * pre-written email is the exact thing that must not go out to them.
+   *
+   * It was said only on screens until today. Both screens now refuse it, and
+   * so does this, because a rule enforced in the browser alone is a rule that
+   * holds until somebody opens a second tab. `canEmail` is not the place for
+   * it: the Contacted? picker reads that same function to log a reply a rep
+   * typed themselves, which stays allowed. */
+  if (lead.first_reply_at) {
+    return res.status(400).json({
+      ok: false, replied: true,
+      error: "They have already written back. Write your reply yourself — the pre-written outreach email is not the right thing to send somebody who replied.",
+    });
+  }
+
   /* ---- everything known about them ---- */
   const [companyRes, actRes, tagRes, tagStateRes, propRes, reportRes] = await Promise.all([
     lead.company_id

@@ -362,9 +362,26 @@ test("notes come back most urgent first", () => {
 });
 
 test("the staleness numbers match the Work page's", () => {
-  // These two lists disagreeing is how one screen says a lead is fine while
-  // another says it is overdue. Copied by hand once; checked here forever.
-  assert.deepEqual(THRESHOLDS.leadStale, { new: 1, contacted: 3, follow_up: 5, meeting: 5, proposal: 4 });
+  /* These two lists disagreeing is how one screen says a lead is fine while
+   * another says it is overdue.
+   *
+   * REPINNED 2 Sep 2026, and made stronger. It compared this list against a
+   * HAND-COPIED LITERAL, so when the Meeting stage was split and both copies
+   * were updated, the test failed against its own third copy — three lists to
+   * keep in step instead of two. It now reads the Work page's own map out of
+   * src/lib/data.js and compares the two directly, which is the rule the
+   * comment always claimed to enforce. */
+  const src = readFileSync(new URL("../../src/lib/data.js", import.meta.url), "utf8");
+  const block = /const STALE_AFTER_DAYS = \{([\s\S]*?)\};/.exec(src);
+  assert.ok(block, "could not find STALE_AFTER_DAYS in src/lib/data.js");
+  const theirs = Object.fromEntries(
+    [...block[1].matchAll(/([a-z_]+):\s*([0-9.]+)/g)].map((m) => [m[1], Number(m[2])]));
+  assert.deepEqual(THRESHOLDS.leadStale, theirs);
+  /* And both halves of the 0030 split have to be in it, or a meeting drops out
+   * of the call queue's ranking entirely. */
+  for (const s of ["meeting_booked", "meeting_complete"]) {
+    assert.ok(theirs[s] !== undefined, `${s} has no staleness limit`);
+  }
 });
 
 /* ================================================================== */

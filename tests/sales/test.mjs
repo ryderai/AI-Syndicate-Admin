@@ -11,7 +11,7 @@
  */
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import {
   ROE, CADENCE, CLOSED_STAGES, isOpenStage,
   localDayNumber, daysBetween, businessDaysBetween,
@@ -101,6 +101,28 @@ const TEAM = [
 /* ================================================================== */
 /* 1. THE COLUMN MATCHER                                               */
 /* ================================================================== */
+
+/* THE STAGES THE DATABASE ACCEPTS TODAY.
+ *
+ * Read from the LAST `admin_leads_stage_check` across every migration in order,
+ * because that is literally what Postgres ends up holding — 0027 and 0030 each
+ * widen the constraint and then narrow it again, so any single file, and any
+ * concatenation of a hand-picked few, gives the wrong answer. This used to name
+ * 0009 and 0015 explicitly; that stopped being the current constraint the
+ * moment 0027 ran, and nobody noticed until 0030 split the Meeting stage. */
+function stagesTheDatabaseAccepts() {
+  const dir = new URL("../../supabase/migrations/", import.meta.url);
+  const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
+  let last = null;
+  for (const f of files) {
+    const sql = readFileSync(new URL(f, dir), "utf8");
+    for (const m of sql.matchAll(/admin_leads_stage_check[\s\S]{0,200}?check \(stage in \(([\s\S]*?)\)\)/g)) {
+      last = m[1];
+    }
+  }
+  if (!last) throw new Error("no admin_leads_stage_check found in any migration");
+  return new Set([...last.matchAll(/'([a-z_0-9]+)'/g)].map((x) => x[1]));
+}
 
 test("every field the matcher can produce is a real field key", () => {
   const all = [...HEADER_LUXURY_AGENTS, ...HEADER_CAR_DEALERSHIP].map(guessSalesColumn).filter(Boolean);
@@ -245,7 +267,8 @@ test("the real values in the sheet map to sensible stages", () => {
   assert.equal(stageFromSheet("Yes - Email", "Contacted").stage, "contacted");
   assert.equal(stageFromSheet("Yes - Email and Phone", "Contacted").stage, "contacted");
   assert.equal(stageFromSheet("", "Closed - Lost").stage, "lost");
-  assert.equal(stageFromSheet("", "Bad contact info").stage, "bad_contact");
+  /* Was `bad_contact`, which migration 0027 merged into `not_a_fit`. */
+  assert.equal(stageFromSheet("", "Bad contact info").stage, "not_a_fit");
   assert.equal(stageFromSheet("No", "").stage, "new");
   assert.equal(stageFromSheet("", "").stage, "new");
 });
@@ -257,15 +280,19 @@ test("the status column wins over the Contacted? tick when they disagree", () =>
   assert.equal(stageFromSheet("Yes - Email", "Closed - Lost").stage, "lost");
 });
 
-test("the sheet's own Skip 90+ wording maps to the skip stage", () => {
-  assert.equal(stageFromSheet("", "Skip – 90+").stage, "skip_90");
+test("the sheet's own Skip 90+ wording maps to Not a fit, with the reason kept", () => {
+  /* Was `skip_90`. Migration 0027 merged that into `not_a_fit` and narrowed the
+   * constraint, so the importer had been producing a value the database refuses
+   * ever since — caught 2 Sep 2026 when the constraint check below was
+   * repointed from migration 0009 to the CURRENT constraint. The reason is not
+   * lost; it moves into the note, which is what the merge was for. */
+  assert.equal(stageFromSheet("", "Skip – 90+").stage, "not_a_fit");
+  assert.match(stageFromSheet("", "Skip – 90+").note, /90 or above/);
+  assert.equal(stageFromSheet("", "Bad contact info").stage, "not_a_fit");
 });
 
 test("every stage the importer can produce is one the database accepts", () => {
-  const sql = readFileSync(new URL("../../supabase/migrations/0009_sales.sql", import.meta.url), "utf8");
-  const m = /admin_leads_stage_check[\s\S]*?check \(stage in \(([\s\S]*?)\)\)/.exec(sql);
-  assert.ok(m, "could not find the stage constraint in migration 0009");
-  const allowed = new Set([...m[1].matchAll(/'([a-z_0-9]+)'/g)].map((x) => x[1]));
+  const allowed = stagesTheDatabaseAccepts();
   const produced = [
     ["Yes - Email", "Contacted"], ["", "Closed - Lost"], ["", "Bad contact info"],
     ["No", ""], ["", "Skip – 90+"], ["", "Reopened"], ["", "Proposal sent"],

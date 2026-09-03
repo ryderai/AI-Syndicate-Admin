@@ -108,21 +108,21 @@ export default function TaskDrawer({ task, clients, team, member, onPatch, onDel
    * months. Every future overlay should be written this way. */
   return createPortal(
     <>
-      <div className="adm-drawer-scrim" onClick={onClose} aria-hidden="true" />
-      <aside className="adm-drawer" ref={panelRef} role="dialog" aria-label={task.name || "Task"}>
-        <header className="adm-drawer-head">
-          <div className="adm-drawer-kicker">
+      <div className="adm-tp-scrim" onClick={onClose} aria-hidden="true" />
+      <aside className="adm-tp" ref={panelRef} role="dialog" aria-label={task.name || "Task"}>
+        <header className="adm-tp-head">
+          <div className="adm-tp-kicker">
             {client ? (
               <button type="button" className="adm-db-link" onClick={() => onOpenClient?.(client.id)}>
                 {client.name} ↗
               </button>
             ) : <span className="adm-db-empty">No client</span>}
           </div>
-          <button type="button" className="adm-drawer-x" onClick={onClose} aria-label="Close">×</button>
+          <button type="button" className="adm-tp-x" onClick={onClose} aria-label="Close">×</button>
         </header>
 
         <textarea
-          className="adm-drawer-title"
+          className="adm-tp-title"
           value={draft.name}
           rows={Math.min(4, Math.max(1, Math.ceil((draft.name || "").length / 38)))}
           onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
@@ -131,7 +131,7 @@ export default function TaskDrawer({ task, clients, team, member, onPatch, onDel
           aria-label="Task name"
         />
 
-        <div className="adm-drawer-grid">
+        <div className="adm-tp-grid">
           {/* STATUS IS FOUR BUTTONS, NOT A DROPDOWN. Ryder, 2 Sep 2026:
               "allows easy editing of it and tagging it as to do, in progress,
               blocked, or done." A select hides three of the four answers behind
@@ -140,7 +140,7 @@ export default function TaskDrawer({ task, clients, team, member, onPatch, onDel
               values as the database check constraint in 0001, read from
               TASK_STATUSES so a fifth state can never appear in one place and
               not the other. */}
-          <div className="adm-drawer-f adm-drawer-f-wide">
+          <div className="adm-tp-f adm-tp-f-wide">
             <span>Status</span>
             <div className="adm-status-chips" role="group" aria-label="Status">
               {TASK_STATUS_FLOW.map((v) => (
@@ -154,13 +154,13 @@ export default function TaskDrawer({ task, clients, team, member, onPatch, onDel
               ))}
             </div>
           </div>
-          <label className="adm-drawer-f">
+          <label className="adm-tp-f">
             <span>Priority</span>
             <select className="adm-input" value={task.priority} onChange={(e) => onPatch(task, { priority: e.target.value })}>
               {TASK_PRIORITIES.map((v) => <option key={v} value={v}>{TASK_PRIORITY_LABELS[v] || v}</option>)}
             </select>
           </label>
-          <label className="adm-drawer-f">
+          <label className="adm-tp-f">
             <span>Due date</span>
             {/* Uncontrolled and committed whole. A `type="date"` input reports ""
                 on every keystroke until the date is complete, and saving that
@@ -170,21 +170,21 @@ export default function TaskDrawer({ task, clients, team, member, onPatch, onDel
               onChange={(e) => { if (!e.target.value || e.target.value.length === 10) onPatch(task, { due_date: e.target.value || null }); }}
             />
           </label>
-          <label className="adm-drawer-f">
+          <label className="adm-tp-f">
             <span>Client</span>
             <select className="adm-input" value={task.client_id || ""} onChange={(e) => onPatch(task, { client_id: e.target.value || null })}>
               <option value="">No client</option>
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </label>
-          <label className="adm-drawer-f">
+          <label className="adm-tp-f">
             <span>Category</span>
             <select className="adm-input" value={task.category || ""} onChange={(e) => onPatch(task, { category: e.target.value || null })}>
               <option value="">Empty</option>
               {TASK_CATEGORIES.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
           </label>
-          <label className="adm-drawer-f">
+          <label className="adm-tp-f">
             <span>Phase</span>
             <select className="adm-input" value={task.phase || ""} onChange={(e) => onPatch(task, { phase: e.target.value || null })}>
               <option value="">Empty</option>
@@ -193,22 +193,22 @@ export default function TaskDrawer({ task, clients, team, member, onPatch, onDel
           </label>
         </div>
 
-        <div className="adm-drawer-sec">
-          <div className="adm-drawer-lab">
+        <div className="adm-tp-sec">
+          <div className="adm-tp-lab">
             Who is on it
-            {ids.length > 1 ? <span className="adm-drawer-hint"> · {labelOf(ids[0])} is the primary</span> : null}
+            {ids.length > 1 ? <span className="adm-tp-hint"> · {labelOf(ids[0])} is the primary</span> : null}
           </div>
-          <div className="adm-drawer-people">
+          <div className="adm-tp-people">
             {people.length ? people.map((o) => {
               const on = ids.includes(o.value);
               const isPrimary = on && ids[0] === o.value;
               return (
-                <span key={o.value} className={`adm-drawer-person${on ? " on" : ""}`}>
+                <span key={o.value} className={`adm-tp-person${on ? " on" : ""}`}>
                   <button type="button" onClick={() => toggle(o.value)} title={on ? "Take them off" : "Put them on"}>
                     <Avatar name={o.label} />{o.label}{isPrimary && ids.length > 1 ? " · primary" : ""}
                   </button>
                   {on && !isPrimary ? (
-                    <button type="button" className="adm-drawer-primary" title="Make primary"
+                    <button type="button" className="adm-tp-primary" title="Make primary"
                       onClick={() => onPatch(task, { assignees: [o.value, ...ids.filter((x) => x !== o.value)] })}>
                       make primary
                     </button>
@@ -217,7 +217,7 @@ export default function TaskDrawer({ task, clients, team, member, onPatch, onDel
               );
             }) : <span className="adm-db-empty">Nobody here can be given delivery work.</span>}
           </div>
-          {!ids.length ? <div className="adm-drawer-hint">Nobody is on this task.</div> : null}
+          {!ids.length ? <div className="adm-tp-hint">Nobody is on this task.</div> : null}
         </div>
 
         <TaskUpdates
@@ -228,27 +228,27 @@ export default function TaskDrawer({ task, clients, team, member, onPatch, onDel
           onFallbackCommit={commit("latest_report")}
         />
 
-        <div className="adm-drawer-sec">
-          <div className="adm-drawer-lab">The brief <span className="adm-drawer-hint">· what the work is, and what done means</span></div>
+        <div className="adm-tp-sec">
+          <div className="adm-tp-lab">The brief <span className="adm-tp-hint">· what the work is, and what done means</span></div>
           <textarea
-            className="adm-input adm-drawer-ta adm-drawer-brief" rows={14} placeholder="Add the brief…"
+            className="adm-input adm-tp-ta adm-tp-brief" rows={14} placeholder="Add the brief…"
             value={draft.description}
             onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
             onBlur={commit("description")}
           />
         </div>
 
-        <footer className="adm-drawer-foot">
+        <footer className="adm-tp-foot">
           {!confirmDelete ? (
             <button type="button" className="btn btn-sm" onClick={() => setConfirmDelete(true)}>Delete this task</button>
           ) : (
             <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <span style={{ fontSize: 12 }}>Delete it for good?</span>
               <button type="button" className="btn btn-sm" onClick={() => setConfirmDelete(false)}>Keep it</button>
-              <button type="button" className="btn btn-sm adm-drawer-danger" onClick={() => onDelete(task)}>Delete</button>
+              <button type="button" className="btn btn-sm adm-tp-danger" onClick={() => onDelete(task)}>Delete</button>
             </span>
           )}
-          <span className="adm-drawer-hint">Everything here saves as you go.</span>
+          <span className="adm-tp-hint">Everything here saves as you go.</span>
         </footer>
       </aside>
     </>,

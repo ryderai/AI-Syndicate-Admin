@@ -160,18 +160,18 @@ export default function TaskUpdates({
   /* ---------------- the migration is not run yet ---------------- */
   if (missing) {
     return (
-      <div className="adm-drawer-sec">
-        <div className="adm-drawer-lab">
-          Where it stands <span className="adm-drawer-hint">· the one line every screen shows</span>
+      <div className="adm-tp-sec">
+        <div className="adm-tp-lab">
+          Where it stands <span className="adm-tp-hint">· the one line every screen shows</span>
         </div>
         <textarea
-          className="adm-input adm-drawer-ta" rows={3} placeholder="12 of 26 pages done."
+          className="adm-input adm-tp-ta" rows={3} placeholder="12 of 26 pages done."
           value={fallbackDraft}
           onChange={(e) => onFallbackChange(e.target.value)}
           onBlur={onFallbackCommit}
           maxLength={MAX_UPDATE}
         />
-        <div className="adm-drawer-note">
+        <div className="adm-tp-note">
           <strong>The dated history is off on this database.</strong> Run
           {" "}<code>supabase/migrations/0029_task_updates.sql</code> in Supabase and every update
           keeps its date and its author from then on. Until then this one line is all a task can
@@ -203,10 +203,10 @@ export default function TaskUpdates({
   const orphanLine = !list.length && line ? line : null;
 
   return (
-    <div className="adm-drawer-sec">
-      <div className="adm-drawer-lab">
+    <div className="adm-tp-sec">
+      <div className="adm-tp-lab">
         Updates
-        <span className="adm-drawer-hint">
+        <span className="adm-tp-hint">
           {agrees
             ? " · what has been reported on this, newest first. The top one is the line the Operations table and the Work page show."
             : " · what has been reported on this, newest first. The line on the row was set somewhere else — it is shown below."}
@@ -215,7 +215,7 @@ export default function TaskUpdates({
 
       <div className="adm-upd-new">
         <textarea
-          className="adm-input adm-drawer-ta" rows={3}
+          className="adm-input adm-tp-ta" rows={3}
           placeholder="What moved? e.g. 12 of 26 listing pages have schema now, the rest go up Thursday."
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -224,7 +224,7 @@ export default function TaskUpdates({
           aria-label="Write an update"
         />
         <div className="adm-upd-newfoot">
-          <span className="adm-drawer-hint">
+          <span className="adm-tp-hint">
             {draft.length > MAX_UPDATE - 200 ? `${MAX_UPDATE - draft.length} characters left` : "⌘/Ctrl + Enter posts it"}
           </span>
           <button
@@ -242,7 +242,7 @@ export default function TaskUpdates({
           </div>
           <div className="adm-upd-body">{strayLine}</div>
           <div className="adm-upd-foot">
-            <span className="adm-drawer-hint">
+            <span className="adm-tp-hint">
               Somewhere other than this panel set it — the report cell in the Operations table,
               the task edit box, the Notion import, or the assistant. Until it is kept below, the
               history and the row are telling two different stories.
@@ -261,7 +261,7 @@ export default function TaskUpdates({
           </div>
           <div className="adm-upd-body">{orphanLine}</div>
           <div className="adm-upd-foot">
-            <span className="adm-drawer-hint">
+            <span className="adm-tp-hint">
               It was typed straight onto the task — by the importer, the assistant, or a console
               older than this panel — so there is no date or author for it.
             </span>
@@ -273,9 +273,9 @@ export default function TaskUpdates({
       )}
 
       {rows === null ? (
-        <div className="adm-drawer-hint">Reading the updates…</div>
+        <div className="adm-tp-hint">Reading the updates…</div>
       ) : !list.length && !orphanLine ? (
-        <div className="adm-drawer-hint">Nothing reported yet. The first update you post becomes the line on the row.</div>
+        <div className="adm-tp-hint">Nothing reported yet. The first update you post becomes the line on the row.</div>
       ) : (
         <ol className="adm-upd-list">
           {list.map((r) => {
@@ -294,7 +294,7 @@ export default function TaskUpdates({
                 {isEditing ? (
                   <>
                     <textarea
-                      className="adm-input adm-drawer-ta" rows={3} value={editing.body}
+                      className="adm-input adm-tp-ta" rows={3} value={editing.body}
                       onChange={(e) => setEditing((x) => ({ ...x, body: e.target.value }))}
                       maxLength={MAX_UPDATE} aria-label="Edit this update"
                     />
@@ -310,9 +310,9 @@ export default function TaskUpdates({
                       <div className="adm-upd-foot">
                         {confirmId === r.id ? (
                           <>
-                            <span className="adm-drawer-hint">Remove this update?</span>
+                            <span className="adm-tp-hint">Remove this update?</span>
                             <button type="button" className="btn btn-sm" onClick={() => setConfirmId(null)}>Keep it</button>
-                            <button type="button" className="btn btn-sm adm-drawer-danger" disabled={busy} onClick={() => remove(r)}>Remove</button>
+                            <button type="button" className="btn btn-sm adm-tp-danger" disabled={busy} onClick={() => remove(r)}>Remove</button>
                           </>
                         ) : (
                           <>

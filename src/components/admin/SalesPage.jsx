@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  LEAD_STAGES, LEAD_STAGE_LABELS,
+  LEAD_STAGES, LEAD_STAGE_LABELS, LEAD_STAGE_HELP, PICKABLE_STAGES, HISTORICAL_STAGES,
   getFloorBoard, upsertLead, claimLead, releaseLead, addLeadActivity, logActivity,
   wonMessage,
   /* THE FLOOR, Aug 27 2026. Every one of these is ONE ACTION, ONE FUNCTION, and
@@ -15,6 +15,10 @@ import {
   /* Two clicks on the Contacted? cell. One function, because the ORDER of the
    * five writes behind it is the design — see logTouch in src/lib/data.js. */
   logTouch,
+  /* The stage box needs to be able to CREATE the thing the stage is waiting
+   * for, not just complain that it is missing. Proposal is the only gate whose
+   * requirement is a record rather than a date. */
+  upsertProposal,
 } from "../../lib/data.js";
 import {
   salesQueue, claimState, scoreGate, listHealth, isOpenStage, ROE,
@@ -22,6 +26,8 @@ import {
      a scheduled job that hands leads back on its own. See LEAD_LISTS. */
   LEAD_LISTS, LEAD_LIST_IDS, onLeadList, leadListCounts,
   textGate, LOST_REASONS, WON_REASONS, MIN_REASON_NOTE_CHARS, checkCloseReason,
+  /* The day the cadence already says the next touch is due. */
+  nextCadenceDate,
 } from "../../../lib/sales-rules.js";
 /* Tags are an append-only event log, so "which tags are on this lead" is a
  * replay rather than a column read. One place decides it. */
@@ -30,6 +36,12 @@ import { currentTags, tagHistory } from "../../../lib/lead-tags.js";
  * target so a lead dragged onto Won cannot behave differently from one picked
  * out of a menu. lib/stage-move.js is pure and tests/stage-move attacks it. */
 import { BOARD_STAGES, READ_ONLY_COLUMNS, dropCheck, stageMoveBody, cleanNote } from "../../../lib/stage-move.js";
+/* The one industry list and the one country/region list. Both pure, both in
+ * lib/ so the tests can attack them without a browser. Before 2 Sep 2026
+ * neither existed: `vertical` was free text in three places with three
+ * different placeholders, and `country` was a column nothing ever wrote. */
+import { BUSINESS_TYPES, BUSINESS_TYPE_GROUPS } from "../../../lib/business-types.js";
+import { COUNTRIES, REGION_LABEL, regionsFor, normaliseRegion } from "../../../lib/regions.js";
 /* The rep-by-rep table this page used to open in a modal now has a page of its
  * own — src/components/admin/SalesStats.jsx, reached from Sales → Stats. It
  * calls outreachByRep, lossReasons and repStats there, from the same
@@ -48,6 +60,12 @@ import {
 } from "../../lib/salesSheet.js";
 import { ACTIVITY_WINDOW_DAYS } from "../../lib/data.js";
 import { apiFetch } from "../../lib/adminApi.js";
+/* What the page was doing last time it was on screen, and the last board it
+ * read. Module state that lives as long as the TAB — see the long note in the
+ * file for why it is not localStorage. */
+import {
+  readBoardCache, writeBoardCache, readView, writeView,
+} from "../../lib/salesSession.js";
 import { useScreenContext } from "../../lib/screenContext.js";
 import { useRoute } from "../../lib/router.js";
 import { toast } from "../../lib/toast.js";
@@ -59,6 +77,16 @@ import { StagePill, ClaimChip, ScoreChip, LateBox, Tile, MiniBar, SiteLink } fro
  * claimTextSend lives in the database. */
 import SalesProfile, { LogModal } from "./salesProfile.jsx";
 import SalesSheet from "./salesSheet.jsx";
+/* The box the stage gate opens instead of refusing. Its own file because it is
+ * reached from three places — the sheet's chip, the drawer's select and a drag
+ * on the board — and all three must get the same box. */
+import StageNeedModal from "./stageNeed.jsx";
+/* A date and a time as two halves that cannot be half-answered. The old
+ * `datetime-local` reported EMPTY until all five of its sub-fields were filled,
+ * so a visible date read as no date and the form refused without saying AM/PM
+ * was missing. Ryder hit it on the very first contact he added. */
+import WhenPicker from "./whenPicker.jsx";
+import { whenProblem } from "../../../lib/when.js";
 import { Popover } from "./opsCells.jsx";
 import { StartOverPanel } from "./salesStartOver.jsx";
 import SalesOwnersPanel from "./salesOwners.jsx";
@@ -207,6 +235,26 @@ const MODES = {
 };
 
 export default function SalesPage({ member, mode = null }) {
+  /* SEEDED FROM THE LAST VISIT IN THIS TAB — 2 Sep 2026.
+   *
+   * The note further down says filters are deliberately not remembered BETWEEN
+   * VISITS, and that is still true and still right: nothing here is written to
+   * localStorage, so a rep who opens the console tomorrow gets a clean page and
+   * cannot be looking at last week's filter without knowing it.
+   *
+   * What changed is what "a visit" means. Clicking Clients and coming back is
+   * not a new visit — it is the middle of one — and until today it cleared the
+   * search box, all three filters, the view and the open record, because
+   * AdminDashboard unmounts the page on every route change. Ryder: "someone
+   * goes to a different page as they're working on a client, and then they go
+   * to a different page, come back — it's gonna reset the whole thing." */
+  /* ONE KEY PER PAGE. Sales and The Floor are the SAME component with a
+   * different `mode`, and both were reading and writing the default key — so
+   * the Floor's filters, its open record and its view seeded the owner's Sales
+   * page and vice versa. Found by a checker on 2 Sep 2026; the key argument
+   * existed for exactly this and was never passed. */
+  const viewKey = mode === "floor" ? "floor" : "sales";
+  const seed = readView(viewKey);
   /* NAMED ROLES, NOT "not sales". This gates the owner-only controls — the
    * person dropdown, Rep numbers, Import, Start over — and a member with no role
    * at all satisfied `role !== "sales"`, so a page that had lost track of who was
@@ -232,10 +280,10 @@ export default function SalesPage({ member, mode = null }) {
   const lock = mode ? (MODES[mode] || MODES.floor) : null;
   const [board, setBoard] = useState(null);
   // A locked page is the sheet and nothing else, so it opens there.
-  const [view, setView] = useState(lock ? "lists" : member.role === "sales" ? "day" : "lists");
-  const [q, setQ] = useState("");
-  const [listFilter, setListFilter] = useState("all");
-  const [stageFilter, setStageFilter] = useState("open");
+  const [view, setView] = useState(seed.view ?? (lock ? "lists" : member.role === "sales" ? "day" : "lists"));
+  const [q, setQ] = useState(seed.q ?? "");
+  const [listFilter, setListFilter] = useState(seed.listFilter ?? "all");
+  const [stageFilter, setStageFilter] = useState(seed.stageFilter ?? "open");
   /* `lock ? "all"`, NOT `lock.owner`. MODES has carried no `owner` key since the
    * Aug 27 rebuild, so this was seeding `undefined` — which no filter reads
    * (filterLeads skips the owner dropdown whenever `lock` is set) but which
@@ -245,9 +293,9 @@ export default function SalesPage({ member, mode = null }) {
    * page. tileOff was fixed on Aug 27; this half was missed. Found by an
    * adversarial review, 30 Aug 2026. */
   const [ownerFilter, setOwnerFilter] = useState(
-    lock ? "all" : member.role === "sales" ? member.user_id : "all",
+    seed.ownerFilter ?? (lock ? "all" : member.role === "sales" ? member.user_id : "all"),
   );
-  const [openId, setOpenId] = useState(null);
+  const [openId, setOpenId] = useState(seed.openId ?? null);
   const [importOpen, setImportOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -255,6 +303,16 @@ export default function SalesPage({ member, mode = null }) {
   const [ownersOpen, setOwnersOpen] = useState(false);
   /* Which lead is mid-claim on My Day, or null. See quickClaim. */
   const [claimingId, setClaimingId] = useState(null);
+  /* The Reload sales button: whether a read is in flight, and when the board on
+   * screen was read. Both only exist so the button can be honest — a button
+   * that gives no sign it did anything gets pressed four times. */
+  const [reloading, setReloading] = useState(false);
+  /* When the board on screen was read. In STATE, so the label re-renders with
+     it — reading the module cache during render froze the number. */
+  const [loadedAt, setLoadedAt] = useState(() => readBoardCache()?.at || null);
+  /* The proposal this page created for a stage move that then failed, so a
+     retry updates it instead of making a second one. */
+  const madeProposal = useRef(null);
 
   /* ---- THE AVAILABILITY SWITCH — Mine · Available · All ----
    *
@@ -289,6 +347,9 @@ export default function SalesPage({ member, mode = null }) {
    * from inside the drawer, and one variable meant closing the reason box also
    * closed the record behind it. */
   const [closing, setClosing] = useState(null);      // { row, kind: 'won' | 'lost' }
+  /* WHAT THE STAGE IS WAITING FOR — 2 Sep 2026. Same shape as `closing`: the
+   * gate opens a box instead of refusing. { lead, stage, note } */
+  const [staging, setStaging] = useState(null);
   const [tagging, setTagging] = useState(null);      // the row whose tags are open
   const [scanning, setScanning] = useState(null);    // the row whose scan panel is open
   const [logging, setLogging] = useState(null);      // { row, kind }
@@ -296,6 +357,13 @@ export default function SalesPage({ member, mode = null }) {
    * — one at a time, so pressing four buttons does not open four panels — and
    * `emailDraft` is what came back, or null. */
   const [drafting, setDrafting] = useState(null);
+  /* THE MAILBOXES THIS PERSON MAY SEND FROM — 2 Sep 2026.
+   *
+   * Read once, from `/api/gmail-accounts`, which is the server deciding: a rep
+   * sees their own, an owner or admin also sees the shared ones. The list is
+   * only what the picker draws; `/api/gmail-send` checks again at the door, so
+   * a stale list cannot become permission. */
+  const [mailboxes, setMailboxes] = useState([]);
   const [emailDraft, setEmailDraft] = useState(null);
 
   /* THE SIX TILES ARE ONE ROW OF SWITCHES — Ryder, Aug 26 2026.
@@ -427,16 +495,54 @@ export default function SalesPage({ member, mode = null }) {
      * vocabulary, the current tag state and the scans — a widening, not a second
      * board, so nothing that already read the old one changed. */
     const b = await getFloorBoard();
+    const cached = writeBoardCache(b);
+    setLoadedAt(cached.at);
     setBoard(b);
     setNow(new Date().toISOString());
   }, []);
 
+  /* READ ONCE, THEN ONLY WHEN ASKED — 2 Sep 2026.
+   *
+   * getFloorBoard() is ELEVEN table reads. It ran on every mount, and this page
+   * mounts every time somebody navigates back to it, so walking to the Inbox and
+   * back cost eleven reads and a full-page spinner over work in progress.
+   *
+   * Now: if this tab has already read the board, draw that immediately. A fresh
+   * read happens when a write asks for one, when the header's Refresh is
+   * pressed, and when somebody presses `Reload sales` — three deliberate acts,
+   * none of them "you changed page".
+   *
+   * THE CACHE IS NEVER THE ANSWER TO A WRITE. Every save on this page still
+   * calls load(), which re-reads and re-caches; nothing shows a row it just
+   * changed from a stale copy. */
   useEffect(() => {
-    load();
+    let alive = true;
+    apiFetch("/api/gmail-accounts")
+      .then((res) => { if (alive && res?.ok) setMailboxes(res.data?.mailboxes || res.data?.accounts || []); })
+      /* A mailbox list that will not load is not an error worth a toast: the
+       * panel says "no mailbox connected" and Copy still works. */
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    const cached = readBoardCache();
+    if (cached) {
+      setBoard(cached.board);
+      setLoadedAt(cached.at);
+      setNow(new Date().toISOString());
+    } else {
+      load();
+    }
     const onRefresh = () => load();
     window.addEventListener("adm-refresh", onRefresh);
     return () => window.removeEventListener("adm-refresh", onRefresh);
   }, [load]);
+
+  /* Hand the session what the page is looking at, so coming back finds it. */
+  useEffect(() => {
+    writeView({ q, listFilter, stageFilter, ownerFilter, openId, view }, viewKey);
+  }, [q, listFilter, stageFilter, ownerFilter, openId, view, viewKey]);
 
   const teamName = useCallback((userId) => {
     if (!userId || !board) return null;
@@ -565,26 +671,36 @@ export default function SalesPage({ member, mode = null }) {
     if (patch.stage === "won" && lead.stage !== "won") { askForReason(lead, "won"); return false; }
     if (patch.stage === "lost" && lead.stage !== "lost") { askForReason(lead, "lost"); return false; }
 
-    /* ---- THE STAGE GATE — 30 Aug 2026 ----
+    /* ---- THE STAGE GATE — 30 Aug 2026, rewritten 2 Sep 2026 ----
      *
-     * Follow up and Meeting need a date; Proposal needs a proposal with a number
-     * on it. HubSpot ships exactly this as a Required checkbox on the stage that
-     * blocks the save, and Salesforce as a validation rule.
+     * Follow up and both Meeting stages need a date; Proposal needs a proposal
+     * with a number on it. HubSpot ships exactly this as a Required checkbox on
+     * the stage that blocks the save, and Salesforce as a validation rule.
      *
-     * IT REFUSES, IT DOES NOT SILENTLY FIX. Booking a date on the rep's behalf
-     * would be the console inventing a fact about the future. The refusal names
-     * the field and the control that sets it, so the sentence is an instruction
-     * rather than a complaint.
+     * IT USED TO REFUSE AND SAY WHAT WAS MISSING. Ryder, 2 Sep 2026: "in the
+     * editing sidebar you cant click the stage and change it because it requires
+     * the notes about it, but it should have the popup for that as well, no
+     * button should ever be clicked and then it not actually work and move the
+     * client" — and, about the board: "when I drag a client from like one stage
+     * to another it doesnt allow the move because it requires the info about the
+     * move, but make the popup come up when you drag it so that it doesnt deny
+     * the move and it gets all the info."
      *
-     * Returns FALSE, which is the same contract Won and Lost use: the chip
-     * picker skips its note step, because a note about a move that did not
-     * happen is worse than no note. */
+     * He is right, and the old note in this spot argued itself into the wrong
+     * answer: it said booking a date on the rep's behalf would be inventing a
+     * fact, which is true, and then concluded "so refuse", which does not
+     * follow. ASKING is the third option. So the gate now opens a box that
+     * collects exactly the missing thing and then makes the move — the same
+     * shape Won and Lost have used since Aug 27.
+     *
+     * Still returns FALSE, and that contract has not changed: nothing has been
+     * written YET, so the chip picker must not follow up with "moved, add a
+     * note?" for a move that has not happened. The box carries the note itself,
+     * and it carries the note it was handed so a drag's own sentence is kept. */
     if (patch.stage && patch.stage !== lead.stage) {
       const need = STAGE_REQUIRES[patch.stage];
       if (need && !stageRequirementMet(patch.stage, lead, { proposals: board?.proposals || [] })) {
-        toast.warn(need.ask, `${need.why} ${need.kind === "date"
-          ? "Log a touch on this row and set the date when it asks “and next?”, or set the follow-up on the record."
-          : "Open the record, add the proposal under Proposals, then set the stage."}`);
+        setStaging({ lead, stage: patch.stage, note });
         return false;
       }
     }
@@ -887,6 +1003,83 @@ export default function SalesPage({ member, mode = null }) {
     return true;
   }, [member.user_id, member.full_name, member.email, load]);
 
+  /* SEND IT FROM THE CONNECTED MAILBOX — 2 Sep 2026.
+   *
+   * Ryder: "emails need to be able to be sent from the crm from the email that
+   * is connected."
+   *
+   * SEND FIRST, LOG SECOND. `/api/gmail-send` is the only thing that can say an
+   * email actually left; logging before it answered would write a touch for an
+   * email that never went, and no later screen could tell. If the send fails,
+   * nothing is written and the words are still in the box.
+   *
+   * The log then goes through doEmailSent — the SAME path the copy button and
+   * the Contacted? cell use — so the claim, the date stamps the stats read, the
+   * cadence and the timeline line behave identically however the email left. */
+  const doEmailSend = useCallback(async (lead, { from, subject, body } = {}) => {
+    if (!lead?.email) return { ok: false, error: "This contact has no email address on the record." };
+    /* A TIMED-OUT REQUEST IS NOT A REFUSAL — 2 Sep 2026, found by a second
+     * adversarial checker.
+     *
+     * apiFetch turns a 60-second timeout and any dropped connection into the
+     * same `{ ok: false, error }` shape Gmail's own "that address was rejected"
+     * arrives in. Told "nothing was sent", a rep presses again — and a function
+     * that ran long has already delivered the first one. So the two are
+     * separated here and said differently: a refusal invites another press, an
+     * unknown answer never does. */
+    const res = await apiFetch("/api/gmail-send", {
+      method: "POST",
+      /* `leadId` so the endpoint can link the Gmail thread to this person and
+       * stamp first_email_at — that link is what lets a reply be filed against
+       * them later, and only the endpoint knows the thread id.
+       *
+       * `touchLoggedByCaller` because the touch is logged below, through
+       * logTouch, which also claims the lead and sets the stat dates. Without
+       * the flag the email would be counted twice and the cadence would jump
+       * two steps on one send. */
+      body: {
+        account: from, to: lead.email, subject, body,
+        leadId: lead.id, touchLoggedByCaller: true,
+      },
+    });
+    if (!res?.ok) {
+      const why = String(res?.error || "");
+      /* No HTTP status means the request never got an answer at all. With a
+       * status, the server spoke and its words are the truth. */
+      if (!res?.status && /timed out|network|failed to fetch|load failed/i.test(why)) {
+        return {
+          ok: false, unknown: true,
+          error: `No answer came back from the server (${why.toLowerCase()}), so we cannot tell whether this went out.`,
+        };
+      }
+      return { ok: false, error: res.error || "The server did not answer." };
+    }
+
+    /* IT WENT, AND THE LOG DID NOT. Two ways this happens: somebody else
+     * claimed the lead in the seconds the send took, or the write itself
+     * failed. Neither is fixed by sending again, so this comes back as its own
+     * state — `sentNotLogged` — and the panel takes the Send button away rather
+     * than inviting a second real email to the prospect. 2 Sep 2026, found by
+     * an adversarial checker reading the failure path.
+     *
+     * ONE ATTEMPT, NOT TWO. There was a retry here for an hour; a second
+     * checker showed why it had to go. logTouch claims the lead before it
+     * writes, so a retry passes the same stale lead object, the claim matches
+     * nothing, and the rep is told "somebody got there first" about a lead they
+     * now hold. And if the first write LANDED and only its answer was lost, the
+     * retry writes a second touch — the exact double-count the flag on the
+     * request above exists to prevent. */
+    const logged = await doEmailSent(lead, { subject, body });
+    if (logged === false) {
+      return {
+        ok: false, sentNotLogged: true,
+        error: "It was sent, but the touch did not log.",
+      };
+    }
+    toast.success("Sent", `From ${from} to ${lead.email}.`);
+    return { ok: true };
+  }, [doEmailSent]);
+
   /* The follow-up date, after the email is already logged. The SAME writer the
    * Contacted? picker's third step uses, so one column is written one way. */
   const doEmailNext = useCallback(async (lead, next) => {
@@ -1121,7 +1314,10 @@ export default function SalesPage({ member, mode = null }) {
     if (tileFilter === "atRisk") {
       list = list.filter((l) => ["claim_expired", "cold"].includes(claimState(l, now).state));
     } else if (tileFilter === "meetings") {
-      list = list.filter((l) => ["meeting", "proposal"].includes(l.stage));
+      /* BOTH HALVES OF THE MEETING SPLIT (0030), and `meeting` for any row a
+         backup restores. This filter and the tile COUNT below it must name the
+         same stages or the tile says 4 and opens a list of 2. */
+      list = list.filter((l) => ["meeting", "meeting_booked", "meeting_complete", "proposal"].includes(l.stage));
     } else if (tileFilter === "won") {
       list = list.filter((l) => l.stage === "won");
     }
@@ -1262,7 +1458,7 @@ export default function SalesPage({ member, mode = null }) {
       mine: open.filter((l) => l.owner_id === member.user_id).length,
       owed: owed.length,
       atRisk: open.filter((l) => ["claim_expired", "cold"].includes(claimState(l, now).state)).length,
-      meetings: all.filter((l) => ["meeting", "proposal"].includes(l.stage)).length,
+      meetings: all.filter((l) => ["meeting", "meeting_booked", "meeting_complete", "proposal"].includes(l.stage)).length,
       won: all.filter((l) => l.stage === "won").length,
     };
   }, [scopeLeads, lock, availability, member, now, owed.length]);
@@ -1549,7 +1745,15 @@ export default function SalesPage({ member, mode = null }) {
           <option value="open">Open only</option>
           <option value="all">Every stage</option>
           <option value="closed">Finished with</option>
-          {LEAD_STAGES.map((s) => <option key={s} value={s}>{LEAD_STAGE_LABELS[s]}</option>)}
+          {/* NOT every value in LEAD_STAGES. That array keeps `meeting`,
+              `skip_90` and `bad_contact` so an old row still reads with a
+              label, and mapping it here put three filters in the dropdown that
+              can only ever produce an empty list — a control whose only
+              possible outcome is "nothing here". A checker found it the same day
+              `meeting` was added to the array. Historical values are readable,
+              not filterable. */}
+          {LEAD_STAGES.filter((st) => !HISTORICAL_STAGES.includes(st))
+            .map((s) => <option key={s} value={s}>{LEAD_STAGE_LABELS[s]}</option>)}
         </select>
 
         {/* GONE on a locked page, not disabled and not obeyed. Every value it
@@ -1574,6 +1778,38 @@ export default function SalesPage({ member, mode = null }) {
         )}
 
         <div className="adm-sl-baractions">
+
+          {/* RELOAD SALES — 2 Sep 2026.
+              Ryder: "have it load all those sales the first time, but then don't
+              reload it until they click a button at the top that says reload
+              sales. That way, anything they're working on always stays."
+              This is the only thing on this page that re-reads the pipeline
+              because somebody asked it to, and it says when the board on screen
+              was read so "is this current?" has an answer. */}
+          <button
+            className="btn"
+            disabled={reloading}
+            title="Read the pipeline again from the database. Nothing you have open is lost."
+            onClick={async () => {
+              setReloading(true);
+              try { await load(); } finally { setReloading(false); }
+              toast.success("Sales reloaded", "Everything you had open is still open.");
+            }}
+          >
+            {reloading ? "Reloading…" : "↻ Reload sales"}
+          </button>
+          {/* THE TIME IT WAS READ, not how long ago — 2 Sep 2026.
+              This said "loaded 2 minutes ago", computed during render from
+              module state with nothing ticking and nothing subscribed, so after
+              the first paint it froze on whatever it said and only moved when
+              some unrelated state change happened to re-render the page. A
+              checker pointed out that the one number making the no-reload design
+              safe was the number that lied. A clock time cannot go stale. */}
+          <span className="adm-sl-faint" style={{ fontSize: 11, alignSelf: "center" }}>
+            {loadedAt
+              ? `read at ${new Date(loadedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
+              : "not loaded yet"}
+          </span>
 
           {/* FIVE BUTTONS BECAME ONE MENU AND ONE BUTTON.
               Rep numbers, Where leads come from, Import a sheet and Start over
@@ -1793,8 +2029,92 @@ export default function SalesPage({ member, mode = null }) {
              control. It used to write the stage itself, so Follow up, Meeting
              and Proposal were gated on the sheet and free in the drawer. */
           onStage={(stage, note, extra = {}) => patchLead(openLead, { stage, ...extra }, note)}
+          /* ASSIGNING GOES THROUGH THE PAGE'S ONE CLAIM PATH — 2 Sep 2026.
+             This drawer hand-wrote `owner_id`, `claimed_at`,
+             `cadence_started_at` and `claim_contacted_at` itself through its own
+             upsert, so it skipped the permission check AND the race guard that
+             assignLead has carried since Aug 27: `expectUnclaimed` is what stops
+             two people claiming the same lead and both being told they got it.
+             Two ways to do one thing is two behaviours, and the one that skips
+             the guard is the one that loses a lead. */
+          onAssign={(userId) => assignLead({ lead: openLead }, userId)}
+          onDraftEmail={(lead) => doDraftEmail(lead)}
+          drafting={drafting === openLead.id}
           onClose={() => setOpenId(null)}
           reload={load}
+        />
+      )}
+
+      {/* ---- WHAT THE STAGE NEEDS. It collects it and then moves the lead. ---- */}
+      {staging && (
+        <StageNeedModal
+          lead={staging.lead}
+          stage={staging.stage}
+          note={staging.note}
+          onClose={() => { madeProposal.current = null; setStaging(null); }}
+          onSave={async ({ when, amount, note }) => {
+            const need = STAGE_REQUIRES[staging.stage];
+            const patch = { stage: staging.stage };
+
+            if (need?.kind === "date") {
+              patch[need.field] = when;
+            } else if (need?.kind === "proposal") {
+              /* Make the thing the stage is waiting for, THEN move. If the
+               * proposal fails to save, the stage must not move — otherwise the
+               * pipeline holds a Proposal with nothing to total, which is the
+               * one thing this gate exists to prevent.
+               *
+               * `id` ON A RETRY. If the proposal saved and the LEAD write then
+               * failed, the box stays open with the amount still in it — and
+               * pressing the button again used to insert a SECOND proposal for
+               * the same deal. A checker found it. Keeping the id turns the
+               * retry into an update. */
+              /* WRITTEN AGAINST THE COLUMNS `admin_proposals` ACTUALLY HAS.
+               *
+               * The first version sent `client_id`, which is NOT a column on
+               * that table — Postgres rejects the whole row over one unknown
+               * name, so the move failed with "Could not find the 'client_id'
+               * column of 'admin_proposals' in the schema cache". It also
+               * omitted `title`, which is NOT NULL, so it would have failed a
+               * second time after the first was fixed.
+               *
+               * Ryder hit it within minutes of the box shipping, and the repo
+               * already has a note about this exact mistake: three files once
+               * wrote column names the tables do not have. I made it again in
+               * the code that note is attached to. `tests/db-columns` now reads
+               * the migrations and fails on any key that is not a real column.
+               *
+               * The firm is `company_id` here, and it comes off the lead. */
+              const res = await upsertProposal({
+                ...(madeProposal.current ? { id: madeProposal.current } : {}),
+                lead_id: staging.lead.id,
+                company_id: staging.lead.company_id || null,
+                title: `Proposal for ${staging.lead.company || staging.lead.name || "this contact"}`,
+                amount_cents: Math.round(Number(amount) * 100),
+                currency: "usd",
+                status: "sent",
+                sent_at: new Date().toISOString(),
+                created_by: member.user_id,
+              });
+              if (!res.ok) return { ok: false, error: res.error };
+              if (res.row?.id) madeProposal.current = res.row.id;
+            }
+
+            const ok = await patchLeadRaw(staging.lead, patch, note || staging.note);
+            /* NO SECOND load(). patchLeadRaw already re-reads the board at the
+             * end, and this called it again — two eleven-table reads per stage
+             * move, in the change whose whole point is not re-reading eleven
+             * tables. Found by a checker.
+             *
+             * AND NO SECOND SENTENCE. patchLeadRaw has already shown a toast
+             * carrying the real reason; returning a vague one here put a less
+             * informative message on screen next to the accurate one. Returning
+             * `ok: false` with no error keeps the box open with the words in it
+             * and lets the toast do the explaining. */
+            if (ok === false) return { ok: false };
+            setStaging(null);
+            return { ok: true };
+          }}
         />
       )}
 
@@ -1861,10 +2181,32 @@ export default function SalesPage({ member, mode = null }) {
       {emailDraft && (
         <EmailDraftModal
           draft={emailDraft}
+          mailboxes={mailboxes}
           onClose={() => setEmailDraft(null)}
           onRedraft={(angle) => doDraftEmail(emailDraft.lead, angle)}
+          onSend={(payload) => doEmailSend(emailDraft.lead, payload)}
           onSent={(text) => doEmailSent(emailDraft.lead, text)}
           onNext={(next) => doEmailNext(emailDraft.lead, next)}
+          /* The day the cadence already said, so the follow-up step opens with
+             it chosen. `+ 1` because the touch just logged is now done. */
+          nextDefault={nextCadenceDate(
+            /* THE LEAD AS IT NOW IS, not as it was when the panel opened — this
+               touch may have just claimed it, and a lead still reading
+               `owner_id: null` makes the cadence "unclaimed" and prefills
+               nothing at all. */
+            board.leads?.find((l) => l.id === emailDraft.lead.id) || emailDraft.lead,
+            /* NO `+ 1`. doEmailSent awaits load(), which re-reads the timeline
+               and recomputes touchCounts INCLUDING the row it just wrote — so
+               adding one counted the same email twice and prefilled a day one
+               whole cadence step late (day 9 where the rules said day 3), under
+               a line claiming it was "the cadence's own day". 2 Sep 2026, found
+               by a second checker running it end to end. */
+            board.touchCounts?.[emailDraft.lead.id] || 0,
+            /* `now`, the page's own render clock, NOT Date.now() — reading the
+               clock during render makes the same props draw two different
+               screens, and this page already keeps one for exactly that. */
+            now,
+          )}
         />
       )}
 
@@ -1872,7 +2214,7 @@ export default function SalesPage({ member, mode = null }) {
         <SalesImportModal member={member} team={board.team} onClose={() => setImportOpen(false)} reload={load} />
       )}
       {addOpen && (
-        <AddContactModal member={member} lists={board.lists} onClose={() => setAddOpen(false)} reload={load} />
+        <AddContactModal member={member} lists={board.lists} team={board.team || []} onClose={() => setAddOpen(false)} reload={load} />
       )}
       {ownersOpen && (
         <Modal
@@ -2315,6 +2657,10 @@ function PipelineView({ rows, teamName, companyById, onOpen, onMove, canEdit }) 
     const rect = e.currentTarget.getBoundingClientRect();
     setMoving(lead.id);
     let ok = false;
+    /* NO NOTE FROM THE DRAG ITSELF. `patchLeadRaw` composes the timeline line
+     * from the two stages; passing the same sentence in as a note would write
+     * it twice — `Old → New — "Old → New"`. If the stage needs a date or a
+     * proposal, the page opens the box and the box collects the note. */
     try { ok = (await onMove(lead, stage)) !== false; } finally { setMoving(null); }
 
     /* Won and Lost open the reason box instead and return false. No note box
@@ -2582,39 +2928,203 @@ function FirmsView({ board, scopeLeads, rows, teamName, onOpen, hideNames = fals
 /* MODALS                                                              */
 /* ================================================================== */
 
-function AddContactModal({ member, lists, onClose, reload }) {
-  const [f, setF] = useState({ name: "", company: "", title: "", email: "", phone: "", domain: "", city: "", state: "", list_id: "", notes: "" });
+/* ADD A CONTACT — rebuilt 2 Sep 2026.
+ *
+ * Four things Ryder asked for, all of them because of what the old form did:
+ *
+ * 1. CANADA. `admin_leads.country` has existed since migration 0025 and nothing
+ *    in the console ever wrote it. A Canadian contact got a province typed into
+ *    a box labelled "FL". The country now picks the region list and the WORD
+ *    for it — State in the US, Province in Canada.
+ *
+ * 2. AN INDUSTRY LIST. There was no list anywhere and `vertical` was free text
+ *    in three places, so the sheet's Industry grouping counted `realtor` and
+ *    `real estate` as two trades. lib/business-types.js is the one list.
+ *
+ * 3. A DEAL STAGE, and whatever that stage needs. "then there also needs to be
+ *    deal stage where they can click the deal stage it's in." If the stage has
+ *    a requirement — a meeting date, a proposal amount — it is collected HERE,
+ *    because sending somebody to add a contact and then move it is two jobs.
+ *
+ * 4. IT CLAIMS TO THEM. "automatically claim it to them and not on the floor."
+ *    The old form never set `owner_id`, so every hand-added contact landed
+ *    unclaimed on the Floor and the toast told the person to go and claim their
+ *    own contact. It is theirs by default now — and because he also said
+ *    "people wanna be adding a contact for someone else", the owner is a picker
+ *    with their own name already in it, not a hidden assumption.
+ *
+ * THE CLAIM STAMPS ARE THE ONES claimLead WRITES — `claimed_at` and
+ * `cadence_started_at` set, `claim_contacted_at` null. A claim with no clock
+ * behind it is the sheet's original failure mode, so a lead that arrives
+ * already owned has to arrive with the same clock as one claimed by hand.
+ */
+function AddContactModal({ member, lists, team, onClose, reload }) {
+  const [f, setF] = useState({
+    name: "", company: "", title: "", email: "", phone: "", domain: "",
+    country: "US", city: "", state: "", vertical: "",
+    stage: "new", when: "", amount: "",
+    /* THE TWO HALVES OF THE DATE, kept beside the finished answer.
+     * `when` is null until BOTH are set — that is the whole point of the picker
+     * — so the ISO alone cannot say WHICH half is missing, and "pick a date and
+     * a time" while a date sits on screen is the same unhelpful sentence Ryder
+     * hit in the first place. */
+    whenParts: { date: "", minutes: null },
+    owner_id: member.user_id, list_id: "", notes: "",
+  });
   const [busy, setBusy] = useState(false);
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  /* THE REASON IT DID NOT SAVE, ON THE FORM — 2 Sep 2026. Ryder: "when i fill
+   * in a contact and go to save it it errors for some reason and i cant even
+   * see why." A toast is the wrong place for the one sentence somebody has to
+   * act on: it is beside the form, it times out, and it can be behind
+   * something. This sits under the button until it is fixed. */
+  const [failed, setFailed] = useState(null);
+  const set = (k) => (e) => setF((cur) => ({ ...cur, [k]: e.target.value }));
+
+  /* Changing the country cannot leave a state code from the old one behind —
+   * "ON" is a province and not a state, and a stale code is a wrong fact
+   * rather than a blank. */
+  const setCountry = (e) => setF((cur) => ({ ...cur, country: e.target.value, state: "" }));
+
+  const need = STAGE_REQUIRES[f.stage];
+  const regions = regionsFor(f.country);
+  const regionWord = REGION_LABEL[f.country] || "State or region";
+
+  /* WHO THIS PERSON MAY ACTUALLY HAND A LEAD TO — 2 Sep 2026.
+   *
+   * This offered every active member to everybody, and migration 0020's insert
+   * policy refuses a lead owned by somebody else unless you are an admin:
+   * `admin_is_member() and (admin_is_admin() or owner_id = auth.uid() or
+   * owner_id is null)`. So a rep who picked a colleague got a raw row-level
+   * security error out of Postgres. A checker found it.
+   *
+   * The same rule assignLead has carried since Aug 27, and its note applies
+   * here too: a disabled control is only as good as the ones somebody
+   * remembered to disable. A rep sees themselves and the floor. */
+  const canAssign = member.role === "owner" || member.role === "admin";
+  const owners = (team || [])
+    .filter((m) => m.active !== false)
+    .filter((m) => canAssign || m.user_id === member.user_id);
 
   const save = async () => {
-    if (!f.name.trim() && !f.company.trim()) { toast.warn("Give them a name or a firm"); return; }
-    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) { toast.warn("That email does not look right"); return; }
+    setFailed(null);
+    if (!f.name.trim() && !f.company.trim()) { setFailed("Give them a name or a firm."); return; }
+    if (f.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) { setFailed(`"${f.email}" does not look like an email address.`); return; }
+
+    /* WHAT THE STAGE NEEDS, CHECKED BEFORE THE INSERT. Creating the lead and
+     * then failing to move it would leave a contact sitting in New with the
+     * person believing they had set a stage. */
+    let when = null;
+    if (need?.kind === "date") {
+      const half = whenProblem(f.whenParts.date, f.whenParts.minutes);
+      /* WHICH HALF IS MISSING. This said `need.ask` — "when are you picking
+       * this back up?" — while a date sat plainly on screen with only AM/PM
+       * unset, which is exactly what happened to Ryder. */
+      if (half) { setFailed(`${need.ask} ${half}`); return; }
+      const at = Date.parse(f.when);
+      if (!Number.isFinite(at)) { setFailed(`${need.ask} Pick a date and a time.`); return; }
+      if (need.when === "future" && at <= Date.now()) {
+        setFailed(`${LEAD_STAGE_LABELS[f.stage]} means it has not happened yet, so pick a date in the future.`);
+        return;
+      }
+      if (need.when === "past" && at > Date.now()) {
+        setFailed(`${LEAD_STAGE_LABELS[f.stage]} means it has already happened, so the date cannot be in the future.`);
+        return;
+      }
+      when = f.when;
+    }
+    if (need?.kind === "proposal" && !(Number(f.amount) > 0)) {
+      setFailed(`${need.ask} ${need.why}`); return;
+    }
+
     setBusy(true);
+    const now = new Date().toISOString();
+    const claimed = f.owner_id
+      ? { owner_id: f.owner_id, claimed_at: now, cadence_started_at: now, claim_contacted_at: null }
+      : { owner_id: null };
+
     const res = await upsertLead({
       name: f.name.trim() || null, company: f.company.trim() || null, title: f.title.trim() || null,
       email: f.email.trim() || null, phone: f.phone.trim() || null, domain: f.domain.trim() || null,
-      city: f.city.trim() || null, state: f.state.trim() || null,
+      /* "other" IS AN ANSWER and is stored as one. Writing null for it made a
+         deliberate "somewhere else" indistinguishable from never having been
+         asked, which is the guess-nothing rule in lib/regions.js broken by the
+         only screen that writes the column. */
+      country: f.country || null,
+      city: f.city.trim() || null,
+      state: normaliseRegion(f.country, f.state) || null,
+      vertical: f.vertical.trim() || null,
       list_id: f.list_id || null, notes: f.notes.trim() || null,
-      source: "manual", stage: "new",
+      source: "manual",
+      stage: f.stage,
+      ...(need?.field && when ? { [need.field]: when } : {}),
+      ...claimed,
     });
-    setBusy(false);
-    if (!res.ok) { toast.error("Could not save", res.error); return; }
-    if (res.row?.id) {
+    if (!res.ok) {
+      setBusy(false);
+      /* BOTH: the toast for somebody who has looked away, and the sentence on
+       * the form for somebody looking straight at it. Nothing typed is lost. */
+      setFailed(res.error || "The database refused that.");
+      toast.error("Could not save", res.error);
+      return;
+    }
+
+    const id = res.row?.id || null;
+
+    /* The proposal is a record of its own, made after the lead exists because it
+     * needs the lead's id. If it fails the contact is still saved and the
+     * message says exactly that — losing a typed-in contact over a proposal
+     * would be worse than a stage that needs correcting. */
+    let proposalFailed = null;
+    if (id && need?.kind === "proposal") {
+      /* `title` is NOT NULL on admin_proposals, and this insert did not send
+       * one — the same class of bug as the `client_id` above, one field along. */
+      const pr = await upsertProposal({
+        lead_id: id,
+        title: `Proposal for ${f.company.trim() || f.name.trim() || "this contact"}`,
+        amount_cents: Math.round(Number(f.amount) * 100),
+        currency: "usd", status: "sent", sent_at: new Date().toISOString(),
+        created_by: member.user_id,
+      });
+      if (!pr.ok) proposalFailed = pr.error;
+    }
+
+    if (id) {
+      const owner = owners.find((m) => m.user_id === f.owner_id);
+      const ownerLine = !f.owner_id
+        ? "Left on the floor."
+        : f.owner_id === member.user_id
+          ? "Claimed by them as they added it."
+          : `Claimed for ${owner?.full_name || owner?.email || "another rep"}.`;
       await addLeadActivity({
-        leadId: res.row.id, actor: member.user_id, type: "import",
-        body: `Added by hand by ${member.full_name || member.email}.`,
+        leadId: id, actor: member.user_id, type: "import",
+        body: `Added by hand by ${member.full_name || member.email}. ${ownerLine}`,
       });
     }
     await logActivity({ actor: member.user_id, kind: "lead_added", title: `Added contact: ${f.name || f.company}` });
-    toast.success("Added", "On the floor as New. Claim it before you reach out.");
+    setBusy(false);
+
+    if (proposalFailed) {
+      toast.warn("Contact saved — the proposal did not", `${proposalFailed} Open the record and add it under Proposals.`);
+    } else {
+      const mine = f.owner_id === member.user_id;
+      toast.success("Added", mine
+        ? `Yours, at ${LEAD_STAGE_LABELS[f.stage] || f.stage}. It is already on your list.`
+        : f.owner_id
+          ? `${LEAD_STAGE_LABELS[f.stage] || f.stage}, claimed for ${owners.find((m) => m.user_id === f.owner_id)?.full_name || "them"}.`
+          : "On the floor. Nobody holds it.");
+    }
     onClose();
     await reload();
   };
 
   return (
-    <Modal open onClose={onClose} kicker="SALES" title="Add a contact" width={620}
+    <Modal open onClose={onClose} kicker="SALES" title="Add a contact" width={660}
       footer={<>
+        {failed && (
+          <div style={{ flex: "1 1 100%", fontSize: 12.5, color: "#b42318", fontWeight: 600, marginBottom: 8 }}>
+            {failed} Nothing you typed is lost — fix it and press the button again.
+          </div>
+        )}
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn btn-accent" onClick={save} disabled={busy}>{busy ? "Saving…" : "Add contact"}</button>
       </>}>
@@ -2625,9 +3135,80 @@ function AddContactModal({ member, lists, onClose, reload }) {
         <Field label="Website"><TextInput value={f.domain} onChange={set("domain")} placeholder="chendental.com" /></Field>
         <Field label="Email"><TextInput type="email" value={f.email} onChange={set("email")} /></Field>
         <Field label="Phone"><TextInput value={f.phone} onChange={set("phone")} /></Field>
-        <Field label="City"><TextInput value={f.city} onChange={set("city")} /></Field>
-        <Field label="State"><TextInput value={f.state} onChange={set("state")} placeholder="FL" /></Field>
       </div>
+
+      <Field label="What kind of business" hint="Pick the closest one. This is what the Industry column and every industry breakdown read.">
+        <Select
+          value={f.vertical} onChange={set("vertical")}
+          options={[["", "— not sure yet —"]]}
+          groups={BUSINESS_TYPE_GROUPS.map((g) => ({
+            label: g,
+            options: BUSINESS_TYPES.filter((t) => t.group === g).map((t) => [t.value, t.label]),
+          }))}
+        />
+      </Field>
+
+      <div className="adm-sl-grid2">
+        <Field label="Country">
+          <Select value={f.country} onChange={setCountry} options={COUNTRIES.map((c) => [c.code, c.label])} />
+        </Field>
+        <Field label="City"><TextInput value={f.city} onChange={set("city")} placeholder={f.country === "CA" ? "Toronto" : "Destin"} /></Field>
+        <Field label={regionWord}>
+          {regions.length
+            ? <Select value={f.state} onChange={set("state")}
+                options={[["", `— pick a ${regionWord.toLowerCase()} —`], ...regions]} />
+            : <TextInput value={f.state} onChange={set("state")} placeholder="Region" />}
+        </Field>
+        <Field label="Who owns it" hint="You, unless you are adding this for somebody else.">
+          <Select value={f.owner_id || ""} onChange={set("owner_id")}
+            options={[
+              ...owners.map((m) => [m.user_id, `${m.full_name || m.email}${m.user_id === member.user_id ? " (you)" : ""}`]),
+              ["", "Nobody — leave it on the floor"],
+            ]} />
+        </Field>
+      </div>
+
+      <Field label="Where is this deal" hint="It starts at New unless you already know better.">
+        <Select value={f.stage} onChange={set("stage")}
+          options={[
+            ["new", `${LEAD_STAGE_LABELS.new} — ${LEAD_STAGE_HELP.new}`],
+            /* WON, LOST AND NOT A FIT ARE ALL OFF THIS FORM. The first draft
+               excluded only Won, on the grounds that it creates a client record
+               and needs a written reason — and a checker pointed out that Lost
+               needs one too (`checkCloseReason`, enforced in markLeadLost), so
+               this form could create a lead at Lost with `lost_reason` null,
+               which is the column the whole Aug 27 reason box exists to fill.
+               Not a fit carries a reason for the same reason. Add the contact,
+               then close it from the record where the box lives. */
+            ...PICKABLE_STAGES
+              .filter((v) => !["won", "lost", "not_a_fit"].includes(v))
+              .map((v) => [v, `${LEAD_STAGE_LABELS[v] || v} — ${LEAD_STAGE_HELP[v] || ""}`]),
+          ]} />
+      </Field>
+
+      {/* WHATEVER THAT STAGE NEEDS, right here. The alternative is a contact
+          saved at New while the person believes they set a stage. Won is not
+          offered above: it creates a client record and needs a written reason,
+          which is its own flow and not a field on this form. */}
+      {need?.kind === "date" && (
+        <Field
+          label={need.ask}
+          hint={need.when === "past"
+            ? "The day it happened, and roughly what time. It can be in the past — that is what this stage means."
+            : "A day and a time. Every time says AM or PM, so there is nothing to type."}
+        >
+          <WhenPicker
+            value={f.when}
+            onChange={(iso, parts) => setF((cur) => ({ ...cur, when: iso || "", whenParts: parts }))}
+          />
+        </Field>
+      )}
+      {need?.kind === "proposal" && (
+        <Field label="How much is the proposal for?" hint="Dollars. It is saved as a proposal record on this contact.">
+          <TextInput type="text" inputMode="decimal" value={f.amount} onChange={set("amount")} placeholder="4500" />
+        </Field>
+      )}
+
       <Field label="Which list" hint="Lists are the tabs from the outreach sheet.">
         <Select value={f.list_id} onChange={set("list_id")}
           options={[["", "— none —"], ...lists.map((l) => [l.id, l.name])]} />
@@ -2691,16 +3272,28 @@ function CloseReasonModal({ lead, kind, onClose, onSave }) {
       open onClose={onClose} kicker={won ? "MARK IT WON" : "MARK IT LOST"} width={560}
       title={won ? "Why did they say yes?" : "Why did we lose it?"}
       footer={<>
+        {!gate.ok && !busy && (
+          <div style={{ flex: "1 1 100%", fontSize: 12.5, color: "#b42318", fontWeight: 600, marginBottom: 8 }}>
+            {gate.error}
+          </div>
+        )}
         <button className="btn" onClick={onClose}>Cancel</button>
         <button
           className="btn btn-accent" onClick={save}
           disabled={busy || !gate.ok}
-          /* The refusal is the title, so a greyed button always says why. A
-             disabled control with no reason reads as a broken one, and then
-             people stop trusting the page. */
+          /* THE REFUSAL IS IN THE LABEL, not only in a tooltip — 2 Sep 2026.
+             It was `title=`, which needs a hover, does nothing on a touch
+             screen, and sat three lines below the only other place the reason
+             appeared. Ryder typed twelve characters, saw a dead button, and
+             reported that Won would not save. A disabled control that does not
+             say why IS a broken one, whatever the code knows. */
           title={gate.ok ? undefined : gate.error}
         >
-          {busy ? "Saving…" : won ? "Mark it won" : "Mark it lost"}
+          {busy
+            ? "Saving…"
+            : left > 0
+              ? `${left} more character${left === 1 ? "" : "s"}`
+              : won ? "Mark it won" : "Mark it lost"}
         </button>
       </>}
     >

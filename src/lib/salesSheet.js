@@ -33,6 +33,16 @@ import { claimState, cadenceState, scoreGate, isOpenStage, daysBetween } from ".
  * chips on the row, the filter menu, the drawer's dated history and the overnight
  * sweep cannot come to four different answers about one lead. */
 import { currentTags } from "../../lib/lead-tags.js";
+/* The country's name for the sheet's new Country column. `COUNTRIES` is the one
+ * list; a second copy here would be a second answer. */
+import { COUNTRIES, normaliseCountry } from "../../lib/regions.js";
+
+/** "US" → "United States". Anything unrecognised is shown exactly as stored. */
+function countryName(value) {
+  const code = normaliseCountry(value);
+  if (!code) return String(value ?? "").trim();
+  return COUNTRIES.find((c) => c.code === code)?.label || String(value).trim();
+}
 
 /* ------------------------------------------------------------------ */
 /* The columns, in the sheet's order                                   */
@@ -79,7 +89,17 @@ export const SHEET_COLUMNS = [
    * already was: "the medspas in Destin" is a real question and there is no way
    * to ask it from a search box that also matches an email address. */
   { key: "city", label: "City", width: 130, where: "lead", edit: "text", sortable: true, filterable: true, groupable: true },
-  { key: "state", label: "State", width: 76, where: "lead", edit: "text", sortable: true, filterable: true, groupable: true },
+  /* "State / Province", not "State" — 2 Sep 2026. A Canadian row has a
+   * province in this column, and a checker pointed out the console was still
+   * printing it under a heading marked State, which is the exact complaint
+   * lib/regions.js opens with. Two words, and the column stops lying about
+   * half the pipeline. */
+  { key: "state", label: "State / Province", width: 96, where: "lead", edit: "text", sortable: true, filterable: true, groupable: true },
+  /* WHICH COUNTRY, at last. `admin_leads.country` has existed since migration
+   * 0025 and no screen has ever shown it, so a Canadian lead and an American
+   * one were indistinguishable here. Read-only: the country decides the region
+   * list, so the two are set together on the form and on the record. */
+  { key: "country", label: "Country", width: 84, where: "lead", sortable: true, filterable: true, groupable: true },
   /* TWO COLUMNS THAT HAVE ARRIVED WITH EVERY SHEET IMPORT SINCE AUG 25 AND HAVE
    * BEEN DISPLAYED NOWHERE. `employees` and `vertical` are real columns on
    * admin_companies, filled by lib/sales-import.js from the Apollo block, and
@@ -378,7 +398,10 @@ export function sheetRows(leads, ctx) {
 
 const STAGE_ORDER = [
   "new", "researching", "contacted", "in_conversation", "follow_up",
-  "meeting", "proposal", "won", "lost", "reopened", "skip_90", "bad_contact",
+  "meeting_booked", "meeting_complete", "proposal", "won", "lost", "reopened",
+  /* Historical values, kept so a row holding one sorts somewhere sensible
+   * instead of last. `meeting` is the pre-0030 single stage. */
+  "meeting", "skip_90", "bad_contact",
 ];
 /* Worst first: the claim states somebody has to do something about, in the
  * order they have to be done, then the quiet ones. These are exactly the
@@ -458,6 +481,9 @@ export function sortValue(row, key) {
     case "phone": return text(row.lead.phone);
     case "city": return text(row.lead.city);
     case "state": return text(row.lead.state);
+    /* The NAME, not the code. "CA" is Canada here and California in the column
+       next door, so the code alone is ambiguous on the same row. */
+    case "country": return text(countryName(row.lead.country));
     case "site_score": return num(row.score);
     case "website": return text(row.domain);
     case "list": return text(row.listName);
@@ -607,6 +633,7 @@ export function facetValue(row, key) {
     case "company": return String(row.lead.company_id || "__none");
     case "city": return String(row.lead.city || "__none");
     case "state": return String(row.lead.state || "__none");
+    case "country": return String(countryName(row.lead.country) || "__none");
     case "list": return String(row.lead.list_id || "__none");
     /* The firm's line of business, off the FIRM record where one exists — the
      * copied-down text on the lead is the fallback only, for the same reason

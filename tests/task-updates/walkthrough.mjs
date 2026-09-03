@@ -23,13 +23,20 @@ const ok = (name, cond, extra) => {
 
 const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium-1194/chrome-linux/chrome" });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+
+/* SET BEFORE ANY OF THE APP'S SCRIPTS RUN.
+ *
+ * This used to be `goto("/")` then `evaluate(setItem)` then `goto("/#/…")` —
+ * and the second goto is a HASH-ONLY change on the same document, so nothing
+ * reloads. `previewAccounts` had already read sessionStorage once, cached
+ * "nobody", and kept it, so the account picker sat there until the whole run
+ * timed out. It passed some runs and not others, which is the worst kind.
+ * addInitScript runs on every document before the page's own code. */
+await page.addInitScript(() => {
+  try { window.sessionStorage.setItem("adm-preview-account", "preview-user"); } catch { /* private mode */ }
+});
 const shot = (n) => page.screenshot({ path: `${SHOTS}${n}.png`, fullPage: false });
 
-/* With no Supabase keys the console asks who you want to be first, and holds
- * the answer per tab. Owner is the account the sample tasks are assigned to.
- * Set before the first load so the picker never gets in the way. */
-await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
-await page.evaluate(() => window.sessionStorage.setItem("adm-preview-account", "preview-user"));
 await page.goto(`${BASE}/#/dashboard/work`, { waitUntil: "networkidle" });
 /* Wait for a row to exist rather than for a number of milliseconds. A fixed
  * sleep passes on a fast run and fails on a slow one, and then the failure is
@@ -161,10 +168,10 @@ const firstName = (await page.locator(".adm-work-openrow-name").first().innerTex
  * a title-only target would not have covered. */
 await page.mouse.click(measured.reportPoint.x, measured.reportPoint.y);
 await page.waitForTimeout(700);
-const panel = page.locator(".adm-drawer");
+const panel = page.locator(".adm-tp");
 ok("clicking the REPORT LINE — the bottom of the words, which the old target missed — opens a panel", await panel.count() === 1);
-ok("...over everything, with the page behind it dimmed", await page.locator(".adm-drawer-scrim").count() === 1);
-const title = await page.locator(".adm-drawer-title").inputValue();
+ok("...over everything, with the page behind it dimmed", await page.locator(".adm-tp-scrim").count() === 1);
+const title = await page.locator(".adm-tp-title").inputValue();
 ok(`...showing THAT task ("${title}")`, title.trim() === firstName.trim(), `panel: ${title} / row: ${firstName}`);
 await shot("02-panel-open-from-the-work-page");
 
@@ -176,11 +183,11 @@ await shot("02-panel-open-from-the-work-page");
  * context. The panel came out at top -214px, height 1114, under a header at
  * z-index 20 while its own was 61. */
 const layout = await page.evaluate(() => {
-  const d = document.querySelector(".adm-drawer");
+  const d = document.querySelector(".adm-tp");
   const h = document.querySelector(".dash-header");
   const c = document.querySelector(".dash-content");
   const r = d.getBoundingClientRect();
-  const at = (x, y) => { const e = document.elementFromPoint(x, y); return e ? !!e.closest(".adm-drawer") : null; };
+  const at = (x, y) => { const e = document.elementFromPoint(x, y); return e ? !!e.closest(".adm-tp") : null; };
   return {
     parentIsBody: d.parentElement === document.body,
     top: Math.round(r.top),
@@ -208,7 +215,7 @@ ok("...and the page wrapper no longer keeps a transform, which is what caused bo
  * shrinking. Checked by measurement because it reads as "the top of the panel
  * is cut off" rather than as a sizing bug. */
 const nameBox = await page.evaluate(() => {
-  const t = document.querySelector(".adm-drawer-title");
+  const t = document.querySelector(".adm-tp-title");
   const r = t.getBoundingClientRect();
   return { value: t.value, height: Math.round(r.height), needs: t.scrollHeight, fontSize: getComputedStyle(t).fontSize };
 });
@@ -218,7 +225,7 @@ ok("...and it is the name of the task that was opened", nameBox.value.trim() ===
 await shot("02b-the-panel-covers-the-window");
 
 /* ---- 3a. a task nobody has reported on says so, rather than showing blank ---- */
-await page.locator(".adm-drawer").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+await page.locator(".adm-tp").evaluate((el) => { el.scrollTop = el.scrollHeight; });
 await page.waitForTimeout(300);
 /* This task has a line and no updates — the exact state ~100 imported Notion
  * tasks are in. It must be shown for what it is, not silently counted as
@@ -237,7 +244,7 @@ ok("...and the unposted-line box is gone", await page.locator(".adm-upd-orphan")
 await shot("03b-kept-as-the-first-update");
 
 /* ---- 3b. a task that HAS a history shows it ---- */
-await page.locator(".adm-drawer-x").click();
+await page.locator(".adm-tp-x").click();
 await page.waitForTimeout(500);
 const WITH_HISTORY = "Schema on all listing pages";
 await page.locator(".adm-work-openrow").filter({ hasText: WITH_HISTORY }).first().click();
@@ -249,7 +256,7 @@ ok("the newest one is marked as the line the row shows", /on the row/i.test(newe
 const histText = await page.locator(".adm-upd-list").innerText();
 ok("...and the older one is still there — this is what used to be thrown away",
   /Schema template agreed/.test(histText), histText.slice(0, 300));
-await page.locator(".adm-drawer").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+await page.locator(".adm-tp").evaluate((el) => { el.scrollTop = el.scrollHeight; });
 await page.waitForTimeout(300);
 await shot("03c-the-updates-on-this-task");
 
@@ -264,9 +271,9 @@ ok("...and it is the one marked as the line on the row",
   await page.locator(".adm-upd").first().evaluate((el) => el.classList.contains("newest")));
 await shot("04-update-posted");
 
-await page.locator(".adm-drawer-x").click();
+await page.locator(".adm-tp-x").click();
 await page.waitForTimeout(600);
-ok("the panel closes", await page.locator(".adm-drawer").count() === 0);
+ok("the panel closes", await page.locator(".adm-tp").count() === 0);
 const rowText = await page.locator(".card").filter({ hasText: WITH_HISTORY }).first().innerText();
 ok("THE ROW BEHIND IT NOW SHOWS THE NEW LINE, with no reload",
   rowText.includes(stamp.slice(0, 40)), rowText.slice(0, 300));
@@ -300,7 +307,7 @@ await page.waitForTimeout(900);
 ok("A REWRITTEN UPDATE SAYS SO — a dated record cannot be changed silently",
   await page.locator(".adm-upd-tag", { hasText: "edited" }).count() === 1);
 await shot("08-a-rewritten-update-is-marked");
-await page.locator(".adm-drawer-x").click();
+await page.locator(".adm-tp-x").click();
 await page.waitForTimeout(500);
 
 /* ---- 7. the same panel on Operations ---- */
@@ -310,9 +317,9 @@ const opsName = page.locator(".adm-db-openname").first();
 if (await opsName.count()) {
   await opsName.click();
   await page.waitForTimeout(700);
-  ok("the SAME panel opens from the Operations table", await page.locator(".adm-drawer").count() === 1);
-  ok("...with the same four status chips in it", await page.locator(".adm-drawer .adm-status-chip").count() === 4);
-  ok("...and the same updates history", await page.locator(".adm-drawer .adm-upd-new").count() === 1);
+  ok("the SAME panel opens from the Operations table", await page.locator(".adm-tp").count() === 1);
+  ok("...with the same four status chips in it", await page.locator(".adm-tp .adm-status-chip").count() === 4);
+  ok("...and the same updates history", await page.locator(".adm-tp .adm-upd-new").count() === 1);
   await shot("09-the-same-panel-on-operations");
 } else {
   ok("the Operations table rendered a task name to open", false, "no .adm-db-openname found");
@@ -325,7 +332,7 @@ if (await opsName.count()) {
  * assistant. The panel cannot stop them; it can refuse to claim its newest
  * update is what everybody else is reading when it is not. */
 /* Step 7 left the panel open over the table. */
-await page.locator(".adm-drawer-x").click().catch(() => {});
+await page.locator(".adm-tp-x").click().catch(() => {});
 await page.waitForTimeout(600);
 
 const strayCell = page.locator(".adm-db-btn").filter({ hasText: "Rewritten during the driven check." }).first();
@@ -337,7 +344,7 @@ if (await strayCell.count()) {
   await page.waitForTimeout(900);
   await page.locator(".adm-db-openname").filter({ hasText: WITH_HISTORY }).first().click();
   await page.waitForTimeout(800);
-  const drawerText = await page.locator(".adm-drawer").innerText();
+  const drawerText = await page.locator(".adm-tp").innerText();
   ok("THE PANEL SAYS THE ROW'S LINE CAME FROM SOMEWHERE ELSE, instead of claiming an update",
     /not one of these updates/i.test(drawerText), drawerText.slice(-500));
   ok("...and stops badging its newest update as the one on the row",

@@ -125,13 +125,27 @@ select.adm-input { cursor: pointer; }
 .adm-table tbody tr:last-child td { border-bottom: 0; }
 
 /* ---------- Modal ---------- */
+/* A POPUP IS ALWAYS ABOVE A PANEL — raised from 1200 on 2 Sep 2026.
+   The task panel went to 1260 that morning so the page's own header could not
+   cover it, and that put every side panel ABOVE the modal layer: opening "Log
+   an email" from a lead record drew the box and then drew the record on top of
+   half of it. Ryder: "when in sidebar and a popup appears make sure the popup
+   always comes on top and not behind the sidebar."
+
+   The order, top to bottom, and every one of these is a deliberate step:
+     9600  toasts        — a toast you cannot see is a toast that did not happen
+     1400  popovers      — they belong to the control that opened them
+     1300  modals        — a question always sits over what asked it
+     1260  side panels   — above the page, below anything asking a question
+       20  the page
+   Nothing may be added between these without a note saying why. */
 .adm-modal-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(10, 34, 69, 0.45);
   backdrop-filter: blur(3px);
   -webkit-backdrop-filter: blur(3px);
-  z-index: 1200;
+  z-index: 1300;
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -2168,7 +2182,27 @@ select.adm-input { cursor: pointer; }
 .adm-sl-sel { width: 150px; }
 /* `flex-shrink: 0`, so the buttons keep their size and the search gives way
    instead — a squashed "+ Add a contact" is worse than a shorter search box. */
-.adm-sl-baractions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+/* THE TOOLBAR STAYS ON THE PAGE — 2 Sep 2026.
+   `flex-shrink: 0` on a group that grew by two items (Reload sales, and the
+   time the board was read) pushed the row past the right edge of the card, so
+   the stage and owner filters ended up off screen. Ryder: "make sure they are
+   at the top and look good and are big enough to read and click without it
+   bleeding to the right."
+   It wraps onto a second line now instead of overflowing, and it still sits at
+   the end of the row when there is room. */
+.adm-sl-baractions {
+  margin-left: auto; display: flex; gap: 8px; align-items: center;
+  flex-wrap: wrap; min-width: 0;
+}
+/* The bar itself cannot overflow its card, whatever is put in it. */
+.adm-sl-bar { max-width: 100%; overflow-x: hidden; }
+/* BIG ENOUGH TO READ AND CLICK. These were 12.5px with 7px of padding — a
+   dropdown you have to aim at. 13.5px and a 38px tall target. */
+.adm-sl-sel {
+  font-size: 13.5px; padding: 9px 11px; min-height: 38px;
+  max-width: 210px;
+}
+.adm-sl-bar .btn { min-height: 38px; }
 
 /* ---- chips ------------------------------------------------------- */
 .adm-sl-pill {
@@ -2302,7 +2336,27 @@ select.adm-input { cursor: pointer; }
 }
 
 /* ---- the profile drawer ------------------------------------------ */
-.adm-sl-drawer { width: min(660px, 96vw); }
+/* CONTAINED, AT EVERY WIDTH — 2 Sep 2026.
+   660 → 620, and `96vw` → a fixed 28px gutter. MEASURED, at 1440, 1280 and
+   1100: the panel is 620px, nothing inside it reaches past its own right edge,
+   and the page grows no horizontal scrollbar. Ryder: "everything has to stay
+   contained."
+
+   To be exact about what the second half does, because a comment that
+   overstates is worse than none: on any window wider than 648px this is simply
+   620px anchored to the right edge, which is what a side panel should be. The
+   gutter only bites BELOW 648px, where it stops the panel becoming the whole
+   screen with no way back to the page behind it. */
+.adm-sl-drawer { width: min(620px, calc(100vw - 28px)); }
+
+/* NOTHING INSIDE IT MAY BE WIDER THAN IT IS. `min-width: 0` is the flex escape
+   hatch: a flex item's default `min-width: auto` refuses to shrink below its
+   content, which is exactly how a tab bar and a row of tag chips pushed
+   themselves past the panel's own edge. */
+.adm-sl-drawer, .adm-sl-drawer * { max-width: 100%; min-width: 0; }
+.adm-sl-drawer { overflow-x: hidden; }
+.adm-sl-tabs { flex-wrap: wrap; row-gap: 2px; }
+.adm-sl-chips { max-width: 100%; }
 .adm-sl-name { font-family: var(--display); font-size: 20px; font-weight: 700; color: var(--ink); }
 .adm-sl-sub { font-size: 12.5px; color: var(--ink-dim); margin-top: 2px; }
 .adm-sl-chips { margin-top: 11px; display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
@@ -4039,7 +4093,21 @@ select.adm-input { cursor: pointer; }
 .adm-board-card.busy { opacity: 0.5; pointer-events: none; }
 
 /* ============================================================
-   THE TASK DRAWER — added 31 Aug 2026
+   THE TASK PANEL — added 31 Aug 2026, RENAMED 2 Sep 2026
+
+   IT WAS CALLED `.adm-drawer`, AND THAT WAS ALREADY TAKEN.
+
+   The lead record on the Sales page has used `.adm-drawer`, `.adm-drawer-head`,
+   `.adm-drawer-body` and `.adm-drawer-foot` since it was built. This block
+   redefined three of those four — the width (660 → 520), the header's padding
+   and gradient, the footer — so the moment the task panel shipped, the LEAD
+   drawer's header squashed its name into a two-line column and its tab bar bled
+   off the right of the window. Ryder saw it as "the sidebar is too wide and the
+   filters are off to the side and broken".
+
+   Everything here is `.adm-tp*` now and touches nothing else. A new component
+   that reuses another component's class names is not styling, it is editing that
+   component from a distance.
    Appended, nothing above touched. Ryder: "when i click a row i want it to
    open a sidebar with the actual to do item and all the info."
    ============================================================ */
@@ -4051,12 +4119,12 @@ select.adm-input { cursor: pointer; }
    just above the modal layer. It stays BELOW the toaster (9600) on purpose:
    posting an update shows a toast, and a toast you cannot see is a toast that
    did not happen. */
-.adm-drawer-scrim {
+.adm-tp-scrim {
   position: fixed; inset: 0; z-index: 1250;
   background: rgba(10, 15, 30, 0.28);
 }
 
-.adm-drawer {
+.adm-tp {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 1260;
   width: min(520px, 100vw);
   display: flex; flex-direction: column;
@@ -4068,18 +4136,18 @@ select.adm-input { cursor: pointer; }
   gap: 4px;
 }
 
-.adm-drawer-head {
+.adm-tp-head {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; min-height: 26px;
 }
-.adm-drawer-kicker { font-size: 12px; }
+.adm-tp-kicker { font-size: 12px; }
 
-.adm-drawer-x {
+.adm-tp-x {
   border: 0; background: none; cursor: pointer;
   font-size: 22px; line-height: 1; color: var(--ink-2);
   padding: 2px 6px; border-radius: 6px;
 }
-.adm-drawer-x:hover { background: var(--bg-2); color: var(--ink-1); }
+.adm-tp-x:hover { background: var(--bg-2); color: var(--ink-1); }
 
 /* The title is a textarea rather than an input so a long task name wraps
    instead of scrolling sideways inside a one-line box. */
@@ -4089,9 +4157,9 @@ select.adm-input { cursor: pointer; }
    textarea needing 38px, was rendered 14px tall — the most important thing on
    the panel reduced to a sliver, which is why it looked like the top of the
    panel was missing. Flex items shrink by default; these must not. */
-.adm-drawer > * { flex-shrink: 0; }
+.adm-tp > * { flex-shrink: 0; }
 
-.adm-drawer-title {
+.adm-tp-title {
   /* Belt as well as braces: a textarea's own min-height is `auto`, and this is
      the one element whose height is worked out from its text. */
   flex: 0 0 auto;
@@ -4101,48 +4169,48 @@ select.adm-input { cursor: pointer; }
   color: var(--ink-1); resize: none; padding: 6px 8px; margin: 2px 0 12px -8px;
   border-radius: 8px;
 }
-.adm-drawer-title:hover { border-color: var(--rule); }
-.adm-drawer-title:focus { outline: none; border-color: var(--accent, #6d5bd0); background: var(--bg-1); }
+.adm-tp-title:hover { border-color: var(--rule); }
+.adm-tp-title:focus { outline: none; border-color: var(--accent, #6d5bd0); background: var(--bg-1); }
 
-.adm-drawer-grid {
+.adm-tp-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px;
   padding-bottom: 14px; border-bottom: 1px solid var(--rule);
 }
-.adm-drawer-f { display: flex; flex-direction: column; gap: 4px; }
-.adm-drawer-f > span {
+.adm-tp-f { display: flex; flex-direction: column; gap: 4px; }
+.adm-tp-f > span {
   font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2);
 }
 
-.adm-drawer-sec { padding: 14px 0; border-bottom: 1px solid var(--rule); }
-.adm-drawer-lab { font-size: 12px; font-weight: 600; margin-bottom: 8px; }
-.adm-drawer-hint { font-size: 11px; font-weight: 400; color: var(--ink-2); }
+.adm-tp-sec { padding: 14px 0; border-bottom: 1px solid var(--rule); }
+.adm-tp-lab { font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.adm-tp-hint { font-size: 11px; font-weight: 400; color: var(--ink-2); }
 
-.adm-drawer-people { display: flex; flex-wrap: wrap; gap: 6px; }
-.adm-drawer-person { display: inline-flex; align-items: center; }
-.adm-drawer-person > button:first-child {
+.adm-tp-people { display: flex; flex-wrap: wrap; gap: 6px; }
+.adm-tp-person { display: inline-flex; align-items: center; }
+.adm-tp-person > button:first-child {
   display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid var(--rule); background: var(--bg-1); cursor: pointer;
   border-radius: 999px; padding: 4px 10px 4px 4px; font: inherit; font-size: 12px;
   color: var(--ink-2);
 }
-.adm-drawer-person.on > button:first-child {
+.adm-tp-person.on > button:first-child {
   border-color: var(--accent, #6d5bd0);
   background: color-mix(in srgb, var(--accent, #6d5bd0) 10%, transparent);
   color: var(--ink-1); font-weight: 600;
 }
-.adm-drawer-primary {
+.adm-tp-primary {
   border: 0; background: none; cursor: pointer; font: inherit; font-size: 10px;
   color: var(--ink-2); text-decoration: underline; margin-left: 4px;
 }
 
-.adm-drawer-ta { width: 100%; resize: vertical; font: inherit; font-size: 13px; line-height: 1.6; }
-.adm-drawer-brief { min-height: 220px; }
+.adm-tp-ta { width: 100%; resize: vertical; font: inherit; font-size: 13px; line-height: 1.6; }
+.adm-tp-brief { min-height: 220px; }
 
-.adm-drawer-foot {
+.adm-tp-foot {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; padding-top: 14px; flex-wrap: wrap;
 }
-.adm-drawer-danger { background: #b91c1c; border-color: #b91c1c; color: #fff; }
+.adm-tp-danger { background: #b91c1c; border-color: #b91c1c; color: #fff; }
 
 /* A row you can click. The chips inside it keep their own cursor, because they
    do their own thing and are not a way into the panel. */
@@ -4154,8 +4222,8 @@ select.adm-input { cursor: pointer; }
 .adm-db-row.is-clickable select { cursor: pointer; }
 
 @media (max-width: 640px) {
-  .adm-drawer { width: 100vw; }
-  .adm-drawer-grid { grid-template-columns: 1fr; }
+  .adm-tp { width: 100vw; }
+  .adm-tp-grid { grid-template-columns: 1fr; }
 }
 
 /* The task name is the way into the panel (31 Aug 2026). Left-aligned and
@@ -4170,8 +4238,8 @@ select.adm-input { cursor: pointer; }
 
 /* Four buttons, not a dropdown. Every state is on screen and the one it is in
    is filled in, so "where does this stand" is answered without a click. */
-.adm-drawer-f-wide { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
-.adm-drawer-f-wide > span {
+.adm-tp-f-wide { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
+.adm-tp-f-wide > span {
   font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--ink-2);
 }
@@ -4228,11 +4296,11 @@ select.adm-input { cursor: pointer; }
   font-size: 10.5px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
   font-family: var(--mono); color: var(--ink-2); margin-bottom: 5px;
 }
-.adm-drawer-note {
+.adm-tp-note {
   margin-top: 8px; font-size: 12px; line-height: 1.6; color: var(--ink-2);
   border-left: 3px solid var(--rule); padding-left: 10px;
 }
-.adm-drawer-note code { font-family: var(--mono); font-size: 11.5px; }
+.adm-tp-note code { font-family: var(--mono); font-size: 11.5px; }
 
 /* The task name on the Work page row — the way into the panel (2 Sep 2026).
    A plain button so it is reachable by keyboard and by a screen reader, styled

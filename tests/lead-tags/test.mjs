@@ -556,6 +556,17 @@ eq("an empty note is refused", checkCloseReason({ kind: "lost", reason: "price",
 eq('"n/a" is refused', checkCloseReason({ kind: "lost", reason: "price", note: "n/a" }).ok, false);
 eq('"-" is refused', checkCloseReason({ kind: "lost", reason: "price", note: "-" }).ok, false);
 eq('"N/A " with padding is refused too', checkCloseReason({ kind: "lost", reason: "price", note: "  N/A  " }).ok, false);
+/* THE BAR IS WHAT IT STOPS, NOT A NUMBER. It was 15 until 2 Sep 2026, when it
+ * turned out to be refusing "price too high" (14) — the exact answer the box
+ * exists to collect. These checks are written against the two things it is
+ * FOR, so lowering it again cannot quietly let those through. */
+ok("the two things a required box gets filled with are still refused",
+  !checkCloseReason({ kind: "lost", reason: "price", note: "n/a" }).ok
+  && !checkCloseReason({ kind: "lost", reason: "price", note: "-" }).ok
+  && !checkCloseReason({ kind: "lost", reason: "price", note: "  " }).ok);
+ok("...and a real short answer is not",
+  checkCloseReason({ kind: "lost", reason: "price", note: "price too high" }).ok);
+
 eq(`a note one character under MIN_REASON_NOTE_CHARS (${MIN_REASON_NOTE_CHARS}) is refused`,
   checkCloseReason({ kind: "lost", reason: "price", note: "x".repeat(MIN_REASON_NOTE_CHARS - 1) }).ok, false);
 eq("...and one exactly at the limit is accepted",

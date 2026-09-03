@@ -614,6 +614,7 @@ export default function SalesSheet({
       case "phone":
       case "city":
       case "state":
+      case "country":
         return plainCell(row, key);
 
       case "company": {
@@ -699,11 +700,16 @@ export default function SalesSheet({
          * Nothing is stored behind this cell. It asks the server to write one,
          * from that lead's stage, notes, timeline, tags, proposals and the
          * newest scan of their site, and opens it in a panel a person edits.
-         * IT NEVER SENDS — see api/lead-email.js.
+         * THE ENDPOINT NEVER SENDS — see api/lead-email.js, which has no send
+         * path and must not grow one. The PANEL it opens does, as of 2 Sep 2026:
+         * it names the mailbox the email will go from and puts the recipient on
+         * the send button. Drafting and sending are two doors, and only one of
+         * them may put mail on the internet.
          *
-         * Three states, and each one says something different:
+         * Four states, and each one says something different:
          *   no address        → nothing to write to
          *   bounced           → refused, with the date, because canEmail refuses
+         *   they replied      → refused: the pre-written email is wrong for them
          *   otherwise         → Draft email
          * The bounce case is a REFUSAL WITH A REASON rather than a hidden
          * button: a rule you cannot see is a rule nobody learns. */
@@ -720,11 +726,26 @@ export default function SalesSheet({
             </span>
           );
         }
+        /* THE SECOND DOOR — 2 Sep 2026, found by a second adversarial checker.
+         *
+         * The drawer's own draft button learned not to offer the pre-written
+         * outreach email to somebody who has written back; this cell did not,
+         * and `canEmail` above only knows about bounces and missing addresses.
+         * So the rule was half-enforced: one screen refused and the other did
+         * not, on the same contact. Same words as the drawer, and the endpoint
+         * now refuses it too. */
+        if (l.first_reply_at) {
+          return (
+            <span className="adm-sh-refused" title="They have replied. Write back yourself rather than sending the pre-written outreach email.">
+              they replied
+            </span>
+          );
+        }
         return (
           <button
             type="button" className="adm-db-btn adm-sh-draftbtn"
             disabled={!onDraftEmail || drafting === l.id}
-            title="Write the next email to this person, from everything on their record. It drafts — it never sends."
+            title="Writes the next email to this person from everything on their record, and shows it to you. Nothing goes until you press Send in the panel."
             onClick={(e) => { e.stopPropagation(); onDraftEmail?.(row); }}
           >
             {drafting === l.id ? "Writing…" : "Draft email"}

@@ -9,6 +9,25 @@
  *      person who wrote it.
  *   4. That header injection in a recipient is rejected.
  */
+/* THIS SUITE HAS NEVER RUN, ON ANY MACHINE, SINCE IT WAS WRITTEN.
+ *
+ * Found 2 Sep 2026 by a checker asking why "0 failing" was being counted over
+ * 37 suites when the folder holds 39. Two separate faults:
+ *
+ *   1. Every import was `./lib/…` and `./api/…`, which resolve to
+ *      tests/inbox/lib/… and tests/inbox/api/… — FIXED today, they are now
+ *      ../../ as every other suite writes them.
+ *
+ *   2. The named exports below do not exist. `lib/supabase-server.js` exports
+ *      isServerConfigured, getAdminSupabase, getUserFromRequest, requireMember
+ *      and readJson — there is no `DB`. So this file was written against an API
+ *      that either changed or was planned and never built.
+ *
+ * NOT GUESSED AT. Rewriting it would mean inventing what these four checks were
+ * meant to assert, and a test whose intent is invented is worse than one that
+ * does not run — it passes and means nothing. It is left failing loudly, and
+ * named as not-running wherever this repo reports a total, until somebody who
+ * knows what the Inbox contract is meant to be finishes it. */
 import { DB } from "./lib/supabase-server.js";
 import { GMAIL } from "./lib/google-oauth.js";
 import { resolveMailbox, listMailboxesFor, ensureLabels, clientLabelIds } from "./lib/gmail-mailbox.js";

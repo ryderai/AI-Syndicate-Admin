@@ -12,6 +12,11 @@ import {
   claimState, cadenceState, scoreGate, textGate, companyClaimWarning,
   CADENCE, CADENCE_STOPS, SEVEN_MOVES, ROE,
 } from "../../../lib/sales-rules.js";
+/* Country and region. One list, shared with the Add-contact form and the sheet,
+ * so the three cannot come to disagree about what a province is. */
+import {
+  COUNTRIES, REGION_LABEL, regionsFor, normaliseCountry, normaliseRegion, regionLabel,
+} from "../../../lib/regions.js";
 import { apiFetch } from "../../lib/adminApi.js";
 import { toast } from "../../lib/toast.js";
 import { Modal, Field, TextInput, TextArea, Select, timeAgo } from "./shared.jsx";
@@ -48,7 +53,11 @@ const TABS = [
 
 export default function SalesProfile({
   lead, company, siblings, member, team, teamName, now,
-  touches, onClose, reload,
+  touches, onClose, reload, onAssign,
+  /* The email drafter, handed down rather than reached for — the page owns the
+   * request, the panel and the send, so this record has no idea how an email
+   * is written or sent, which is what stops it growing a second way. */
+  onDraftEmail, drafting = false,
   /* ---- added Aug 27 2026 with The Floor ----
    *
    * `readOnly` is the row lock, DERIVED BY THE PAGE and handed down rather than
@@ -254,7 +263,11 @@ export default function SalesProfile({
   return createPortal(
     <>
       <div className="adm-drawer-backdrop" onClick={onClose} />
-      <div className="adm-drawer adm-sl-drawer" role="dialog" aria-modal="true" aria-label={`Lead: ${lead.name || lead.company}`}>
+      <div className="adm-drawer adm-sl-drawer" role="dialog" aria-modal="true" /* `full_name`/`business_name`, NOT name/company — neither of those
+             columns exists, so a screen reader announced this panel as "Lead:
+             undefined" from the day it was written. Found 2 Sep 2026 in a
+             Playwright error message, which printed the label. */
+        aria-label={`Lead: ${lead.full_name || lead.business_name || "unnamed contact"}`}>
         {/* ---- head ---- */}
         <div className="adm-drawer-head">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
@@ -417,7 +430,8 @@ export default function SalesProfile({
               lead={lead} member={member} team={team}
               claim={claim} cadence={cadence} text={text} gate={gate}
               busy={busy} onClaim={doClaim} onRelease={doRelease}
-              siblings={siblings} onLog={setLogOpen} onPatch={patch}
+              siblings={siblings} onLog={setLogOpen} onPatch={patch} onAssign={onAssign}
+              onDraftEmail={onDraftEmail} drafting={drafting}
               onFlip={flipToClient} onWin={doWin} teamName={teamName}
               /* THE GATED PATH, threaded down rather than reached for. Two
                  buttons in here set Meeting and Follow up — the exact two
@@ -471,7 +485,8 @@ export default function SalesProfile({
 
 function WorkTab({
   lead, member, team, claim, cadence, text, gate, busy,
-  onClaim, onRelease, siblings, onLog, onPatch, onStage, onFlip, onWin, teamName,
+  onClaim, onRelease, siblings, onLog, onPatch, onStage, onFlip, onWin, teamName, onAssign,
+  onDraftEmail, drafting,
   /* Both closes ask for a reason first — see doClose in the parent. Passed down
    * rather than reached for, so this component still has no idea how a deal is
    * recorded, which is what stops it growing a fourth way of doing it. */
@@ -563,7 +578,11 @@ function WorkTab({
             <div className="adm-sl-next-t">Your claim has run out</div>
             <div className="adm-sl-next-b">{claim.why} Log a first contact now and it is yours again, or hand it back.</div>
             <div className="adm-sl-next-a">
-              <button className="btn btn-accent" onClick={() => onLog("email")}>Log the first email</button>
+              {/* The first email is the thing being asked for here, so the way
+                  to write it belongs here too — not only three branches down
+                  in the cadence step. */}
+              <DraftEmailButton lead={lead} busy={busy} drafting={drafting} onDraftEmail={onDraftEmail} />
+              <button className="btn" onClick={() => onLog("email")}>Log the first email</button>
               <button className="btn" disabled={busy} onClick={onRelease}>Hand it back</button>
             </div>
           </>
@@ -580,12 +599,13 @@ function WorkTab({
             <div className="adm-sl-next-b">{CADENCE_STOPS.replied}</div>
             <div className="adm-sl-next-a">
               <button className="btn btn-accent" onClick={() => onLog("email")}>Log your reply</button>
-              {/* NOT a direct stage write. Meeting needs a date in the diary
-                  (STAGE_REQUIRES), and this button was the fastest way in the
-                  console to produce a Meeting with nothing booked — on the very
-                  panel that exists because somebody replied. It routes through
-                  the page's gate now, which refuses and says what is missing. */}
-              <button className="btn" onClick={() => onStage("meeting", "They replied and we are booking a meeting.")}>
+              {/* NOT a direct stage write, and no longer a refusal either.
+                  Meeting booked needs a date (STAGE_REQUIRES), and this button
+                  used to be the fastest way to be told no — on the very panel
+                  that exists because somebody replied. Since 2 Sep 2026 the
+                  page's gate OPENS THE DATE BOX instead of warning, so a button
+                  called "Book a meeting" books a meeting. */}
+              <button className="btn" onClick={() => onStage("meeting_booked", "They replied and we are booking a meeting.")}>
                 Book a meeting
               </button>
             </div>
@@ -628,7 +648,13 @@ function WorkTab({
             </div>
             <div className="adm-sl-next-b">{cadence.step.hint}</div>
             <div className="adm-sl-next-a">
-              <button className="btn btn-accent" onClick={() => onLog(cadence.step.kind)}>
+              {cadence.step.kind === "email" && (
+                <DraftEmailButton lead={lead} busy={busy} drafting={drafting} onDraftEmail={onDraftEmail} />
+              )}
+              <button
+                className={cadence.step.kind === "email" ? "btn" : "btn btn-accent"}
+                onClick={() => onLog(cadence.step.kind)}
+              >
                 Log {cadence.step.kind === "call" ? "a call" : "the email"}
               </button>
               <button className="btn" onClick={() => onLog("note")}>Add a note</button>
@@ -701,9 +727,15 @@ function WorkTab({
                upsert — so Follow up, Meeting and Proposal were gated on the
                sheet and free here. `closed_at` still rides along, because this
                is the only stage path in the console that sets it. */
+            /* NO NOTE. `patchLeadRaw` already composes the timeline line with
+               `stageMoveBody(from, to, note)`, so handing it a sentence that is
+               ALREADY "Old → New" produced `Old → New — "Old → New"` on the
+               person's timeline. A test forbids that hand-built arrow line, but
+               it only reads SalesPage.jsx, so this copy went unnoticed until 2
+               Sep 2026. The note argument is for a real note. */
             onStage(
               e.target.value,
-              `${LEAD_STAGE_LABELS[lead.stage] || lead.stage} → ${LEAD_STAGE_LABELS[e.target.value] || e.target.value}`,
+              null,
               ["lost", "skip_90", "bad_contact", "not_a_fit"].includes(e.target.value)
                 ? { closed_at: new Date().toISOString() }
                 : { closed_at: null },
@@ -729,23 +761,15 @@ function WorkTab({
         </label>
         <label className="adm-sl-fieldwrap">
           <div className="label">Whose is it</div>
+          {/* THROUGH THE PAGE'S ONE CLAIM PATH — 2 Sep 2026.
+              This wrote `owner_id`, `claimed_at`, `cadence_started_at` and
+              `claim_contacted_at` by hand through the drawer's own upsert, so it
+              skipped the permission check and — worse — the `expectUnclaimed`
+              race guard that stops two reps claiming the same lead and both
+              being told they got it. The clock still gets reset for a new owner;
+              claimLead does that, and it is the only thing that should. */}
           <select className="adm-input" value={lead.owner_id || ""} onChange={(e) => {
-            const v = e.target.value || null;
-            const stamp = new Date().toISOString();
-            /* A NEW owner gets a NEW clock. Keeping the previous rep's
-             * `claimed_at` handed the next person a claim that was already
-             * three weeks old, so their card read "run out" the moment they
-             * got it and the sweep took it back that night. Unassigning clears
-             * the cadence too, so the next claimer does not inherit a sequence
-             * that started weeks ago. */
-            onPatch(
-              v
-                ? (v === lead.owner_id
-                  ? { owner_id: v }
-                  : { owner_id: v, claimed_at: stamp, cadence_started_at: stamp, claim_contacted_at: null })
-                : { owner_id: null, claimed_at: null, cadence_started_at: null, claim_contacted_at: null },
-              v ? `Assigned to ${teamName(v)}` : "Handed back to the floor"
-            );
+            onAssign?.(e.target.value || null);
           }}>
             <option value="">Nobody — on the floor</option>
             {team.filter((t) => t.active).map((t) => <option key={t.user_id} value={t.user_id}>{t.full_name || t.email}</option>)}
@@ -770,7 +794,7 @@ function WorkTab({
           row lock serialises it and the second call reports already_customer)
           but the stage patch and its timeline line are written BEFORE that
           lock, so the record picked up two "→ Won" entries. */}
-      {mine && ["proposal", "meeting"].includes(lead.stage) && (
+      {mine && ["proposal", "meeting", "meeting_booked", "meeting_complete"].includes(lead.stage) && (
         <button className="btn btn-accent" style={{ marginTop: 18 }} disabled={busy} onClick={onFlip}>
           They signed — mark as won
         </button>
@@ -779,7 +803,70 @@ function WorkTab({
   );
 }
 
-function NextStep({ lead, onPatch }) {
+/* `readOnly` IS ACCEPTED NOW. It was passed in and dropped on the floor, which
+ * was latent — WorkTab returns early for a locked record — but it was one
+ * refactor away from an editable box on somebody else's lead, where migration
+ * 0020's row policy refuses the write. */
+/* DRAFT AND SEND, FROM THE RECORD — 2 Sep 2026.
+ *
+ * Ryder: "i want to add in this sidebar a send email button that drafts a email
+ * that you review, then click send."
+ *
+ * IT IS A DRAFT BUTTON, NOT A SEND BUTTON, and that is the whole design. It
+ * opens the panel: the email is on screen to be read and edited, the mailbox it
+ * will go from is named, and the recipient's address is printed on the send
+ * button itself. Nothing leaves on this click.
+ *
+ * ONE COMPONENT, used in both branches where an outbound email is the next act
+ * — the cadence step, and the expired claim asking for a first contact. Two
+ * copies of a button are two labels and two disabled rules to keep in step, and
+ * this one has three states.
+ *
+ * NOT in the "They replied" branch, on purpose. The note there says the
+ * pre-written outreach email is the exact thing that must not go out once
+ * somebody has written back, and that has not changed.
+ *
+ * Dead with the reason on the button when there is no address — the same
+ * refusal `canEmail` makes in the sheet, said the same way. */
+function DraftEmailButton({ lead, busy, drafting, onDraftEmail }) {
+  if (!onDraftEmail) return null;
+  /* NOT ONCE THEY HAVE WRITTEN BACK — 2 Sep 2026, found by an adversarial
+   * checker, and the reason this test lives in the component rather than at the
+   * two call sites.
+   *
+   * The rule was already written down in the "They replied" branch: the
+   * pre-written outreach email is the exact thing that must not go out to
+   * somebody who has replied. But the expired-claim branch is checked BEFORE
+   * the replied one, and a lead whose reply arrived through the inbox sync
+   * without the rep logging a touch reads as an expired claim — so the button
+   * appeared on the one record where it is worst. Nothing downstream stops it:
+   * canEmail() looks at bounces and missing addresses, not replies.
+   *
+   * A reply also has to be answered, so this says where to do that rather than
+   * just vanishing. */
+  /* `first_reply_at` — the real column (migration 0021). There is no
+   * `replied_at` on admin_leads; a test wrote one and it silently meant
+   * nothing, which is what tests/db-columns exists to catch. */
+  if (lead.first_reply_at) {
+    return (
+      <span className="adm-sl-faint" style={{ fontSize: 12.5, alignSelf: "center" }}>
+        They have replied — write back yourself rather than sending the pre-written email.
+      </span>
+    );
+  }
+  return (
+    <button
+      className="btn btn-accent"
+      disabled={busy || drafting || !lead.email}
+      title={lead.email ? "Writes it, shows it to you, and only sends when you press Send." : "This contact has no email address on the record."}
+      onClick={() => onDraftEmail(lead)}
+    >
+      {drafting ? "Writing…" : lead.email ? "Draft an email" : "No email address"}
+    </button>
+  );
+}
+
+function NextStep({ lead, onPatch, readOnly = false }) {
   const [v, setV] = useState(lead.next_step || "");
   const [dirty, setDirty] = useState(false);
   // Never clobber an unsaved edit — see LeadField.
@@ -787,19 +874,35 @@ function NextStep({ lead, onPatch }) {
     setV((cur) => (dirty ? cur : lead.next_step || ""));
   }, [lead.id, lead.next_step]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setDirty(false); }, [lead.id]);
+  /* Somebody else's lead is READ ONLY, and it says so rather than offering a
+     box that the database will refuse. */
+  if (readOnly) {
+    return (
+      <div style={{ fontSize: 13.5, lineHeight: 1.6, whiteSpace: "pre-wrap", padding: "6px 0" }}>
+        {lead.next_step || <span className="adm-sl-faint">Nothing planned.</span>}
+      </div>
+    );
+  }
   return (
     <>
       <TextArea
         value={v}
         onChange={(e) => { setV(e.target.value); setDirty(true); }}
+        onBlur={async () => {
+          /* SAVES ON THE WAY OUT, like every other field on this record. The
+             button stays for the case where blur never happens. */
+          if (dirty && await onPatch({ next_step: v.trim() || null })) setDirty(false);
+        }}
         placeholder="What you will do next, in your own words…"
         style={{ minHeight: 64 }}
       />
-      {dirty && (
-        <button className="btn" style={{ marginTop: 6 }} onClick={async () => {
-          if (await onPatch({ next_step: v.trim() || null })) { setDirty(false); toast.success("Saved"); }
-        }}>Save the next step</button>
-      )}
+      {dirty
+        ? (
+          <button className="btn" style={{ marginTop: 6 }} onClick={async () => {
+            if (await onPatch({ next_step: v.trim() || null })) { setDirty(false); toast.success("Saved"); }
+          }}>Save the next step</button>
+        )
+        : <div className="adm-sl-faint" style={{ fontSize: 11.5, marginTop: 4 }}>Saved.</div>}
     </>
   );
 }
@@ -911,7 +1014,9 @@ function DetailsTab({ lead, company, onPatch, reload, readOnly = false }) {
    * somebody's typing with no message is worse. */
   useEffect(() => { setC(company || null); setCDirty(false); }, [company?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const saveCompany = async () => {
+  /* `quiet` is the blur path: it saves without a toast, because a toast per
+   * field is noise. A FAILURE is never quiet. */
+  const saveCompany = async ({ quiet = false } = {}) => {
     const res = await upsertCompany({
       id: c.id, name: c.name, domain: c.domain || null, phone: c.phone || null,
       city: c.city || null, state: c.state || null, vertical: c.vertical || null,
@@ -921,7 +1026,7 @@ function DetailsTab({ lead, company, onPatch, reload, readOnly = false }) {
     });
     if (!res.ok) { toast.error("Could not save the firm", res.error); return; }
     setCDirty(false);
-    toast.success("Firm saved", "Everybody at this firm sees the change.");
+    if (!quiet) toast.success("Firm saved", "Everybody at this firm sees the change.");
     await reload();
   };
 
@@ -937,6 +1042,14 @@ function DetailsTab({ lead, company, onPatch, reload, readOnly = false }) {
         <LeadField lead={lead} k="department" label="Department" onPatch={onPatch} readOnly={readOnly} />
         <LeadField lead={lead} k="linkedin_url" label="LinkedIn" onPatch={onPatch} readOnly={readOnly} />
         <LeadField lead={lead} k="city" label="City" onPatch={onPatch} readOnly={readOnly} />
+      </div>
+      {/* WHERE THEY ARE, EDITABLE — 2 Sep 2026. The Add-contact form could set a
+          country and a province and this record could not show or change either
+          one, so a contact added as Canadian could never be corrected. Country
+          and region are one control because the country decides both the list
+          and the word: State in the US, Province in Canada. */}
+      <LeadPlace lead={lead} onPatch={onPatch} readOnly={readOnly} />
+      <div className="adm-sl-grid2">
       </div>
 
       <div className="label" style={{ margin: "22px 0 8px" }}>
@@ -967,7 +1080,19 @@ function DetailsTab({ lead, company, onPatch, reload, readOnly = false }) {
                     {c[k] || <span className="adm-sl-faint">Empty</span>}
                   </div>
                 ) : (
-                  <TextInput value={c[k] ?? ""} onChange={(e) => { setC({ ...c, [k]: e.target.value }); setCDirty(true); }} />
+                  <TextInput
+                    value={c[k] ?? ""}
+                    onChange={(e) => { setC({ ...c, [k]: e.target.value }); setCDirty(true); }}
+                    /* SAVES ON THE WAY OUT OF THE FIELD, like the person's
+                       fields above have always done. Until 2 Sep 2026 the ONLY
+                       way to write a firm edit was the button at the bottom of
+                       this tab, so switching tabs, closing the drawer, or the
+                       console remounting threw away the website, the phone, the
+                       industry and the revenue with nothing said. Ryder: "make
+                       sure it saves a person after they edit it". The button
+                       stays for the case where blur never happens. */
+                    onBlur={() => { if (cDirty) saveCompany({ quiet: true }); }}
+                  />
                 )}
               </Field>
             ))}
@@ -978,7 +1103,11 @@ function DetailsTab({ lead, company, onPatch, reload, readOnly = false }) {
                 {c.notes || <span className="adm-sl-faint">Empty</span>}
               </div>
             ) : (
-              <TextArea value={c.notes ?? ""} onChange={(e) => { setC({ ...c, notes: e.target.value }); setCDirty(true); }} />
+              <TextArea
+                value={c.notes ?? ""}
+                onChange={(e) => { setC({ ...c, notes: e.target.value }); setCDirty(true); }}
+                onBlur={() => { if (cDirty) saveCompany({ quiet: true }); }}
+              />
             )}
           </Field>
           {c.site_score !== null && c.site_score !== undefined && (
@@ -988,7 +1117,14 @@ function DetailsTab({ lead, company, onPatch, reload, readOnly = false }) {
               {c.site_score_note ? ` ${c.site_score_note}` : ""}
             </div>
           )}
-          {cDirty && !readOnly && <button className="btn btn-accent" onClick={saveCompany}>Save the firm</button>}
+          {cDirty && !readOnly && (
+            <button className="btn btn-accent" onClick={() => saveCompany()}>Save the firm</button>
+          )}
+          {!cDirty && !readOnly && (
+            <div className="adm-sl-faint" style={{ fontSize: 11.5, marginTop: 6 }}>
+              Saved. Firm edits save as you leave each field.
+            </div>
+          )}
         </>
       )}
 
@@ -1003,9 +1139,81 @@ function DetailsTab({ lead, company, onPatch, reload, readOnly = false }) {
   );
 }
 
+/* COUNTRY AND REGION, TOGETHER — 2 Sep 2026.
+ *
+ * One control, because they are one fact: the country decides which list the
+ * region comes from and what the field is called. Changing the country clears
+ * the region rather than keeping a code from the other country's list — "ON" is
+ * a province and not a state, and a stale code is a wrong fact, not a blank.
+ *
+ * It writes both columns in one patch so the pair can never be half-saved.
+ */
+function LeadPlace({ lead, onPatch, readOnly = false }) {
+  const country = normaliseCountry(lead.country) || "";
+  const regions = regionsFor(country);
+  const word = REGION_LABEL[country] || "State or region";
+
+  if (readOnly) {
+    return (
+      <div className="adm-sl-grid2">
+        <Field label="Country">
+          <div style={{ fontSize: 14, padding: "8px 0", minHeight: 20 }}>
+            {COUNTRIES.find((c) => c.code === country)?.label || lead.country || <span className="adm-sl-faint">Not set</span>}
+          </div>
+        </Field>
+        <Field label={word}>
+          <div style={{ fontSize: 14, padding: "8px 0", minHeight: 20 }}>
+            {regionLabel(country, lead.state) || <span className="adm-sl-faint">Empty</span>}
+          </div>
+        </Field>
+      </div>
+    );
+  }
+
+  return (
+    <div className="adm-sl-grid2">
+      <Field label="Country">
+        <Select
+          value={country}
+          onChange={(e) => onPatch({ country: e.target.value || null, state: null })}
+          options={[["", "— not set —"], ...COUNTRIES.map((c) => [c.code, c.label])]}
+        />
+      </Field>
+      <Field label={word} hint={regions.length ? null : "Pick a country first to get a list."}>
+        {regions.length ? (
+          <Select
+            value={normaliseRegion(country, lead.state) || ""}
+            onChange={(e) => onPatch({ state: e.target.value || null })}
+            options={[["", `— pick a ${word.toLowerCase()} —`], ...regions]}
+          />
+        ) : (
+          <LeadFieldInput lead={lead} k="state" onPatch={onPatch} />
+        )}
+      </Field>
+    </div>
+  );
+}
+
+/* The bare input half of LeadField, so LeadPlace can reuse the save-on-blur
+ * behaviour without a second Field wrapper around it. */
+function LeadFieldInput({ lead, k, onPatch }) {
+  const [v, setV] = useState(lead[k] ?? "");
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { setV((cur) => (dirty ? cur : lead[k] ?? "")); }, [lead.id, lead[k], k]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setDirty(false); }, [lead.id, k]);
+  return (
+    <TextInput
+      value={v}
+      onChange={(e) => { setV(e.target.value); setDirty(true); }}
+      onBlur={async () => { if (dirty && await onPatch({ [k]: v.trim() || null })) setDirty(false); }}
+    />
+  );
+}
+
 function LeadField({ lead, k, label, onPatch, readOnly = false }) {
   const [v, setV] = useState(lead[k] ?? "");
   const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
   /* Same reason as DetailsTab: `lead` is a new object on every refresh, so
    * depending on it wiped whatever was half-typed. Depend on the id and the
    * saved value, and never overwrite an unsaved edit. */
@@ -1025,6 +1233,15 @@ function LeadField({ lead, k, label, onPatch, readOnly = false }) {
       </Field>
     );
   }
+  /* A VISIBLE STATE, because the save is invisible — 2 Sep 2026.
+   *
+   * These fields have saved on blur since they were written, and correctly. But
+   * there is no button and no marker, so a person editing one has no way to
+   * know whether it went in: it looks identical before and after. Ryder: "no
+   * button should ever be clicked and then it not actually work" — the same
+   * complaint, from the other end. `Saving…` / `Saved` / `Not saved yet` are
+   * three different sentences and only one of them is a promise. */
+  const state = saving ? "saving" : dirty ? "dirty" : "clean";
   return (
     <Field label={label}>
       <TextInput
@@ -1032,9 +1249,19 @@ function LeadField({ lead, k, label, onPatch, readOnly = false }) {
         onChange={(e) => { setV(e.target.value); setDirty(true); }}
         onBlur={async () => {
           if (!dirty) return;
-          if (await onPatch({ [k]: v.trim() || null })) setDirty(false);
+          setSaving(true);
+          const ok = await onPatch({ [k]: v.trim() || null });
+          setSaving(false);
+          /* Only clean on a WRITE THAT LANDED. onPatch toasts its own failure;
+           * this keeps the field marked so the words are visibly still owed. */
+          if (ok) setDirty(false);
         }}
       />
+      <div className="adm-sl-faint" style={{ fontSize: 11, marginTop: 3, minHeight: 14 }}>
+        {state === "saving" ? "Saving…"
+          : state === "dirty" ? "Not saved yet — click away from the box to save it."
+            : ""}
+      </div>
     </Field>
   );
 }
