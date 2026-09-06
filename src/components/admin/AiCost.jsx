@@ -4,7 +4,9 @@ import { isConfigured } from "../../lib/supabase.js";
 import { toast } from "../../lib/toast.js";
 import {
   listUsage, listClients, listTeam, listModelPrices, listProviderBills, listUsageMisses,
+  listUnmappedWorkspaces, listPlatformWorkspaces, mapWorkspaceToClient,
 } from "../../lib/data.js";
+import { listInvoices, listExpenses } from "../../lib/finance.js";
 import { SourceBadge, SectionHeader, FilterTabs, EmptyState, timeAgo } from "./shared.jsx";
 import { Figure, FigureGrid, Block, BasisBadge, pct } from "./financeParts.jsx";
 import {
@@ -13,6 +15,7 @@ import {
   INTERNAL, MICROS_PER_DOLLAR, num,
 } from "../../../lib/ai-cost.js";
 import { TEAM_TZ, teamDate } from "../../../lib/brain-context.js";
+import { clientEconomics } from "../../../lib/client-economics.js";
 
 /* ==================================================================
  * AI COST — what every AI call cost, and who it was for. Aug 28 2026.
@@ -100,6 +103,13 @@ export default function AiCost({ member }) {
    * per load, so every figure on the page is answering the same question at the
    * same moment. */
   const [readAt, setReadAt] = useState(() => Date.now());
+  /* 0032. Platform spend, and the workspace -> client links that give it a
+   * name. Empty until the platform starts posting; the sections below say so
+   * rather than rendering an empty table. */
+  const [unmapped, setUnmapped] = useState({ rows: [] });
+  const [workspaces, setWorkspaces] = useState({ rows: [] });
+  const [invoices, setInvoices] = useState({ rows: [] });
+  const [expenses, setExpenses] = useState({ rows: [] });
 
   const days = WINDOWS.find((w) => w.id === windowId)?.days || 30;
 
@@ -109,22 +119,79 @@ export default function AiCost({ member }) {
     /* Two windows of the SAME length, back to back, so "against the 30 days
      * before" is a real comparison rather than this month against a part of
      * last one. */
-    const [u, p, c, t, pr, b, m] = await Promise.all([
-      listUsage(days),
+    const [u, p, c, t, pr, b, m, unmapped, wss, inv, exp] = await Promise.all([
+      /* The SAME window the client table uses. listUsage(days) computes its
+       * own Date.now() and passes no toMs, so it returns rows newer than
+       * `readAt` — which the per-client maths then filters out, leaving the
+       * two halves of one screen computed over different rows. */
+      listUsage(days, { fromMs: now - days * 86400000, toMs: now }),
       listUsage(days * 2, { fromMs: now - days * 2 * 86400000, toMs: now - days * 86400000 }),
       listClients(),
       listTeam(),
       listModelPrices(),
       listProviderBills(),
       listUsageMisses(1),
+      listUnmappedWorkspaces(),
+      listPlatformWorkspaces(),
+      listInvoices(),
+      listExpenses(),
     ]);
     setUsage(u); setPrev(p); setClients(c); setTeam(t); setPrices(pr); setBills(b); setMisses(m);
+    setUnmapped(unmapped); setWorkspaces(wss); setInvoices(inv); setExpenses(exp);
     setReadAt(now);
     setLoading(false);
     if (u.error) toast.error("Some usage rows could not be read", u.error);
   }, [days]);
 
   useEffect(() => { load(); }, [load]);
+
+  /* What each client costs and what they pay. The maths is in
+   * lib/client-economics.js so it can be tested without a browser; this only
+   * decides what to draw. */
+  const economics = useMemo(() => clientEconomics({
+    /* THE SAME DAYS ON ALL THREE SIDES.
+     *
+     * This page reads usage for the chosen window, invoices with no date
+     * filter and expenses for 18 months. Handing those straight to
+     * clientEconomics produced "all-time revenue minus 30 days of cost" and
+     * printed it as a margin. The window is passed now and the maths cuts
+     * every side to it. */
+    window: { fromMs: readAt - days * 86400000, toMs: readAt },
+    clients: clients.rows || [],
+    usage: usage.rows || [],
+    workspaces: workspaces.rows || [],
+    invoices: invoices.rows || [],
+    expenses: expenses.rows || [],
+  }), [clients, usage, workspaces, invoices, expenses, readAt, days]);
+
+  const clientName = useCallback(
+    (id) => (clients.rows || []).find((c) => c.id === id)?.name || null,
+    [clients],
+  );
+
+  const [savingWs, setSavingWs] = useState(null);
+  /* What is showing in each row's client picker. Controlled so a failed save
+   * puts it back instead of leaving a client on screen that was never saved. */
+  const [picked, setPicked] = useState({});
+  const assignWorkspace = useCallback(async (workspaceId, clientId) => {
+    setSavingWs(workspaceId);
+    const res = await mapWorkspaceToClient(workspaceId, clientId || null, { userId: member?.user_id });
+    setSavingWs(null);
+    /* Cleared on BOTH paths. On failure it puts the box back; on success the
+     * row leaves the list, but if that workspace ever becomes unmapped again —
+     * deleting a client clears the link, by design — the row would return
+     * showing a client the database does not have. */
+    setPicked((p) => ({ ...p, [workspaceId]: "" }));
+    if (!res.ok) {
+      toast.error("Could not save that link", res.error);
+      return;
+    }
+    toast.success(
+      clientId ? "Linked" : "Unlinked",
+      clientId ? `That workspace's spend now counts against ${clientName(clientId) || "that client"}.` : "That workspace is unattached again.",
+    );
+    load();
+  }, [member, clientName, load]);
 
   useScreenContext(() => ({
     page: "ai-cost",
@@ -584,6 +651,176 @@ export default function AiCost({ member }) {
         </FigureGrid>
       </Block>
 
+      {/* ---------- platform spend that belongs to nobody ---------- */}
+      <Block
+        title="Platform spend we cannot put a name to"
+        blurb="The platform reports what it spends per workspace. A workspace is not a client — they are different records in different databases and nothing links them — so the console will not guess. Anything spending money without a client attached is listed here until somebody says whose it is."
+      >
+        {!(unmapped.rows || []).length ? (
+          <p className="adm-aic-note">
+            {(workspaces.rows || []).length
+              ? "Every workspace that has spent anything is attached to a client. Nothing is going uncounted."
+              : "The platform has not reported any spend yet. Once it does, any workspace without a client shows up here."}
+          </p>
+        ) : (
+          <>
+            <p className="adm-aic-note">
+              <strong>{(unmapped.rows || []).length} workspace{(unmapped.rows || []).length === 1 ? " is" : "s are"} spending money and
+              {(unmapped.rows || []).length === 1 ? " is" : " are"} attached to nobody.</strong>{" "}
+              Until you pick a client, this spend is real and counted, but it is missing from every per-client figure on this page.
+            </p>
+            <div className="adm-aic-tablewrap">
+              <table className="adm-aic-table">
+                <thead>
+                  <tr>
+                    <th>Workspace</th><th className="n">Calls</th><th className="n">Spent</th>
+                    <th className="n">Not priced</th><th>Last seen</th><th>Whose is it?</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(unmapped.rows || []).map((w) => (
+                    <tr key={w.workspace_id}>
+                      <td className="adm-aic-name">{w.label || <span className="dim">no name sent</span>}<br />
+                        <span className="dim" style={{ fontSize: 11 }}>{w.workspace_id}</span></td>
+                      <td className="n">{num(w.calls).toLocaleString()}</td>
+                      <td className="n">{formatMicros(w.cost_micros)}</td>
+                      {/* Printed even when zero: "we priced all of them" is a
+                          different statement from "we did not check". */}
+                      <td className="n dim">{num(w.unpriced_calls).toLocaleString()}</td>
+                      <td className="dim">{w.last_call_at ? timeAgo(w.last_call_at) : "no calls yet"}</td>
+                      <td>
+                        {/* Controlled, so a failed save visibly puts the box
+                            back rather than leaving it showing a client that
+                            was never linked. The placeholder no longer doubles
+                            as the "Saving…" label either — the moment somebody
+                            picks a client the placeholder stops being the
+                            selected option, so that text never rendered. */}
+                        <select
+                          className="adm-input"
+                          disabled={savingWs === w.workspace_id}
+                          value={picked[w.workspace_id] || ""}
+                          onChange={(e) => {
+                            const id = e.target.value;
+                            setPicked((p) => ({ ...p, [w.workspace_id]: id }));
+                            if (id) assignWorkspace(w.workspace_id, id);
+                          }}
+                        >
+                          <option value="">Pick a client…</option>
+                          {(clients.rows || []).map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                        {savingWs === w.workspace_id ? <span className="dim"> Saving…</span> : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </Block>
+
+      {/* ---------- what a client costs vs what they pay ---------- */}
+      <Block
+        title="What each client costs us, and what they pay"
+        blurb="AI spend on one side, invoices on the other. Worst deal first, because that is the row worth finding. A blank margin is never a zero — it says which of the four reasons it could not be worked out."
+      >
+        {!economics.rows.length ? (
+          <EmptyState title="No clients yet" body="Add a client and this fills in." />
+        ) : (
+          <>
+            <div className="adm-aic-tablewrap">
+              <table className="adm-aic-table">
+                <thead>
+                  <tr>
+                    <th>Client</th>
+                    <th className="n">They pay</th>
+                    <th className="n">AI cost</th>
+                    <th className="n">of that, platform</th>
+                    <th className="n">Other costs</th>
+                    <th className="n">Left over</th>
+                    <th className="n">Margin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {economics.rows.map((r) => (
+                    <tr key={r.clientId}>
+                      <td className="adm-aic-name">{r.name}
+                        {r.unpricedCalls > 0 ? (
+                          <><br /><span className="dim" style={{ fontSize: 11 }}>
+                            {r.unpricedCalls} of {r.calls} calls could not be priced
+                          </span></>
+                        ) : null}
+                      </td>
+                      <td className="n">{r.revenueMicros ? formatMicros(r.revenueMicros) : <span className="dim">nothing invoiced</span>}</td>
+                      <td className="n">
+                        {!r.calls
+                          ? <span className="dim">no calls</span>
+                          /* Every call unpriced means we do not know what it
+                             cost. formatMicros(0) prints "$0.00", which reads
+                             as a measurement of nothing spent — the exact
+                             mistake pricedCost() exists to prevent. */
+                          : r.unpricedCalls === r.calls
+                            ? <span className="dim">not priced yet</span>
+                            : formatMicros(r.aiCostMicros)}
+                      </td>
+                      <td className="n dim">{r.aiCostMappedMicros ? formatMicros(r.aiCostMappedMicros) : "—"}</td>
+                      <td className="n dim">{r.handEnteredCostMicros ? formatMicros(r.handEnteredCostMicros) : "—"}</td>
+                      <td className="n">{r.marginMicros === null ? <span className="dim">—</span> : formatMicros(r.marginMicros)}</td>
+                      <td className="n">
+                        {r.marginPct === null
+                          /* The reason, in words, exactly where the number
+                             would have been. An empty cell reads as a zero. */
+                          ? <span className="dim" title={r.marginWhy || ""}>{r.marginWhy || "—"}</span>
+                          : <strong style={{ color: r.marginPct < 0 ? "#b91c1c" : undefined }}>{r.marginPct}%</strong>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="adm-aic-note">
+              <strong>
+                {economics.totals.windowed
+                  ? `All three columns cover the same days: ${economics.totals.periodFrom} to ${economics.totals.periodTo}.`
+                  : "No period is set, so no margin is shown."}
+              </strong>{" "}
+              Only invoices marked <strong>sent</strong> or <strong>paid</strong> count as money — a draft is a
+              thought and a void one never was.
+              {economics.totals.foreignCurrencyInvoices > 0 ? (
+                <> {economics.totals.foreignCurrencyInvoices} invoice{economics.totals.foreignCurrencyInvoices === 1 ? " is" : "s are"} in
+                another currency and {economics.totals.foreignCurrencyInvoices === 1 ? "is" : "are"} left out — there is no
+                exchange rate in this system, and adding two currencies together would make every percentage here wrong.</>
+              ) : null}
+              {economics.totals.attributionClashes > 0 ? (
+                <> {economics.totals.attributionClashes} call{economics.totals.attributionClashes === 1 ? "" : "s"} named
+                one client while sitting in a workspace linked to another; the call&rsquo;s own client won. Worth checking the link above.</>
+              ) : null}
+              {economics.totals.unknownClients > 0 ? (
+                <> {economics.totals.unknownClients} client{economics.totals.unknownClients === 1 ? "" : "s"} named
+                on this data {economics.totals.unknownClients === 1 ? "is" : "are"} not in the list above, so
+                {" "}{formatMicros(economics.totals.unknownClientCostMicros)} of cost and{" "}
+                {formatMicros(economics.totals.unknownClientRevenueMicros)} of invoices are in none of these rows.</>
+              ) : null}
+              {economics.totals.orphanCalls > 0 ? (
+                <> {formatMicros(economics.totals.orphanCostMicros)} across {economics.totals.orphanCalls.toLocaleString()} call{economics.totals.orphanCalls === 1 ? "" : "s"} arrived
+                with no client and no workspace at all, so {economics.totals.orphanCalls === 1 ? "it is" : "they are"} in none of these rows.</>
+              ) : null}
+              {economics.totals.recurringCostsSkipped > 0 ? (
+                <> {economics.totals.recurringCostsSkipped} repeating cost{economics.totals.recurringCostsSkipped === 1 ? " is" : "s are"} left
+                out of the &ldquo;other costs&rdquo; column, because a monthly figure is a rate and not an amount.</>
+              ) : null}
+              {economics.unattributed.calls > 0 ? (
+                <> <strong>{formatMicros(economics.unattributed.costMicros)}</strong> across {economics.unattributed.calls.toLocaleString()} calls
+                in {economics.unattributed.workspaces} unattached workspace{economics.unattributed.workspaces === 1 ? "" : "s"} is
+                in none of these rows — see the section above.</>
+              ) : null}
+            </p>
+          </>
+        )}
+      </Block>
+
       {/* ---------- the price book ---------- */}
       <Block
         title="The price book"
@@ -630,11 +867,18 @@ export default function AiCost({ member }) {
       {/* ---------- the honest footer ---------- */}
       <div className="adm-aic-foot">
         <p>
-          <strong>What this page can and cannot see.</strong> It counts the calls this console makes. Anything
-          the platform or the backend sends to an AI is <em>not</em> in these numbers until it posts to{" "}
-          <code>/api/usage-ingest</code>. Nothing here has been checked against a provider's real bill, because
-          that needs an Admin key that does not exist yet — so every figure is <BasisBadge basis="metered" />,
-          and none of them is <BasisBadge basis="billed" />.
+          <strong>What this page can and cannot see.</strong> It counts the calls this console makes, and — since
+          6 Sep 2026 — the ones the platform makes too, which it reports to <code>/api/usage-ingest</code>. The
+          platform half only appears while its own <code>ENABLE_AI_METER</code> is on and it has this console&rsquo;s
+          ingest key; if the platform rows below are empty, that is the first thing to check rather than a quiet
+          month. Nothing here has been checked against a provider&rsquo;s real bill, because that needs an Admin key
+          that does not exist yet — so every figure is <BasisBadge basis="metered" />, and none of them is{" "}
+          <BasisBadge basis="billed" />.
+        </p>
+        <p className="adm-aic-dim">
+          The client table reads at most 1,000 invoices and 2,000 costs, and neither of those readers reports
+          when it hits the cap — so above roughly a thousand invoices the money column starts to undercount with
+          nothing on screen saying so. Worth knowing before the number is used in anger.
         </p>
         <p className="adm-aic-dim">
           Days and months are counted in the team&rsquo;s own calendar ({TEAM_TZ}), not the browser&rsquo;s and

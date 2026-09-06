@@ -1347,6 +1347,10 @@ const USAGE_COLS = [
   "cache_read_tokens", "cost_micros", "cost_usd", "price_id",
   "client_id", "user_id", "feature", "surface", "entity_kind", "entity_id",
   "status", "error_code", "latency_ms", "billable", "meta",
+  /* 0032. The platform's own two fields. A reader that does not select them
+   * cannot tell platform spend from console spend, and the whole point of
+   * this pair is that it can. */
+  "workspace_id", "platform_feature",
 ].join(", ");
 
 /* One page of rows. 1,000 is Supabase's own default ceiling per request, so
@@ -1412,6 +1416,67 @@ export async function listUsage(sinceDays = 30, opts = {}) {
     if (rows.length >= USAGE_MAX) { truncated = true; break; }
   }
   return { rows, sample: false, truncated };
+}
+
+/* ------------------------------------------------------------------------
+ * PLATFORM WORKSPACES — the link between what the platform spends and who we
+ * spent it on.
+ *
+ * The platform posts its token spend to /api/usage-ingest tagged with a
+ * WORKSPACE id. That is not a client id — different table, different
+ * database, no link between them. Rather than invent one, the ingest endpoint
+ * registers every workspace it sees and leaves it unmapped, and these readers
+ * put the unmapped ones on a screen so the gap is a short job with a
+ * dropdown instead of an absence nobody notices.
+ * --------------------------------------------------------------------- */
+
+/** Workspaces that are spending money and are not yet attached to a client,
+ * biggest spender first — which is the order in which fixing them is worth
+ * anything. */
+export async function listUnmappedWorkspaces() {
+  if (!live()) return { rows: [], sample: true };
+  const { data, error } = await getSupabase()
+    .from("admin_unmapped_workspace_spend")
+    .select("workspace_id, label, calls, cost_micros, unpriced_calls, first_call_at, last_call_at, first_seen_at, last_seen_at")
+    /* nullsFirst: false — a workspace we have seen but cannot price yet sorts
+     * BELOW one with real money on it, instead of sitting at the top of a
+     * "biggest spender" list on the strength of a null. */
+    .order("cost_micros", { ascending: false, nullsFirst: false })
+    .limit(200);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+/** Every workspace we have ever seen, mapped or not. */
+export async function listPlatformWorkspaces() {
+  if (!live()) return { rows: [], sample: true };
+  const { data, error } = await getSupabase()
+    .from("admin_platform_workspaces")
+    .select("workspace_id, client_id, label, mapped_at, first_seen_at, last_seen_at, note")
+    .order("last_seen_at", { ascending: false })
+    .limit(500);
+  if (error) return { rows: [], error: error.message, sample: false };
+  return { rows: data || [], sample: false };
+}
+
+/** Say whose a workspace is. Passing a null clientId un-maps it again.
+ *
+ * `mapped_by` and `mapped_at` are written together and always: "somebody
+ * decided this" is only worth recording if the name and the date are on it.
+ * A wrong mapping moves money onto the wrong client's cost line, and the
+ * first question when that is spotted is who set it. */
+export async function mapWorkspaceToClient(workspaceId, clientId, { label = null, userId = null } = {}) {
+  if (!live()) return { ok: true, sample: true };
+  const patch = {
+    client_id: clientId || null,
+    mapped_by: clientId ? (userId || null) : null,
+    mapped_at: clientId ? new Date().toISOString() : null,
+  };
+  if (label !== null) patch.label = label;
+  const { error } = await getSupabase()
+    .from("admin_platform_workspaces").update(patch).eq("workspace_id", workspaceId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }
 
 /** The price book, for the AI Cost page's own price table. */
