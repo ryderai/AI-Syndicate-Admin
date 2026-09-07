@@ -342,3 +342,88 @@ Final: `OPENAI_MODEL=gpt-5.6-sol`, `OPENAI_RESPONSES_MODEL=gpt-5.6-sol`,
 - **The admin console served a stale AI Cost page for ~20 minutes** across
   navigations, its own Refresh button and a plain reload — 254 calls when the
   truth was 348. Only Cmd+Shift+R cleared it.
+
+---
+
+# CORRECTIONS — a checker read this entry back against the sources
+
+Appended, not rewritten. A separate agent was told to assume this entry was
+false and found 16 things. The ones that change what a reader would do:
+
+1. **The admin repo IS pushed.** The header says "NOT pushed. Migration 0033
+   NOT run." Both are now false: 0033 ran in Supabase and Ryder pushed
+   **`7f6fe75`** on `main`.
+
+2. **"OpenAI is 22% of the AI bill" is wrong — it is 22% of PRICED spend.**
+   263 of 348 calls are unpriced, and cost is frozen at write, so the
+   non-Anthropic rows cover only post-migration calls while Anthropic is
+   backdated to January. **OpenAI's real share is higher; 22% is a floor.**
+   Separately, 77.1% is the page's SHARE column; the four printed costs
+   recompute to 77.4%.
+
+3. **The skip-is-not-a-pass claim was half true, and my own runner had the
+   bug.** `tests/ai-cost/run.sh` was never fixed at the time. And
+   `tests/ai-prices/run.sh` printed "THE DATABASE HALF DID NOT RUN" and then
+   **exited 0** — the warning was for a human, every caller saw success. Both
+   exit 2 on a skip now, and still exit 0 where Postgres exists. **A message is
+   not an exit code.**
+
+4. **`AI_METER_STATUS_EMAILS` probably will not answer it.** Those counters are
+   per-lambda-instance and the endpoint's own comment says they are "almost
+   always zeros and NOT evidence". Needs a warm instance, or Vercel logs.
+
+5. **Smaller:** the guard fails `npm run lint`, not the build (`prebuild` does
+   not run it); the 950-token figure is a chars÷4 estimate sitting under a
+   "measured" heading; a Prompt simulator run fires **twelve** engines
+   including Anthropic and SerpApi, not seven; "3,682 / 3,677 / 0 fail" was
+   missing that the other **5 are skipped**; "all shaped `process.env.X || …`"
+   is untrue of four of the twelve; and `lib/ai-cost.js`'s own comment
+   contradicted this entry about the blast radius — the comment was wrong and
+   is fixed.
+
+6. **`c4ff484` / `3fb26ed` do not resolve in the local platform clone** — refs
+   unfetched, `origin/main` far behind. Those SHAs came from GitHub in a
+   browser. `git fetch` before quoting them from this machine.
+
+**Follow-up commit outstanding** (fixes from this pass, made after `7f6fe75`):
+`tests/ai-prices/run.sh`, `tests/ai-cost/run.sh`, `tests/ai-cost/sql.sh`,
+`lib/ai-cost.js`, plus the two `DO-THIS-NEXT-*.md` files. Exact command in
+`DO-THIS-NEXT-ai-price-book-2026-09-07-EVENING.md` §2.
+
+---
+
+# ⚠️ LATER THE SAME EVENING: HALF THIS ENTRY'S DIAGNOSIS IS WRONG
+
+A sweep ran. The AI Cost page went 348 → **692 calls**, the first reading after
+the corrected model names reached production, and it separates the two
+providers:
+
+| model | calls | failed |
+|---|---|---|
+| anthropic/claude-sonnet-5 | 127 | 29 |
+| openai/gpt-5.6-sol | 40 | 10 |
+| **openai/gpt-5.6** | **12** | 11 — **frozen, no longer called** |
+| **mistral/mistral-medium-latest** | **188** | **188 — new name, still 100% failing** |
+| mistral/mistral-medium-3.5 | 140 | 140 — frozen |
+| groq/openai/gpt-oss-120b | 18 | 18 |
+
+**OpenAI: right.** The dead name stopped being called and `gpt-5.6-sol` took
+over. The control held.
+
+**Mistral: WRONG.** The env var demonstrably took — the new row exists — and
+`mistral-medium-latest`, a real documented id, fails 188 of 188. The name was
+not the cause. It is the key or the account, like Groq.
+
+**The reasoning error, stated plainly:** the gpt-5.6-sol control was evidence
+about OpenAI and it was generalised to Mistral, where no control existed —
+only an id that was absent from a docs page. "Not published" proves the id is
+wrong. It does not prove the id is why the calls fail. One of those was
+measured; the other was asserted, and Ryder was given the asserted one.
+
+Next step is the key, not the name: run
+`scripts/fingerprint-stability.mjs` in the platform repo — it already calls
+`https://api.mistral.ai/v1/chat/completions` and prints what comes back.
+401 = key, 403 = account or entitlement, 200 = the request body.
+
+Also new and unexplained: `openai/gpt-5.6-sol` fails 10 of 40 now, against
+0 of 14 this morning.

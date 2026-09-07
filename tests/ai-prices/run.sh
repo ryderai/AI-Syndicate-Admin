@@ -55,4 +55,13 @@ elif [ "$skipped" = "1" ]; then
 else
   echo "  everything passed"
 fi
-exit $rc
+
+# EXIT 2 ON A SKIP, NOT 0. The first version of this file printed the warning
+# above and then returned 0 — so the message was for a human reading the
+# terminal and every script, CI step or `&&` chain calling this saw success.
+# That is the same defect this suite was written to close, one level up, and a
+# checker found it by running the file rather than reading it. A message is not
+# an exit code.
+if [ "$rc" != "0" ]; then exit 1; fi
+if [ "$skipped" = "1" ]; then exit 2; fi
+exit 0

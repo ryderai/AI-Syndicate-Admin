@@ -44,8 +44,24 @@ echo "== the database half (migration 0024) =="
 # The pure half proves the maths agrees with itself. This half proves the
 # DATABASE refuses what it is supposed to refuse — the dedupe key, the price
 # window, the negative cost. A guard nobody has attacked is not a guard.
-bash tests/ai-cost/sql.sh || rc=1
+#
+# A SKIP IS NOT A PASS, and until 7 Sep 2026 this file said it was: sql.sh
+# exits 0 when there is no Postgres, so on Ryder's Mac — where there never is
+# one — this printed "everything passed" with the entire database half unrun.
+# sql.sh now exits 2 on that path and this distinguishes it.
+bash tests/ai-cost/sql.sh
+db_rc=$?
+skipped=0
+if [ "$db_rc" = "2" ]; then skipped=1; elif [ "$db_rc" != "0" ]; then rc=1; fi
 
 echo ""
-if [ "$rc" = "0" ]; then echo "  everything passed"; else echo "  something FAILED — read the FAIL lines above"; fi
-exit $rc
+if [ "$rc" != "0" ]; then
+  echo "  something FAILED — read the FAIL lines above"
+  exit 1
+elif [ "$skipped" = "1" ]; then
+  echo "  the pure half passed. THE DATABASE HALF DID NOT RUN on this machine —"
+  echo "  run it where there is a Postgres before calling 0024 proven."
+  exit 2
+fi
+echo "  everything passed"
+exit 0

@@ -11,7 +11,9 @@ PGBIN=""; for d in /usr/lib/postgresql/*/bin; do [ -x "$d/initdb" ] && PGBIN="$d
 # bridge has none, so this half normally runs in the cloud container — where it
 # was run on Aug 28 2026 and passed 45/45. A skip is not a pass; if this line
 # prints, the database half has NOT been proven on that machine.
-[ -z "$PGBIN" ] && { echo "  --   no local Postgres found; the SQL half was SKIPPED."; exit 0; }
+# EXIT 2, NOT 0 — see run.sh. Exiting 0 here made "skipped" and "passed"
+# indistinguishable to every caller for as long as this file existed.
+[ -z "$PGBIN" ] && { echo "  --   no local Postgres found. THE SQL HALF DID NOT RUN — that is not a pass."; exit 2; }
 DATA="$(mktemp -d)/pgdata"; SOCK="$(mktemp -d)"; mkdir -p "$DATA"
 RUNAS=""; if [ "$(id -u)" = "0" ]; then RUNAS="su postgres -s /bin/bash -c"; chown -R postgres "$(dirname "$DATA")" "$SOCK" .; fi
 run() { if [ -n "$RUNAS" ]; then $RUNAS "$1"; else bash -c "$1"; fi; }
