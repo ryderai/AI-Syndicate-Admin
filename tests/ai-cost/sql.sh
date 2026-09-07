@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 0024 AGAINST A REAL POSTGRES.
-# Every migration 0001-0024 in order, 0024 twice (Ryder runs these by hand in
+# Every migration in the folder in order (0001 through the newest — the glob
+# is 0*.sql, so this grows on its own), 0024 twice (Ryder runs these by hand in
 # the Supabase editor and a half-applied set is the normal state), then the
 # constraints and the backfill are attacked rather than admired.
 set -u
@@ -48,7 +49,7 @@ for f in supabase/migrations/0*.sql; do
     echo "  FAIL $f did not apply:"; sed 's/^/       /' /tmp/mig.err; exit 1
   fi
 done
-ok "0001 through 0024 all applied"
+ok "every migration in the folder applied, in order"
 
 # Ryder pastes these into the Supabase editor by hand. "Run it again" has to be
 # a safe instruction rather than a gamble.
@@ -67,8 +68,23 @@ for c in provider request_id event_key cost_micros price_id cache_write_tokens c
 done
 is "cost_micros is a bigint" "$(q "select data_type from information_schema.columns where table_name='admin_usage_events' and column_name='cost_micros'")" "bigint"
 is "cost_usd was left alone"  "$(q "select count(*) from information_schema.columns where table_name='admin_usage_events' and column_name='cost_usd'")" "1"
-is "prices seeded (anthropic only, on purpose)" "$(q "select count(distinct provider) from ai_model_prices")" "1"
-is "nine anthropic models seeded" "$(q "select count(*) from ai_model_prices")" "9"
+# THESE TWO USED TO SAY "1 provider, 9 rows". They were right on 28 Aug 2026,
+# when 0024 was the last migration and Anthropic was the only thing being
+# called. 0033 (7 Sep 2026) added four non-Anthropic rows, and because this
+# loop applies EVERY migration in the folder, the old numbers went red the
+# moment that file existed. Pinned to what 0024 itself seeds instead of to a
+# total that every future price migration will move.
+is "0024 seeds nine anthropic models"  "$(q "select count(*) from ai_model_prices where provider='anthropic'")" "9"
+is "...all nine dated 2026-01-01, which is 0024's own backdating rule" "$(q "select count(*) from ai_model_prices where provider='anthropic' and effective_from='2026-01-01'")" "9"
+# Non-Anthropic rows are 0033's business and are asserted in tests/ai-prices/sql.sh.
+# Named here only so a reader of THIS file knows they are expected to exist.
+# AN UPPER BOUND, which is what the deleted `count(distinct provider) = 1`
+# actually bought: nothing unexamined may sit in the price book. A one-bit
+# "some non-anthropic rows exist" check replaced it in a first draft and was
+# worth nothing — it passed with 4 rows, with 400, and with a garbage provider.
+# Naming the providers keeps the closed set without pinning a total that every
+# future price migration moves, and does not go red if 0033 is reverted.
+is "no provider in the book beyond the ones accounted for" "$(q "select count(*) from ai_model_prices where provider not in ('anthropic','openai','google','xai','groq')")" "0"
 is "every seeded price records where it came from" "$(q "select count(*) from ai_model_prices where source_url is null")" "0"
 is "sonnet-4-6 input is \$3/Mtok in micros" "$(q "select input_per_mtok from ai_model_prices where model='claude-sonnet-4-6'")" "3000000"
 is "sonnet-4-6 1-hour cache write is \$6/Mtok" "$(q "select cache_write_1h_per_mtok from ai_model_prices where model='claude-sonnet-4-6'")" "6000000"
