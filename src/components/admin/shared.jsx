@@ -45,21 +45,56 @@ export function Toaster() {
   );
 }
 
+/* An animated number that CANNOT get stuck showing a wrong one.
+ *
+ * The old version had three ways to lie, and the Finance page hit at least
+ * one of them: it rendered "$0/mo" for monthly recurring revenue while the
+ * tile beside it, reading the same variable, rendered "$49,080" of yearly run
+ * rate. A money figure that animates is decoration; a money figure that
+ * animates and can freeze at zero is a wrong answer with a straight face.
+ *
+ * What was wrong:
+ *   1. `useState(0)` — the first paint is always 0, and if the animation
+ *      never advances that is the number on screen, forever.
+ *   2. `if (!start) start = t` — a rAF timestamp of 0 is falsy, so the time
+ *      origin reset every frame, `p` stayed ~0 and the value stayed ~0 while
+ *      the loop ran on.
+ *   3. Nothing ever set the FINAL value. The last frame landed wherever the
+ *      easing happened to be.
+ *
+ * Now: it starts at the true value (so a never-started animation is simply
+ * correct), animates up from zero when it can, lands exactly on the target,
+ * and a backstop timer forces the true value if frames stop arriving. */
 export function CountUp({ to, duration = 1200, suffix = "", prefix = "", decimals = 0, format }) {
-  const [n, setN] = useState(0);
+  const target = Number.isFinite(Number(to)) ? Number(to) : 0;
+  /* The truth first. Every failure below degrades to "no animation", never to
+   * "the wrong number". */
+  const [n, setN] = useState(target);
   const rafRef = useRef(0);
+  const timerRef = useRef(0);
+
   useEffect(() => {
-    let start;
+    if (typeof requestAnimationFrame !== "function") { setN(target); return undefined; }
+    let start = null;
+    let done = false;
+    const land = () => { if (!done) { done = true; setN(target); } };
     const step = (t) => {
-      if (!start) start = t;
+      if (start === null) start = t;              // `=== null`, not `!start`: t can be 0
       const p = Math.min(1, (t - start) / duration);
-      const eased = 1 - Math.pow(1 - p, 3);
-      setN(eased * to);
-      if (p < 1) rafRef.current = requestAnimationFrame(step);
+      if (p < 1) {
+        setN((1 - Math.pow(1 - p, 3)) * target);
+        rafRef.current = requestAnimationFrame(step);
+      } else {
+        land();                                    // land ON the number, not near it
+      }
     };
     rafRef.current = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [to, duration]);
+    /* If the tab is backgrounded, or anything else stops the frames, this
+     * puts the real figure up rather than leaving a half-counted one. */
+    timerRef.current = setTimeout(land, duration + 400);
+    return () => { cancelAnimationFrame(rafRef.current); clearTimeout(timerRef.current); };
+  }, [target, duration]);
+
   const v = decimals > 0 ? n.toFixed(decimals) : Math.round(n);
   const display = format ? format(v) : `${prefix}${typeof v === "number" ? v.toLocaleString() : v}${suffix}`;
   return <>{display}</>;

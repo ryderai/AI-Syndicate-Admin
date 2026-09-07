@@ -23,6 +23,7 @@ import {
   nrr, quickRatio, grossMargin, netMargin, runwayMonths, breakEven, revenueConcentration,
   agingBuckets, avgDaysToPay, billedVsCollected, invoiceOutstandingCents,
   effectiveInvoiceStatus, sum, pctChange, daysBetween, todayIso, DELIVERY_CATEGORIES,
+  mergeMeasuredCosts,
 } from "../../../lib/finance-math.js";
 
 /* ==================================================================
@@ -48,98 +49,65 @@ import {
  * reason. It never prints 0.
  * ================================================================== */
 
-/* ---- sample numbers, for preview mode ---- */
+/* ---- what this page has when Stripe is not connected: NOTHING ----
+ *
+ * There used to be a demo dataset here — thirteen invented companies (Harbor
+ * Legal, Northlake Dental, Lakeside Realty Group and so on) summing to exactly
+ * $4,090/mo, a twelve-month revenue curve, card fees derived from it at 3.1%,
+ * and four fake "recent payments" with client names on them.
+ *
+ * It was rendered whenever Stripe was not connected, which is the state this
+ * console has been in the whole time. Worse, the tiles carried
+ * `basis="stripe"`, and that badge reads:
+ *
+ *     "Measured from Stripe — real money that actually moved. Nobody typed it."
+ *
+ * So the page reported $49,080 of yearly run rate, 13 paying clients and
+ * $30,150 kept, over a hint the size of a postage stamp saying WAITING ON KEY.
+ * The header of this very file promises "a number we cannot honestly work out
+ * prints 'not measured yet'... It never prints 0." The sample data broke that
+ * promise in the most expensive direction there is: it invented money.
+ *
+ * It is deleted. Not moved behind a flag, not shrunk — deleted. What replaces
+ * it is an empty shape, so every figure derived from Stripe has nothing to
+ * work from and `Figure` prints "not measured yet" with a reason, which is
+ * what the page was always supposed to do.
+ *
+ * DO NOT PUT SAMPLE NUMBERS BACK. If a screenshot with plausible figures is
+ * needed for a demo, connect a Stripe test-mode key: the numbers are then real
+ * for the account they came from, and nothing has to lie about where they came
+ * from.
+ */
 
-function unixDaysAgo(n) { return Math.floor((Date.now() - n * 86400000) / 1000); }
-function unixMonthsAgo(n) {
-  const d = new Date();
-  d.setMonth(d.getMonth() - n, 8);
-  return Math.floor(d.getTime() / 1000);
-}
-
-const SAMPLE_SUBS = [
-  { id: "sub_a", customerName: "Harbor Legal", plan: "Territory", status: "active", mrrCents: 52000, lastMrrCents: 52000, created: unixMonthsAgo(9), canceledAt: null },
-  { id: "sub_b", customerName: "Northlake Dental", plan: "Radar Pro", status: "active", mrrCents: 45000, lastMrrCents: 45000, created: unixMonthsAgo(7), canceledAt: null },
-  { id: "sub_c", customerName: "Lakeside Realty Group", plan: "Radar Pro", status: "active", mrrCents: 45000, lastMrrCents: 45000, created: unixMonthsAgo(6), canceledAt: null },
-  { id: "sub_d", customerName: "Vega Co", plan: "Pulse", status: "active", mrrCents: 29000, lastMrrCents: 29000, created: unixDaysAgo(9), canceledAt: null },
-  { id: "sub_e", customerName: "Cedar Park Dental", plan: "Pulse", status: "active", mrrCents: 29000, lastMrrCents: 29000, created: unixMonthsAgo(4), canceledAt: null },
-  { id: "sub_f", customerName: "Bloom Fitness", plan: "Starter", status: "active", mrrCents: 18000, lastMrrCents: 18000, created: unixDaysAgo(3), canceledAt: null },
-  { id: "sub_g", customerName: "Ridge Roofing", plan: "Starter", status: "active", mrrCents: 18000, lastMrrCents: 18000, created: unixMonthsAgo(5), canceledAt: null },
-  { id: "sub_h", customerName: "Marina Law", plan: "Pulse", status: "active", mrrCents: 32000, lastMrrCents: 32000, created: unixMonthsAgo(8), canceledAt: null },
-  { id: "sub_i", customerName: "Halcyon Med Spa", plan: "Pulse", status: "active", mrrCents: 26000, lastMrrCents: 26000, created: unixMonthsAgo(10), canceledAt: null },
-  { id: "sub_j", customerName: "Trail HVAC", plan: "Starter", status: "active", mrrCents: 24000, lastMrrCents: 24000, created: unixMonthsAgo(3), canceledAt: null },
-  { id: "sub_k", customerName: "Gulfview Realty", plan: "Radar Pro", status: "active", mrrCents: 35000, lastMrrCents: 35000, created: unixMonthsAgo(11), canceledAt: null },
-  { id: "sub_l", customerName: "Pinecrest Dental", plan: "Pulse", status: "active", mrrCents: 30000, lastMrrCents: 30000, created: unixMonthsAgo(2), canceledAt: null },
-  { id: "sub_m", customerName: "Anchor Injury Law", plan: "Pulse", status: "active", mrrCents: 26000, lastMrrCents: 26000, created: unixMonthsAgo(6), canceledAt: null },
-  { id: "sub_n", customerName: "Dune Coffee Roasters", plan: "Starter", status: "trialing", mrrCents: 40600, lastMrrCents: 40600, created: unixMonthsAgo(1), canceledAt: null },
-  { id: "sub_x", customerName: "Former Client LLC", plan: "Starter", status: "canceled", mrrCents: 0, lastMrrCents: 18000, created: unixMonthsAgo(9), canceledAt: unixDaysAgo(11) },
-];
-
-const SAMPLE_FINANCE = (() => {
-  const base = [1200, 1450, 1800, 2300, 2100, 2900, 3300, 3050, 3800, 4100, 4300, 4496];
-  const dailyRevenue = [];
-  const now = new Date();
-  for (let i = 11; i >= 0; i--) {
-    const first = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
-    const weights = [];
-    for (let d = 0; d < days; d++) {
-      const dow = new Date(first.getFullYear(), first.getMonth(), d + 1).getDay();
-      weights.push(dow === 0 || dow === 6 ? 0.25 : 1 + 0.35 * Math.abs(Math.sin(d * 1.3)));
-    }
-    const totalW = weights.reduce((a, b) => a + b, 0);
-    const monthCents = base[11 - i] * 100;
-    for (let d = 0; d < days; d++) {
-      const day = new Date(first.getFullYear(), first.getMonth(), d + 1);
-      if (day > now) break;
-      dailyRevenue.push({
-        d: `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`,
-        cents: Math.round((monthCents * weights[d]) / totalW),
-      });
-    }
-  }
+function emptyStripe() {
   const monthsList = lastMonths(12);
-  const feesByMonth = {};
-  const refundsByMonth = {};
-  monthsList.forEach((m, idx) => {
-    feesByMonth[m] = Math.round(base[idx] * 100 * 0.031);
-    refundsByMonth[m] = idx === 8 ? 12000 : 0;
-  });
-  /* The month we are in is only part done, so the sample shows a part month
-   * too — otherwise the sample would quietly disagree with the "20 of 31 days
-   * in" note printed next to it. */
-  const partDone = now.getDate() / new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const grossByMonth = Object.fromEntries(
-    monthsList.map((m, i) => [m, Math.round(base[i] * 100 * (i === monthsList.length - 1 ? partDone : 1))])
-  );
-  const revenueByMonth = Object.fromEntries(monthsList.map((m) => [m, grossByMonth[m] - (refundsByMonth[m] || 0)]));
+  const zeroed = Object.fromEntries(monthsList.map((m) => [m, 0]));
   return {
     configured: false,
-    sample: true,
     months: monthsList,
-    revenueByMonth,
-    grossByMonth,
-    subscriptions: SAMPLE_SUBS,
-    customerCount: 14,
-    customersByMonth: Object.fromEntries(monthsList.map((m, i) => [m, i >= 9 ? 2 : 1])),
-    dailyRevenue,
-    feesByMonth,
-    feesMeasured: true,
-    refundsByMonth,
-    revenueByCustomer: SAMPLE_SUBS.filter((s) => s.status !== "canceled").map((s, i) => ({
-      id: s.id, name: s.customerName, cents: s.mrrCents * Math.min(12, 3 + i), payments: Math.min(12, 3 + i),
-    })),
-    recentTransactions: [
-      { kind: "in", amountCents: 184200, created: unixDaysAgo(1), label: "Stripe payout" },
-      { kind: "in", amountCents: 45000, created: unixDaysAgo(2), label: "Northlake Dental · Aug" },
-      { kind: "in", amountCents: 29000, created: unixDaysAgo(4), label: "Vega Co · Aug" },
-      { kind: "in", amountCents: 52000, created: unixDaysAgo(6), label: "Harbor Legal · Aug" },
-    ],
+    /* Zeroed maps, not absent ones: the chart and month table iterate `months`
+     * and would throw on undefined. A zero HERE is honest — it says "no money
+     * moved through Stripe", which is true when Stripe is not connected —
+     * because every headline figure built from it is gated on `stripeKnown`
+     * below and prints "not measured yet" instead of the zero. */
+    revenueByMonth: { ...zeroed },
+    grossByMonth: { ...zeroed },
+    feesByMonth: { ...zeroed },
+    refundsByMonth: { ...zeroed },
+    customersByMonth: { ...zeroed },
+    subscriptions: [],
+    customerCount: 0,
+    dailyRevenue: [],
+    /* false, so the card-fee merge at the top of the page does not treat an
+     * absent fee as a measured zero and quietly displace a typed one. */
+    feesMeasured: false,
+    revenueByCustomer: [],
+    recentTransactions: [],
     invoices: [],
     truncated: false,
     fetchedAt: new Date().toISOString(),
   };
-})();
+}
 
 /* ------------------------------------------------------------------ */
 
@@ -157,13 +125,13 @@ export default function Finance({ member, setSection }) {
 
   const load = useCallback(async () => {
     if (!isConfigured()) {
-      setFin(SAMPLE_FINANCE);
-      setFinState("sample");
+      setFin(emptyStripe());
+      setFinState("waiting");
     } else {
       const res = await apiFetch("/api/stripe-finance");
       if (res.ok && res.data.configured) { setFin(res.data); setFinState("live"); }
-      else if (res.ok) { setFin(SAMPLE_FINANCE); setFinState("waiting"); }
-      else { setFin(SAMPLE_FINANCE); setFinState("error"); toast.error("Couldn't reach Stripe", res.error); }
+      else if (res.ok) { setFin(emptyStripe()); setFinState("waiting"); }
+      else { setFin(emptyStripe()); setFinState("error"); toast.error("Couldn't reach Stripe", res.error); }
     }
     const [e, i, c, s, u] = await Promise.all([
       listExpenses(), listInvoices(), listClients(), getFinanceSettings(), listUsage(400),
@@ -184,8 +152,19 @@ export default function Finance({ member, setSection }) {
     return () => window.removeEventListener("adm-refresh", onRefresh);
   }, [load]);
 
-  const stripeBadge = finState === "live" ? "live" : (finState === "waiting" || finState === "error") ? "waiting" : "sample";
-  const s = fin || SAMPLE_FINANCE;
+  const stripeBadge = finState === "live" ? "live" : "waiting";
+
+  /* THE ONE GATE. True only when Stripe actually answered with real data.
+   *
+   * Every figure below that is derived from money moving through Stripe is
+   * wrapped in `si(...)`. With no key, `si` returns null and Figure prints
+   * "not measured yet" with the reason — instead of printing $0.00, which
+   * reads as "we earned nothing" and is a different and much worse claim than
+   * "nobody has connected the payment processor". */
+  const stripeKnown = finState === "live";
+  const si = (v) => (stripeKnown ? v : null);
+  const NO_STRIPE_WHY = "Stripe is not connected, so no money-in figure can be measured. Settings → Integrations.";
+  const s = fin || emptyStripe();
   /* Wrapped in useMemo, not just `|| []`: a fresh empty array every render would
    * make the big calculation below re-run on every keystroke anywhere. */
   const expenseRows = useMemo(() => expenses.rows || [], [expenses]);
@@ -230,14 +209,58 @@ export default function Finance({ member, setSection }) {
     for (const e of expenseRows.filter((x) => x.category === "Payment fees")) {
       for (const hit of expenseToMonths(e, monthsList)) typedFeeMonths.add(hit.month);
     }
-    const costByMonth = {};
-    const feesAdded = {};
-    for (const m of monthsList) {
-      const measuredFee = (s.feesByMonth || {})[m] || 0;
-      const addFee = !typedFeeMonths.has(m) ? measuredFee : 0;
-      feesAdded[m] = addFee;
-      costByMonth[m] = (typedByMonth[m] || 0) + addFee;
+
+    /* MEASURED AI SPEND, PER MONTH — and it is money out, not a footnote.
+     *
+     * Until 7 Sep 2026 this page said, out loud, in a callout: "You typed
+     * $X in the AI & APIs category, and that is the figure every number on
+     * this page uses." That was true. The measured figure was computed for
+     * one month and shown in that one sentence; it reached no total, no
+     * margin, no break-even and no runway.
+     *
+     * Which meant a month where the platform genuinely spent $900 on tokens
+     * and nobody typed an expense showed 100% margin. Now that the platform
+     * actually reports what it spends, that is the wrong way round: the
+     * measured number is the better one and the typed number is the guess.
+     *
+     * SAME DOUBLE-COUNT RULE AS THE CARD FEES ABOVE: if somebody typed an
+     * "AI & APIs" cost for a month, their figure wins for that month and the
+     * measured one is not added on top. Counting a cost twice is worse than
+     * missing it.
+     *
+     * AN UNPRICED MONTH ADDS NOTHING, ON PURPOSE. pricedCost() returns null
+     * when a month's calls ran on models with no price row — never a low
+     * number — so a month we cannot price adds 0 here and says so on screen,
+     * rather than quietly making the business look cheaper to run. */
+    const typedAiMonths = new Set();
+    for (const e of expenseRows.filter((x) => x.category === "AI & APIs")) {
+      for (const hit of expenseToMonths(e, monthsList)) typedAiMonths.add(hit.month);
     }
+    const usageByMonth = {};
+    for (const r of usage.rows || []) {
+      const m = eventMonth(r);
+      if (!m) continue;
+      (usageByMonth[m] = usageByMonth[m] || []).push(r);
+    }
+    const aiMeasuredByMonth = {};
+    const aiUnpricedByMonth = {};
+    for (const m of monthsList) {
+      const sum = summarize(usageByMonth[m] || []);
+      const priced = pricedCost(sum);
+      aiMeasuredByMonth[m] = priced === null ? null : microsToCents(priced);
+      aiUnpricedByMonth[m] = sum.unpricedCalls;
+    }
+    /* The merge lives in lib/finance-math.js so it can be tested without a
+     * browser — see tests/cost-merge. It is the rule that decides what
+     * "profit" means on this page, and an inline loop nothing can call is a
+     * rule nobody can check. */
+    const merged = mergeMeasuredCosts(monthsList, typedByMonth, {
+      fees: { byMonth: s.feesByMonth || {}, typedMonths: typedFeeMonths },
+      ai: { byMonth: aiMeasuredByMonth, typedMonths: typedAiMonths },
+    });
+    const costByMonth = merged.costByMonth;
+    const feesAdded = merged.addedByMonth.fees;
+    const aiAdded = merged.addedByMonth.ai;
 
     const series = profitSeries(monthsList, revenueByMonth, costByMonth);
     /* The month we are in is not finished. Everything below that compares "this
@@ -273,7 +296,8 @@ export default function Finance({ member, setSection }) {
     const prevOut = costByMonth[prevMonth] || 0;
     const thisProfit = thisIn - thisOut;
 
-    const gm = grossMargin(thisIn, expenseRows, thisMonth, { extraDeliveryCents: feesAdded[thisMonth] });
+    /* Both measured extras, or the margin still reads the typed $0 for AI. */
+    const gm = grossMargin(thisIn, expenseRows, thisMonth, { extraDeliveryCents: feesAdded[thisMonth] + aiAdded[thisMonth] });
     const nm = netMargin(thisIn, thisOut);
     const arpaNow = arpa(mrr, payingClients);
 
@@ -289,7 +313,7 @@ export default function Finance({ member, setSection }) {
     const payback = cacPaybackMonths(cacNow.cents, arpaNow.cents, gm.pct);
     const nrrNow = nrr({ startMrr: movement.startMrr, churnMrr: movement.churnMrr });
     const qr = quickRatio({ newMrr: movement.newMrr, churnMrr: movement.churnMrr });
-    const be = breakEven(expenseRows, thisMonth, { extraVariableCents: feesAdded[thisMonth] });
+    const be = breakEven(expenseRows, thisMonth, { extraVariableCents: feesAdded[thisMonth] + aiAdded[thisMonth] });
     const cash = settings?.cash_on_hand_cents || 0;
     /* Runway is worked out from the last FINISHED month. This month books a full
      * month of costs on day one against however much has cleared so far, so on
@@ -301,6 +325,12 @@ export default function Finance({ member, setSection }) {
     const byCategory = expensesByCategory(expenseRows, thisMonth);
     if (feesAdded[thisMonth]) {
       byCategory["Payment fees"] = (byCategory["Payment fees"] || 0) + feesAdded[thisMonth];
+    }
+    if (aiAdded[thisMonth]) {
+      /* So the category chart, deliveryCost and cost-to-serve all agree with
+       * the totals above. Three widgets reading three different numbers for
+       * the same month is how this page lost people's trust the first time. */
+      byCategory["AI & APIs"] = (byCategory["AI & APIs"] || 0) + aiAdded[thisMonth];
     }
     const categoryRows = Object.entries(byCategory)
       .map(([label, cents]) => ({ label, cents }))
@@ -360,7 +390,10 @@ export default function Finance({ member, setSection }) {
     const aiPriced = pricedCost(aiThisMonth);
     const aiMeasuredThisMonth = aiPriced === null ? null : microsToCents(aiPriced);
     const aiUnpricedCalls = aiThisMonth.unpricedCalls;
-    const aiTyped = byCategory["AI & APIs"] || 0;
+    /* What a person typed, kept ONLY as the cross-check now. The authority is
+     * aiMeasuredByMonth above, which is in costByMonth and therefore in every
+     * profit figure on the page. This variable used to be the other way round. */
+    const aiTyped = typedAiMonths.has(thisMonth) ? (byCategory["AI & APIs"] || 0) : 0;
 
     // Cost to serve one client this month, and per-client profit.
     const deliveryCost = DELIVERY_CATEGORIES.reduce((t, c) => t + (byCategory[c] || 0), 0);
@@ -390,6 +423,8 @@ export default function Finance({ member, setSection }) {
       categoryRows, vendorRows, fv, concentration, planRows,
       outstanding, overdue, dueThisWeek, aging, daysToPay, collected,
       aiMeasuredThisMonth, aiUnpricedCalls, aiTyped, costToServe, deliveryCost, clientCostRows,
+      aiAddedThisMonth: aiAdded[thisMonth], aiTypedWins: typedAiMonths.has(thisMonth),
+      aiUnpricedByMonth, usageTruncated: Boolean(usage.truncated), usagePartial: Boolean(usage.partial),
       totalIn12: sum(Object.values(revenueByMonth)),
       totalOut12: sum(Object.values(costByMonth)),
       newCustomersThisMonth,
@@ -454,36 +489,58 @@ export default function Finance({ member, setSection }) {
                 finState === "live" ? `Measured from Stripe at ${new Date(s.fetchedAt).toLocaleTimeString()}` :
                 finState === "waiting" ? "Wired and waiting on STRIPE_SECRET_KEY — SETUP.md § Stripe" :
                 finState === "error" ? "The Stripe key is set but the last call failed — hit Refresh" :
-                "Sample numbers — preview mode"
+                "Stripe is not connected, so nothing on this page is measured from it"
               } />
             </div>
             <div className="adm-fin-hero-big">
-              <CountUp to={calc.mrr / 100} format={(v) => `$${Number(v).toLocaleString()}`} />
-              <span className="adm-fin-hero-unit">/mo</span>
+              {stripeKnown ? (
+                <>
+                  <CountUp to={calc.mrr / 100} format={(v) => `$${Number(v).toLocaleString()}`} />
+                  <span className="adm-fin-hero-unit">/mo</span>
+                </>
+              ) : (
+                <span className="adm-fin-blank">not measured yet</span>
+              )}
             </div>
             <div className="adm-fin-hero-note">
+              {!stripeKnown
+                ? "Connect Stripe and this becomes a real figure. Until then the console has no way to know what anybody pays you."
+                : <>
               {calc.payingClients} paying client{calc.payingClients === 1 ? "" : "s"}.
               {calc.trials > 0
                 ? ` Another ${money(calc.trials)}/mo is sitting in ${calc.trialSubs.length} trial${calc.trialSubs.length === 1 ? "" : "s"} — a promise, not money, so it is not in the figure above.`
                 : ""}
+                </>}
             </div>
           </div>
 
           <div className="adm-fin-hero-cell">
             <div className="adm-fin-hero-kicker">YEARLY RUN RATE</div>
-            <div className="adm-fin-hero-mid">{money(calc.arr)}</div>
-            <div className="adm-fin-hero-note">This month, twelve times over.</div>
+            <div className="adm-fin-hero-mid">
+              {stripeKnown ? money(calc.arr) : <span className="adm-fin-blank">not measured yet</span>}
+            </div>
+            {/* "This month, twelve times over" described the wrong number: this
+                is MRR x 12, not this month's money in x 12, and the two are
+                never the same. Somebody checking it against the tile below
+                would find they disagree and trust neither. */}
+            <div className="adm-fin-hero-note">Monthly recurring revenue, twelve times over.</div>
           </div>
 
           <div className="adm-fin-hero-cell">
             <div className="adm-fin-hero-kicker">PROJECTED MRR · +3 MONTHS</div>
             <div className="adm-fin-hero-mid adm-fin-hero-dashed">
-              {projectedMrr != null ? money(projectedMrr) : "—"}
+              {stripeKnown && projectedMrr != null ? money(projectedMrr) : <span className="adm-fin-blank">not measured yet</span>}
             </div>
             <div className="adm-fin-hero-note">
-              {calc.projection.growthPct != null
-                ? `At ${calc.projection.growthPct.toFixed(1)}% a month, from finished months only. An estimate, not a promise.`
-                : "Not enough months yet to project."}
+              {/* This was the one estimate on the page with no ESTIMATE badge,
+                  and it was also the only tile that still showed a figure when
+                  MRR rendered as $0 — so the page could read "$0/mo now,
+                  $5,243 in three months". */}
+              {!stripeKnown
+                ? "Needs Stripe. There is nothing to project from."
+                : calc.projection.growthPct != null
+                  ? `An ESTIMATE, not a promise: today's MRR grown at ${calc.projection.growthPct.toFixed(1)}% a month — the average month-on-month change in money received, from finished months only.`
+                  : "Not enough finished months yet to project."}
             </div>
           </div>
 
@@ -513,23 +570,23 @@ export default function Finance({ member, setSection }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 16 }}>
         <MetricCard
           label="Paying clients"
-          value={calc.payingClients}
+          value={stripeKnown ? calc.payingClients : "—"}
           hint={`${calc.movement.newPayingCount} new paying this month${calc.trialSubs.length ? ` · ${calc.trialSubs.length} in trial` : ""}`}
           badge={<SourceBadge mode={stripeBadge} />}
         />
         <MetricCard
           label="Average client value"
-          value={calc.arpaNow.cents != null ? `${money(calc.arpaNow.cents)}/mo` : "—"}
+          value={stripeKnown && calc.arpaNow.cents != null ? `${money(calc.arpaNow.cents)}/mo` : "—"}
           hint="MRR ÷ paying clients"
           badge={<SourceBadge mode={stripeBadge} />}
         />
         <MetricCard
           label="Kept this month"
-          value={money(calc.thisProfit)}
+          value={stripeKnown ? money(calc.thisProfit) : "—"}
           delta={calc.nm.pct != null ? `${calc.nm.pct.toFixed(0)}% margin` : undefined}
           deltaUp={calc.thisProfit >= 0}
           hint={`${money(calc.thisIn)} in · ${money(calc.thisOut)} out · ${calc.partOfMonth}`}
-          badge={<BasisBadge basis={expenses.sample ? "sample" : "mixed"} />}
+          badge={<BasisBadge basis={"mixed"} />}
         />
         <MetricCard
           label="Churned MRR"
@@ -545,7 +602,7 @@ export default function Finance({ member, setSection }) {
           <Block
             title="Money in vs out · 12 months + 3 projected"
             blurb="Bar height is money in. The red block at the bottom is everything paid out that month. Green is what was kept. Dashed bars are months we have not lived through — they are worked out, not measured."
-            right={<div style={{ display: "flex", gap: 8 }}><SourceBadge mode={stripeBadge} hint="Money in is measured from Stripe" /><BasisBadge basis={expenses.sample ? "sample" : "typed"} hint="Money out is typed into this console — the Costs section below" /></div>}
+            right={<div style={{ display: "flex", gap: 8 }}><SourceBadge mode={stripeBadge} hint="Money in is measured from Stripe" /><BasisBadge basis={"typed"} hint="Money out is typed into this console — the Costs section below" /></div>}
           >
             <InOutBars rows={calc.chartRows} ariaLabel="Money in and money out per month for the last 12 months, plus 3 projected months" />
             <div className="adm-fin-foot-note">{calc.projection.method}</div>
@@ -554,7 +611,7 @@ export default function Finance({ member, setSection }) {
           <Block
             title="What was kept, month by month"
             blurb="Money in minus every cost. A bar below the line is a month that lost money."
-            right={<BasisBadge basis={expenses.sample ? "sample" : "mixed"} />}
+            right={<BasisBadge basis={"mixed"} />}
           >
             <ProfitBars rows={calc.chartRows} ariaLabel="Profit per month for the last 12 months plus 3 projected" />
           </Block>
@@ -585,7 +642,7 @@ export default function Finance({ member, setSection }) {
 
           <ListCard
             title="Invoices outstanding"
-            badge={<BasisBadge basis={invoices.sample ? "sample" : "typed"} />}
+            badge={<BasisBadge basis={"typed"} />}
             rows={[
               { key: "out", name: "Owed to us", amount: money(calc.outstanding) },
               { key: "od", name: "Overdue", sub: `${calc.overdue.length} invoice${calc.overdue.length === 1 ? "" : "s"}`, amount: money(sum(calc.overdue, invoiceOutstandingCents)), color: calc.overdue.length ? MONEY_RED : undefined },
@@ -605,7 +662,7 @@ export default function Finance({ member, setSection }) {
 
           <ListCard
             title="Latest money out"
-            badge={<BasisBadge basis={expenses.sample ? "sample" : "typed"} />}
+            badge={<BasisBadge basis={"typed"} />}
             rows={expenseRows.slice(0, 6).map((e) => ({
               key: e.id, name: e.vendor || e.description || e.category,
               sub: `${e.category}${e.interval !== "one_time" ? ` · ${e.interval === "monthly" ? "every month" : "yearly"}` : ""}`,
@@ -628,20 +685,20 @@ export default function Finance({ member, setSection }) {
         right={<SourceBadge mode={stripeBadge} />}
       >
         <FigureGrid>
-          <Figure label="In this month" value={money(calc.thisIn)} basis="stripe"
+          <Figure label="In this month" value={si(money(calc.thisIn))} basis="stripe" why={NO_STRIPE_WHY}
             sub={`${calc.partOfMonth}${calc.inChangePct != null ? ` · ${calc.inChangePct >= 0 ? "+" : ""}${calc.inChangePct.toFixed(0)}% against all of ${monthLabel(calc.prevMonth)}` : ""}`}
             means="Every payment that cleared so far this month. The month is not over, so it is not a fair fight against a finished one." />
-          <Figure label="In over 12 months" value={money(calc.totalIn12)} basis="stripe"
+          <Figure label="In over 12 months" value={si(money(calc.totalIn12))} basis="stripe" why={NO_STRIPE_WHY}
             means="Everything that cleared since this month last year." />
-          <Figure label="Average month" value={money(Math.round(calc.totalIn12 / 12))} basis="stripe"
+          <Figure label="Average month" value={si(money(Math.round(calc.totalIn12 / 12)))} basis="stripe" why={NO_STRIPE_WHY}
             means="The 12-month total, split evenly." />
-          <Figure label="Biggest client's share" value={pct(calc.concentration.topSharePct, 0)} basis="stripe"
+          <Figure label="Biggest client's share" value={si(pct(calc.concentration.topSharePct, 0))} basis="stripe" why={NO_STRIPE_WHY}
             sub={calc.concentration.rows[0] ? calc.concentration.rows[0].label : null}
             means="How much of the money comes from one client. Over 30% is a risk worth naming out loud."
             tone={calc.concentration.topSharePct > 30 ? MONEY_RED : undefined} />
-          <Figure label="Clients making half the money" value={calc.concentration.clientsForHalf ?? null} basis="stripe"
+          <Figure label="Clients making half the money" value={si(calc.concentration.clientsForHalf ?? null)} basis="stripe" why={NO_STRIPE_WHY}
             means="How few clients we would have to lose to lose half the revenue." />
-          <Figure label="Refunded · 12 months" value={money(sum(Object.values(s.refundsByMonth || {})))} basis="stripe"
+          <Figure label="Refunded · 12 months" value={si(money(sum(Object.values(s.refundsByMonth || {}))))} basis="stripe" why={NO_STRIPE_WHY}
             means="Money handed back. Already taken out of every figure above." />
         </FigureGrid>
 
@@ -666,13 +723,13 @@ export default function Finance({ member, setSection }) {
       <Block
         title="Money out — where it goes"
         blurb="Typed into this console by us. Nothing outside knows what we pay, so this section is only as true as what gets entered. Card fees are the exception — Stripe measures those."
-        right={<BasisBadge basis={expenses.sample ? "sample" : "typed"} />}
+        right={<BasisBadge basis={"typed"} />}
       >
         <FigureGrid>
-          <Figure label="Out this month" value={money(calc.thisOut)} basis={expenses.sample ? "sample" : "typed"}
+          <Figure label="Out this month" value={money(calc.thisOut)} basis={"typed"}
             sub={`${calc.partOfMonth}${calc.outChangePct != null ? ` · ${calc.outChangePct >= 0 ? "+" : ""}${calc.outChangePct.toFixed(0)}% against ${monthLabel(calc.prevMonth)}` : ""}`}
             means="Every cost that lands in this month, including a share of yearly ones." />
-          <Figure label="Out over 12 months" value={money(calc.totalOut12)} basis={expenses.sample ? "sample" : "typed"}
+          <Figure label="Out over 12 months" value={money(calc.totalOut12)} basis={"typed"}
             means="Everything paid out since this month last year." />
           <Figure label="Costs that never stop" value={money(calc.fv.fixed)} basis="typed"
             means="Software, hosting and office costs — the bill that arrives whether or not we sign a client." />
@@ -710,23 +767,40 @@ export default function Finance({ member, setSection }) {
 
         {(calc.aiMeasuredThisMonth !== null || calc.aiUnpricedCalls > 0) && (
           <div className="adm-fin-callout">
-            <strong>Cross-check on the AI bill.</strong>{" "}
+            <strong>What the AI actually cost.</strong>{" "}
             {calc.aiMeasuredThisMonth === null ? (
               <>Nothing measurable this month: every AI call ran on a model with no price in the
-                book, so the feed cannot say what they cost. You typed{" "}
-                <strong>{money(calc.aiTyped)}</strong> in the &quot;AI &amp; APIs&quot; category, and that
-                is the figure every number on this page uses.</>
+                book, so the feed cannot say what they cost. Nothing has been added to the totals
+                for AI — which means the profit figures on this page are flattering by whatever
+                those calls really cost.</>
+            ) : calc.aiTypedWins ? (
+              <>The usage feed measured <strong>{money(calc.aiMeasuredThisMonth)}</strong> of AI
+                spend this month, but somebody typed <strong>{money(calc.aiTyped)}</strong> into the
+                &quot;AI &amp; APIs&quot; category — so the <strong>typed</strong> figure is the one
+                in the totals, and the measured one is not added on top. Counting it twice would be
+                worse than either.
+                {Math.abs(calc.aiMeasuredThisMonth - calc.aiTyped) > Math.max(2000, calc.aiTyped * 0.25)
+                  ? " They are far enough apart to be worth a look — deleting the typed cost would hand the page the measured one."
+                  : " They agree closely."}</>
             ) : (
               <>The usage feed measured <strong>{money(calc.aiMeasuredThisMonth)}</strong> of AI
-                spend this month. You typed <strong>{money(calc.aiTyped)}</strong> in the
-                &quot;AI &amp; APIs&quot; category.
-                {Math.abs(calc.aiMeasuredThisMonth - calc.aiTyped) > Math.max(2000, calc.aiTyped * 0.25)
-                  ? " Those are far enough apart to be worth a look — the typed figure is the one used in every number on this page."
-                  : " Close enough. The typed figure is the one used on this page."}</>
+                spend this month, and <strong>that is the figure in every total on this page</strong> —
+                the profit, the margin, the break-even and the runway. Nobody typed an
+                &quot;AI &amp; APIs&quot; cost for this month, so nothing is competing with it.</>
             )}
             {calc.aiUnpricedCalls > 0 && (
-              <> {calc.aiUnpricedCalls} more calls this month have no price at all, so whatever
-                they cost is in neither figure — the AI Cost page lists them.</>
+              <> {calc.aiUnpricedCalls} call{calc.aiUnpricedCalls === 1 ? "" : "s"} this month
+                {calc.aiUnpricedCalls === 1 ? " has" : " have"} no price at all, so whatever
+                {calc.aiUnpricedCalls === 1 ? " it costs is" : " they cost is"} in none of these
+                figures — the AI Cost page lists {calc.aiUnpricedCalls === 1 ? "it" : "them"}.</>
+            )}
+            {(calc.usageTruncated || calc.usagePartial) && (
+              <> <strong>The usage feed did not return everything.</strong>{" "}
+                {calc.usageTruncated
+                  ? "It hit its row ceiling, and because rows come back oldest-first the ones dropped are the newest — this month's."
+                  : "The database stopped answering part-way through."}{" "}
+                So the AI cost above is a floor, not a total, and every profit figure on this page is
+                flattering by the difference.</>
             )}
           </div>
         )}
@@ -752,23 +826,23 @@ export default function Finance({ member, setSection }) {
       <Block
         title="Profit — what is actually left"
         blurb="Two margins, because they answer different questions. Gross margin is about the work; net margin is about the whole business."
-        right={<BasisBadge basis={expenses.sample ? "sample" : "mixed"} />}
+        right={<BasisBadge basis={"mixed"} />}
       >
         <FigureGrid>
-          <Figure label="Kept this month" value={money(calc.thisProfit)} basis="mixed"
+          <Figure label="Kept this month" value={si(money(calc.thisProfit))} basis="mixed" why={NO_STRIPE_WHY}
             tone={calc.thisProfit >= 0 ? "#006300" : MONEY_RED}
             means="Money in, minus every cost that landed this month." />
-          <Figure label="Gross margin" value={pct(calc.gm.pct, 0)} basis="mixed"
+          <Figure label="Gross margin" value={si(pct(calc.gm.pct, 0))} basis="mixed" why={NO_STRIPE_WHY}
             sub={calc.gm.costCents != null ? `${money(calc.gm.costCents)} of delivery cost` : null}
             means="Of every dollar in, what is left after the cost of doing the work — contractors, AI, client costs, card fees." />
-          <Figure label="Net margin" value={pct(calc.nm.pct, 0)} basis="mixed"
+          <Figure label="Net margin" value={si(pct(calc.nm.pct, 0))} basis="mixed" why={NO_STRIPE_WHY}
             means="Of every dollar in, what is left after everything, software and ads included." />
-          <Figure label="Cost to serve one client" value={calc.costToServe != null ? `${money(calc.costToServe)}/mo` : null} basis="mixed"
+          <Figure label="Cost to serve one client" value={si(calc.costToServe != null ? `${money(calc.costToServe)}/mo` : null)} basis="mixed" why={NO_STRIPE_WHY}
             why="Needs at least one paying client and one delivery cost typed in."
             means="Delivery costs this month, split across the paying clients." />
-          <Figure label="Kept over 12 months" value={money(calc.totalIn12 - calc.totalOut12)} basis="mixed"
+          <Figure label="Kept over 12 months" value={si(money(calc.totalIn12 - calc.totalOut12))} basis="mixed" why={NO_STRIPE_WHY}
             means="A year of money in, minus a year of money out." />
-          <Figure label="Months in the black" value={`${calc.series.filter((r) => r.profit > 0).length} of 12`} basis="mixed"
+          <Figure label="Months in the black" value={si(`${calc.series.filter((r) => r.profit > 0).length} of 12`)} basis="mixed" why={NO_STRIPE_WHY}
             means="How many of the last twelve months kept more than they spent." />
         </FigureGrid>
       </Block>
@@ -795,7 +869,7 @@ export default function Finance({ member, setSection }) {
           <Figure label="Months to earn back a client" value={fmtMonths(calc.payback.months)} basis={calc.payback.basis}
             why="Needs a cost to win, an average client value, and a margin."
             means="How long a new client pays before they have covered what it cost to win them." />
-          <Figure label="Average client value" value={calc.arpaNow.cents != null ? `${money(calc.arpaNow.cents)}/mo` : null} basis="stripe"
+          <Figure label="Average client value" value={si(calc.arpaNow.cents != null ? `${money(calc.arpaNow.cents)}/mo` : null)} basis="stripe" why={NO_STRIPE_WHY}
             means="Recurring revenue divided by the number of paying clients." />
           <Figure label="How long a client stays" value={fmtMonths(calc.ltvNow.months)} basis="estimate"
             why="Needs at least one client lost, so there is a churn rate to work from."
@@ -824,7 +898,7 @@ export default function Finance({ member, setSection }) {
         title="Cash — what is owed to us, and how long the money lasts"
         blurb="Invoices are ours, typed into this console. What is in the bank is typed in too, with the date it was true."
         right={<div style={{ display: "flex", gap: 8 }}>
-          <BasisBadge basis={invoices.sample ? "sample" : "typed"} />
+          <BasisBadge basis={"typed"} />
           <button className="btn btn-sm" onClick={() => setSection("invoices")}>Open invoices →</button>
         </div>}
       >
@@ -892,7 +966,7 @@ export default function Finance({ member, setSection }) {
       <Block
         title="Every month, side by side"
         blurb="The same twelve months as the chart, as numbers you can copy."
-        right={<BasisBadge basis={expenses.sample ? "sample" : "mixed"} />}
+        right={<BasisBadge basis={"mixed"} />}
       >
         <div style={{ overflowX: "auto" }}>
           <table className="adm-table">
