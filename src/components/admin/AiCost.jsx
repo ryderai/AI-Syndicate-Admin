@@ -55,7 +55,10 @@ const WINDOWS = [
  * twice — caught on the first screenshot of the built page, not by a test,
  * which is the usual way this kind of thing gets caught. */
 const FIRST_TAB = "client";
-const TABS = ["person", "feature", "surface", "model", "day"];
+/* "job" sits first after client because it is the question the page is most
+   often opened to answer — what is this spend FOR — and until 8 Sep 2026 it
+   could not be answered at all. */
+const TABS = ["job", "person", "feature", "surface", "model", "day"];
 
 const SORTS = [
   { id: "cost", label: "Cost", get: (r) => r.costMicros },

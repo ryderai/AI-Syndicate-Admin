@@ -352,3 +352,86 @@ switch both engines off rather than keep firing hundreds of guaranteed-rejected
 requests a day. Nothing above needs Andrew.
 
 And the forty-file list under "What was NOT fixed" is the next real task.
+
+---
+
+# ✅ VERIFIED IN PRODUCTION — 8 Sep 2026, both fixes live
+
+Appended after the fact. Everything above was written while nothing was
+deployed; this is what was actually read off the live pages.
+
+## Shipped
+
+- **Admin:** `5f79e9c` on `main`, pushed.
+- **Platform:** PR **#2052** merged as **`90fdc63`** on `main`, 9/9 checks
+  green, Verified, 12 files changed (+972 −97). The branch commit `958cff7`
+  was 11/11.
+- **Migration 0138 was run** in the Supabase SQL editor by Ryder.
+
+## Fix 2 — read off the live AI Cost page (after Cmd+Shift+R)
+
+The page no longer has one "Failed" number. It now reads:
+
+| figure | value |
+|---|---|
+| Calls that errored | **142** |
+| **Stopped at a cap** | **772** |
+| Answers thrown away | **0** |
+
+**Before this change all 914 of those would have printed as failures.** 772 of
+them are rate limits, which are not billed and are not broken. The table's
+three columns (ERRORED / CAPPED / THROWN AWAY) show `142 / 772 / —` on the
+Internal row.
+
+The blind-calls sentence is computing its own breakdown, exactly as intended:
+
+> **905 calls reported no token counts.** By what happened to them: 2 succeeded
+> and were never measured, 772 stopped at a cap, 131 errored. Whatever the
+> errored and thrown-away ones cost is in no number on this page…
+
+That is the sentence that used to assert a cause nothing had counted.
+
+**Worth noticing separately:** capped has gone **384 → 772** since last night.
+Mistral kept being rate limited all night. Nothing is being billed for it, but
+we are still firing hundreds of guaranteed-rejected requests a day, which is
+the open business question below. Also **1,186 calls still have no price**
+(perplexity, deepseek, serpapi — unpriced on purpose, see 0033).
+
+## Fix 1 — read off the live Prompt simulator
+
+The tracked-prompt score chips are **no longer out of 12**. Read directly from
+the live page's `title` attributes:
+
+| chip | tooltip |
+|---|---|
+| **0/9** | "Out of the 9 engines that answered. **3 of the 12** we asked returned nothing — a timeout, a rate limit or a key — and those are left out rather than counted against you." |
+| **0/11** | "Out of the 11 engines that answered. **1 of the 12** we asked returned nothing…" |
+
+This proves the **whole chain**, not just the page:
+
+1. **0138 ran and its backfill worked** — no chip carries the `*` that marks an
+   unknown denominator, so `answered` is populated on the snapshot rows.
+2. **The API carries it** — `getSnapshot` / `listSnapshots` are returning it,
+   which they did not before.
+3. **The page divides by it** — 9 and 11, not 12, and different per run.
+4. **It explains itself** — the tooltip names the missing engines rather than
+   hiding them in a ratio.
+
+Under the old arithmetic every one of those chips read **`/12`**.
+
+## Still not verified, and deliberately not
+
+**No Prompt simulator run was fired.** One run hits twelve engines and is real
+money, and this platform burned $1,000 of credits in three days on 2 Sep. The
+evidence above comes from stored runs and costs nothing. The live-run path
+(`SummaryStrip`, the game-plan gate, a fresh `RunStatusBar`) is covered by
+tests and by the stored-run rendering, but it has not been watched end to end
+against a live twelve-engine run. **That is the one thing left, and it should
+be one prompt, not a sweep.**
+
+## Unchanged and still true
+
+The forty-file list under "What was NOT fixed" is untouched and is the next
+task. And the business question is still the blocker for Mistral and Groq: **do
+we tell clients we cover Mistral and Meta AI?** 772 rate limits in a day is the
+number that makes it worth answering.

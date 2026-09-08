@@ -32,7 +32,7 @@ import {
   microsToCents, formatMicros, formatTokens,
   eventDay, eventMonth, summarize, rollup, percentile, changeAgainst,
   daysInMonth, partMonthNote, previousMonth, drift, pricedCost,
-  BASIS, INTERNAL, INTERNAL_LABEL, FEATURES, SURFACES, STATUSES,
+  BASIS, INTERNAL, INTERNAL_LABEL, FEATURES, SURFACES, STATUSES, UNLABELLED,
 } from "../../lib/ai-cost.js";
 import { recordAiUsage, primePriceCache, priceCacheIsStale } from "../../lib/ai-usage.js";
 
@@ -765,6 +765,75 @@ ok("lib/ai-cost.js says in words what each status means",
   /WHAT EACH STATUS MEANS/.test(costLib));
 eq("STATUSES is unchanged — this split adds no new status",
   STATUSES.join(","), "ok,failed,rejected,capped,legacy");
+
+
+/* ------------------------------------------------------------------ */
+/* 8. BY JOB — the column that was collected and never shown.          */
+/* ------------------------------------------------------------------ */
+/* `platform_feature` has been written since 0032 and grouped on by nothing.
+ * Meanwhile "By feature" reads the console's own enum, which every platform
+ * row leaves at "other" — so on 8 Sep 2026 four of the page's six views were a
+ * single undifferentiated row and nobody could say what the AI bill bought. */
+
+const JOB_EV = [
+  { ts: "2026-09-01T12:00:00Z", source: "platform", platform_feature: "brand.scan", cost_micros: 3000, status: "ok" },
+  { ts: "2026-09-01T12:00:00Z", source: "platform", platform_feature: "brand.scan", cost_micros: 1000, status: "ok" },
+  { ts: "2026-09-01T12:00:00Z", source: "platform", platform_feature: "audit.run", cost_micros: 500, status: "ok" },
+  // A platform call that never said what it was doing.
+  { ts: "2026-09-01T12:00:00Z", source: "platform", feature: "other", cost_micros: 200, status: "ok" },
+  // A console call. It labels itself with the CONSOLE's enum, not a job name.
+  { ts: "2026-09-01T12:00:00Z", source: "admin", feature: "client_report", cost_micros: 900, status: "ok" },
+];
+
+const byJob = rollup(JOB_EV, "job");
+const jobKey = (k) => byJob.find((r) => r.key === k);
+eq("calls are grouped by what they were DOING", jobKey("brand.scan")?.calls, 2);
+eq("...and their spend adds up per job", jobKey("brand.scan")?.costMicros, 4000);
+eq("a second job is its own row", jobKey("audit.run")?.calls, 1);
+eq("⭐ an unlabelled call is named as a gap, not filed under 'other'",
+  jobKey(UNLABELLED)?.calls, 1);
+ok("...and 'other' is NOT a job key — that is the console enum's word",
+  !byJob.some((r) => r.key === "other"), JSON.stringify(byJob.map((r) => r.key)));
+
+/* A label made of whitespace is NOT a label. usage-ingest slices this field
+ * but never trims it, so "   " arrives truthy and used to earn its own group —
+ * a visually blank row on a money page with a dollar figure next to it, which
+ * reads as a rendering bug and hides an unlabelled call. */
+eq("a whitespace-only job name is treated as no label at all",
+  rollup([{ ts: "2026-09-01T12:00:00Z", source: "platform", platform_feature: "   ", cost_micros: 5 }], "job")[0].key,
+  UNLABELLED);
+eq("...and a padded real name is trimmed, not turned into a second group",
+  rollup([
+    { ts: "2026-09-01T12:00:00Z", source: "platform", platform_feature: "brand.scan", cost_micros: 5 },
+    { ts: "2026-09-01T12:00:00Z", source: "platform", platform_feature: " brand.scan ", cost_micros: 5 },
+  ], "job").length, 1);
+
+/* The gap bucket must not be a name a real job could take. */
+ok("the unlabelled key cannot collide with a plan-token job name",
+  /[^A-Za-z0-9.]/.test(UNLABELLED[0]), `starts with ${JSON.stringify(UNLABELLED[0])}`);
+
+/* The two columns answer different questions and must not be merged. A console
+ * `client_report` and a platform job called `client_report` are different work
+ * in different systems; one key for both would silently add them together. */
+eq("a console call is prefixed so it cannot collide with a platform job",
+  jobKey("console · client_report")?.calls, 1);
+ok("a platform job named the same as a console feature stays separate",
+  rollup([
+    { ts: "2026-09-01T12:00:00Z", source: "platform", platform_feature: "client_report", cost_micros: 1 },
+    { ts: "2026-09-01T12:00:00Z", source: "admin", feature: "client_report", cost_micros: 1 },
+  ], "job").length === 2);
+
+/* Every group must total to the grand total, or a view invents or loses money.
+ * This is the assertion that catches a keyOf that silently drops rows. */
+eq("no spend is lost or invented by the grouping",
+  byJob.reduce((n, r) => n + r.costMicros, 0), summarize(JOB_EV).costMicros);
+eq("...and no call is lost either",
+  byJob.reduce((n, r) => n + r.calls, 0), JOB_EV.length);
+
+/* The page has to actually offer the view. The grouping existing and no tab
+ * rendering it is the exact shape of the defect this closes. */
+ok("the page offers the By job tab", /"job"/.test(aiCostPage) && /TABS = \["job"/.test(aiCostPage));
+ok("...and the grouping is exported for it to use", /^\s*job: \{/m.test(costLib));
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
