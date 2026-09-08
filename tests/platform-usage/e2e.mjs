@@ -53,6 +53,30 @@ try {
 const meter = await import(`${process.env.PLATFORM_LIB}/ai-meter.js`);
 const modelJson = await import(`${process.env.PLATFORM_LIB}/model-json.js`);
 
+/* ⭐ THE ONE PLACE THE TWO COPIES OF THE TOKEN-LESS LIST CAN BE COMPARED.
+ *
+ * This file is the only thing in either repo that imports the platform and the
+ * console together, so it is the only thing that can check them against each
+ * other. On 8 Sep 2026 they were out of step: `searchapi` and `zernio` were in
+ * the platform's set and not in this repo's, which stamped every one of their
+ * calls meta.tokensUnknown — rendered by the AI Cost page in its
+ * metering-is-broken banner — and discarded their per-call price so that
+ * adding a price row would have changed nothing.
+ *
+ * It only runs when the end-to-end suite runs, which needs Postgres and is
+ * SKIPPED on a Mac. A skip is not a pass. The real fix is a lint guard in this
+ * repo, which has no scripts/ directory yet. */
+const { ADMIN_TOKENLESS_PROVIDERS } = await import(`${process.env.ADMIN_API}/usage-ingest.js`);
+
+test("0. the two repos agree on which providers have no tokens", () => {
+  assert.ok(ADMIN_TOKENLESS_PROVIDERS, "api/usage-ingest.js must export its set for this to be checkable");
+  assert.deepEqual(
+    [...ADMIN_TOKENLESS_PROVIDERS].sort(),
+    [...meter.TOKENLESS_PROVIDERS].sort(),
+    "a token-less provider added to the platform's meter was not added to this repo's copy",
+  );
+});
+
 process.env.ENABLE_AI_METER = "true";
 meter.__resetAiMeter();
 
@@ -72,9 +96,12 @@ await modelJson.requestModelJson({
   tag: "e2e", createError: (m, st) => Object.assign(new Error(m), { status: st }),
   errors: { timeout: "t", http: "h", unusable: "u", cutOff: "c", empty: "e" },
 });
-/* Plus a paid call with NO tokens at all — the case that was refused by the
- * database and dropped by the endpoint before this work. */
+/* Plus paid calls with NO tokens at all — the case that was refused by the
+ * database and dropped by the endpoint before this work. searchapi is here
+ * because it is one of the two vendors that were added to the platform's meter
+ * on 8 Sep 2026 and missed in this repo's own TOKENLESS_PROVIDERS copy. */
 meter.recordProviderCall({ provider: "serpapi", model: "search", usage: null, status: "ok", latencyMs: 120 });
+meter.recordProviderCall({ provider: "searchapi", model: "google_trends_trending_now", usage: null, status: "ok", latencyMs: 210 });
 
 let POSTED = null;
 process.env.ADMIN_USAGE_INGEST_URL = "https://admin.example.com/api/usage-ingest";
@@ -85,9 +112,9 @@ globalThis.fetch = async (url, init) => {
 };
 await meter.flushAiMeter();
 
-test("1. the platform produced two events, with the tokens it really used", () => {
+test("1. the platform produced three events, with the tokens it really used", () => {
   assert.ok(POSTED, "the meter posted nothing at all");
-  assert.equal(POSTED.events.length, 2);
+  assert.equal(POSTED.events.length, 3);
   const claude = POSTED.events.find((e) => e.provider === "anthropic");
   assert.equal(claude.input_tokens, 3120);
   assert.equal(claude.output_tokens, 245);
@@ -133,7 +160,7 @@ const res = {
 test("2. the real ingest endpoint accepts it and builds the rows", async () => {
   await ingest({ method: "POST", headers: { "x-ingest-key": "shared-secret" }, body: POSTED }, res);
   assert.equal(RESPONSE.code, 200, `endpoint said: ${JSON.stringify(RESPONSE.body)}`);
-  assert.equal(captured.rows.length, 2, "BOTH events were kept — the tokenless one was dropped before this fix");
+  assert.equal(captured.rows.length, 3, "EVERY event was kept — the tokenless ones were dropped before this fix");
   const serpRow = captured.rows.find((r) => r.provider === "serpapi");
   assert.equal(serpRow.input_tokens, null);
   assert.equal(serpRow.cost_micros, null, "an unmeasured call must not be priced at zero");

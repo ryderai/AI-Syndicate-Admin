@@ -45,9 +45,32 @@ import {
 } from "../lib/ai-cost.js";
 
 /* Providers that have no tokens at all, ever. Their spend is real and is
- * priced per call, not per token. Kept in step with the readNoTokens() list in
- * the platform's lib/ai-meter.js. */
-const TOKENLESS_PROVIDERS = new Set(["serpapi", "serper", "firecrawl", "higgsfield", "platform-audit"]);
+ * priced per call, not per token.
+ *
+ * ⭐ THIS IS A SECOND COPY OF THE PLATFORM'S TOKENLESS_PROVIDERS, exported
+ * from its lib/ai-meter.js. The two repos cannot import from each other, so
+ * the copies are kept in step by hand — and on 8 Sep 2026 they were not.
+ * `searchapi` and `zernio` were added to the platform's meter and missed here,
+ * with two consequences, neither of which showed up as an error anywhere:
+ *
+ *  1. Every one of their calls got `meta.tokensUnknown`, which the AI Cost
+ *     page renders in its "N calls reported no token counts" banner — the
+ *     METERING-IS-BROKEN banner. A vendor that has no tokens by its nature was
+ *     being reported as a failed measurement.
+ *  2. `priceableFromTokens` stayed false, so `priced.costMicros` was
+ *     discarded — meaning adding a per-call price row for either of them would
+ *     have changed nothing on screen. That is verbatim the hole the comment
+ *     further down says was already closed once for SerpApi.
+ *
+ * A NAME ADDED TO THE PLATFORM'S SET MUST BE ADDED HERE IN THE SAME CHANGE.
+ * There is no guard for that yet — this repo has no scripts/ directory — and
+ * porting the platform's lint guards here is the open item that would end it. */
+/* Exported ONLY so tests/platform-usage/e2e.mjs can compare it against the
+ * platform's set. Nothing else should read it. */
+export const ADMIN_TOKENLESS_PROVIDERS = new Set([
+  "serpapi", "serper", "searchapi", "firecrawl", "higgsfield", "zernio", "platform-audit",
+]);
+const TOKENLESS_PROVIDERS = ADMIN_TOKENLESS_PROVIDERS;
 
 const isUuid = (v) =>
   typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
