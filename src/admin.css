@@ -3500,7 +3500,9 @@ select.adm-input { cursor: pointer; }
  * column and without this the whole console shifts. */
 .adm-aic-tablewrap { overflow-x: auto; margin-top: 12px; }
 
-.adm-aic-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 640px; }
+/* 760, not 640: the outcome columns were split from one "Failed" into
+   Errored / Limited / Thrown away, and at 640 they crushed together. */
+.adm-aic-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 760px; }
 .adm-aic-table th {
   text-align: left; padding: 8px 10px; font-size: 10px; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--ink-dim); font-weight: 700;
@@ -3512,6 +3514,9 @@ select.adm-input { cursor: pointer; }
 .adm-aic-table .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .adm-aic-table .dim { color: var(--ink-dim); }
 .adm-aic-table .bad { color: #941f1f; font-weight: 600; }
+/* Amber, not red: a rate limit is a quota to raise, not something broken.
+   #92400e on the table background is ~7.5:1, comfortably past AA. */
+.adm-aic-table .warn { color: #92400e; font-weight: 600; }
 .adm-aic-table .strong { font-weight: 600; }
 .adm-aic-name { font-weight: 600; }
 .adm-aic-hint { color: var(--ink-dim); cursor: help; }
@@ -3543,6 +3548,9 @@ select.adm-input { cursor: pointer; }
 .adm-aic-close:hover { background: var(--bg-3); }
 .adm-aic-state { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.05em; }
 .adm-aic-state.bad { color: #941f1f; cursor: help; }
+/* Was used by the `legacy` badge and never defined, so legacy rendered in the
+   body colour. Now it is defined, and `rate limited` uses it too. */
+.adm-aic-state.warn { color: #92400e; cursor: help; }
 .adm-aic-state.dim { color: var(--ink-dim); }
 
 .adm-aic-note { color: var(--ink-dim); font-size: 13px; margin: 10px 0 0; }

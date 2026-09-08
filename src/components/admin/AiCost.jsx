@@ -61,7 +61,8 @@ const SORTS = [
   { id: "cost", label: "Cost", get: (r) => r.costMicros },
   { id: "calls", label: "Calls", get: (r) => r.calls },
   { id: "tokens", label: "Tokens", get: (r) => r.totalTokens },
-  { id: "failed", label: "Failed", get: (r) => r.failed },
+  { id: "failed", label: "Errored", get: (r) => r.failed },
+  { id: "capped", label: "Hit a cap", get: (r) => r.capped },
 ];
 
 function ms(n) { return n == null ? "—" : `${Math.round(n).toLocaleString("en-US")} ms`; }
@@ -266,7 +267,24 @@ export default function AiCost({ member }) {
     /* Calls that threw before the provider reported anything. Their spend is in
      * no total on this page, and that is worth one sentence rather than a
      * silent understatement. */
-    const blind = rows.filter((r) => r?.meta?.tokensUnknown).length;
+    const blindRows = rows.filter((r) => r?.meta?.tokensUnknown);
+    const blind = blindRows.length;
+    /* Split by what actually happened, because the sentence beside it used to
+     * name a cause nothing had counted. Note `ok`: usage-ingest marks plenty of
+     * SUCCESSFUL platform calls tokensUnknown (the SerpApi searches behind each
+     * AI Local edition), and calling those "calls that ended early" was wrong
+     * in the old copy too. */
+    const blindBy = { ok: 0, legacy: 0, capped: 0, rejected: 0, failed: 0 };
+    for (const r of blindRows) {
+      const st = r?.status;
+      if (st === "capped") blindBy.capped += 1;
+      else if (st === "rejected") blindBy.rejected += 1;
+      else if (st === "failed") blindBy.failed += 1;
+      // `legacy` is its own bucket: describing a pre-Aug-28 estimate as
+      // "succeeded and was never measured" is a different and wrong claim.
+      else if (st === "legacy") blindBy.legacy += 1;
+      else blindBy.ok += 1;
+    }
 
     const grouped = rollup(rows, tab, maps);
     const sorter = SORTS.find((s) => s.id === sortId) || SORTS[0];
@@ -290,13 +308,19 @@ export default function AiCost({ member }) {
         made: okRows.length,
         attempts: all.length,
         avg: t.avgCostMicros,
+        /* EVERY call that did not produce a report — errored, capped or
+         * thrown away. Deliberately the superset, not just `rejected`: the
+         * question this column answers is "what did we pay for nothing", and a
+         * cappedOut agent run is the most expensive way to pay for nothing.
+         * The header beside it says so, because "rejects" now names one
+         * specific status elsewhere on this page. */
         wasted: summarize(all.filter((r) => r.status !== "ok" && r.status !== "legacy")).costMicros,
       };
     }).filter((r) => r.attempts > 0);
 
     return {
       total, before, thisMonth, lastMonth, thisMonthTotals, lastMonthTotals,
-      billRow, lastDrift, saved, savedRows, savingUnknown, blind, sorted,
+      billRow, lastDrift, saved, savedRows, savingUnknown, blind, blindBy, sorted,
       perReport,
       costChange: changeAgainst(total.costMicros, before.costMicros),
       callChange: changeAgainst(total.calls, before.calls),
@@ -346,8 +370,34 @@ export default function AiCost({ member }) {
       )}
       {calc.blind > 0 && (
         <div className="adm-aic-warn adm-aic-warn-amber">
-          <strong>{calc.blind} calls failed before the AI reported anything.</strong> The failures are counted;
-          any tokens they used are not, because nobody told us how many there were.
+          <strong>{calc.blind} calls reported no token counts.</strong>{" "}
+          {/* The breakdown is COMPUTED, not asserted. An earlier draft told the
+            * reader which cause happened most often — hardcoded prose that was
+            * true for one window on 7 Sep 2026 and false the moment Mistral's
+            * quota is raised. The guard in tests/ai-cost searches for that
+            * phrasing, so this note deliberately does not repeat it: a guard
+            * that flags its own documentation is a known trap in this repo
+            * (scripts/check-model-defaults.mjs hit it on its first run).
+            *
+            * ALWAYS RENDERED, never gated. An earlier version showed it only
+            * when a call had errored, capped or been thrown away — so the most
+            * common case by far, successful platform calls that simply report
+            * no tokens (the SerpApi searches behind every AI Local edition),
+            * got no explanation at all and sat under a heading that implied
+            * they broke. */}
+          <>By what happened to them: {[
+            calc.blindBy.ok ? `${calc.blindBy.ok} succeeded and were never measured` : null,
+            calc.blindBy.legacy ? `${calc.blindBy.legacy} are pre-Aug-28 estimates` : null,
+            calc.blindBy.capped ? `${calc.blindBy.capped} stopped at a cap` : null,
+            calc.blindBy.failed ? `${calc.blindBy.failed} errored` : null,
+            calc.blindBy.rejected ? `${calc.blindBy.rejected} were thrown away` : null,
+          ].filter(Boolean).join(", ")}. </>
+          {calc.blindBy.failed || calc.blindBy.rejected
+            ? "Whatever the errored and thrown-away ones cost is in no number on this page, because nobody told us how many tokens they used. "
+            : ""}
+          {calc.blindBy.capped && !calc.blindBy.failed && !calc.blindBy.rejected
+            ? "A call turned away by a rate limit generates nothing, so there is no hidden spend behind those. "
+            : ""}
         </div>
       )}
       {calc.total.legacyCalls > 0 && (
@@ -430,12 +480,31 @@ export default function AiCost({ member }) {
           basis="metered"
           sub={`${formatTokens(calc.total.inputTokens)} in · ${formatTokens(calc.total.outputTokens)} out · ${formatTokens(calc.total.cacheReadTokens)} cached`}
         />
+        {/* THREE FIGURES, NOT ONE. There used to be a single "Calls that
+          * failed" here that added up errors, rate limits and thrown-away
+          * answers. On 7 Sep 2026 it read 398 while 384 of those were Mistral
+          * being rate limited — a quota to raise, not an integration to fix,
+          * and the page gave no way to tell. */}
         <Figure
-          label="Calls that failed"
+          label="Calls that errored"
           value={calc.total.failed.toLocaleString("en-US")}
           basis="metered"
           tone={calc.total.failed ? "#941f1f" : undefined}
-          means="Timed out, rate limited, or thrown away by the honesty gate. We are billed for most of these."
+          means="Timed out, dropped, or the provider returned an error that was not a rate limit. Rate limits and thrown-away answers are counted separately, beside this. Whether one of these was billed depends on how far it got, and this page cannot tell you."
+        />
+        <Figure
+          label="Stopped at a cap"
+          value={calc.total.capped.toLocaleString("en-US")}
+          basis="metered"
+          tone={calc.total.capped ? "#8a5a00" : undefined}
+          means="The call hit a ceiling rather than breaking. Two kinds land here and they cost very different amounts: the provider turning us away with a rate limit, which generates nothing and is not billed, and our own assistant running out of steps part way through a job, where every step it did run was paid for. The Cost column on each row is what says which. Either way it is not a failure and is not counted as one."
+        />
+        <Figure
+          label="Answers thrown away"
+          value={calc.total.rejected.toLocaleString("en-US")}
+          basis="metered"
+          tone={calc.total.rejected ? "#941f1f" : undefined}
+          means="The AI did answer and we discarded the answer because it did not pass our own checks. The provider still generated the tokens, so unlike a rate limit this one costs money and delivers nothing."
         />
         <Figure
           label="Speed"
@@ -482,7 +551,9 @@ export default function AiCost({ member }) {
                 <tr>
                   <th>{GROUPINGS[tab].label.replace("By ", "")}</th>
                   <th className="n">Calls</th>
-                  <th className="n">Failed</th>
+                  <th className="n" title="The call errored: timeout, dropped connection, or a provider error that was not a rate limit.">Errored</th>
+                  <th className="n" title="The call stopped at a ceiling instead of breaking: either the provider's rate limit (not billed) or our own assistant running out of steps (billed for the steps it ran). Not a failure.">Capped</th>
+                  <th className="n" title="The AI answered and we threw the answer away because it did not pass our own checks. Billed, and nothing delivered.">Thrown away</th>
                   <th className="n">In</th>
                   <th className="n">Out</th>
                   <th className="n">Cached</th>
@@ -520,6 +591,8 @@ export default function AiCost({ member }) {
                       </td>
                       <td className="n">{r.calls.toLocaleString("en-US")}</td>
                       <td className={`n ${r.failed ? "bad" : "dim"}`}>{r.failed || "—"}</td>
+                      <td className={`n ${r.capped ? "warn" : "dim"}`}>{r.capped || "—"}</td>
+                      <td className={`n ${r.rejected ? "bad" : "dim"}`}>{r.rejected || "—"}</td>
                       <td className="n dim">{formatTokens(r.inputTokens)}</td>
                       <td className="n dim">{formatTokens(r.outputTokens)}</td>
                       <td className="n dim">{r.cacheReadTokens ? formatTokens(r.cacheReadTokens) : "—"}</td>
@@ -569,10 +642,23 @@ export default function AiCost({ member }) {
                       <td className="n dim">{r.latency_ms == null ? "—" : ms(r.latency_ms)}</td>
                       <td className="n strong">{formatMicros(r.cost_micros)}</td>
                       <td>
+                        {/* A rate limit is amber and says so in words. It used
+                          * to render red with the bare word "capped" and no
+                          * explanation, which read as a broken call. */}
                         {r.status === "legacy"
                           ? <span className="adm-aic-state warn" title="Costed before Aug 28 2026 with one hardcoded price applied to whatever model actually ran. An estimate, kept as history.">legacy</span>
+                          : r.status === "capped"
+                            /* The word is NOT "rate limited": in this console
+                             * `capped` is usually our own agent running out of
+                             * rounds, which IS billed. Only say rate limit
+                             * when a 429 is actually on the row. */
+                            ? <span className="adm-aic-state warn" title={r.meta?.http_status === 429 || r.meta?.http_status === "429"
+                                ? "The provider turned this call away with a rate limit (HTTP 429). Nothing was generated and nothing was billed."
+                                : `Stopped at a cap rather than erroring — most often our own assistant running out of steps, in which case the rounds it did run were billed and the cost is in the Cost column.${r.meta?.http_status ? ` HTTP ${r.meta.http_status}.` : ""}${r.error_code ? ` · ${r.error_code}` : ""}`}>{r.meta?.http_status === 429 || r.meta?.http_status === "429" ? "rate limited" : "hit a cap"}</span>
+                          : r.status === "rejected"
+                            ? <span className="adm-aic-state bad" title={`The AI answered and we threw the answer away because it did not pass our own checks. Billed anyway.${r.meta?.rejected ? ` · ${r.meta.rejected}` : ""}${r.error_code ? ` · ${r.error_code}` : ""}`}>thrown away</span>
                           : r.status && r.status !== "ok"
-                            ? <span className="adm-aic-state bad" title={r.error_code || r.meta?.rejected || ""}>{r.status}</span>
+                            ? <span className="adm-aic-state bad" title={`The call errored${r.meta?.http_status ? ` (HTTP ${r.meta.http_status})` : ""}.${r.error_code ? ` · ${r.error_code}` : ""}`}>errored</span>
                             : <span className="adm-aic-state dim">ok</span>}
                       </td>
                     </tr>
@@ -587,7 +673,7 @@ export default function AiCost({ member }) {
       {/* ---------- what the numbers are for ---------- */}
       <Block
         title="What a deliverable costs us"
-        blurb="What we spend to produce one finished report — and what the ones that got thrown away cost as well."
+        blurb="What we spend to produce one finished report — and what the attempts that produced nothing cost as well."
       >
         {!calc.perReport.length ? (
           <p className="adm-aic-note">No reports were generated in this window.</p>
@@ -597,7 +683,12 @@ export default function AiCost({ member }) {
               <thead>
                 <tr>
                   <th>Report</th><th className="n">Made</th><th className="n">Attempts</th>
-                  <th className="n">Average each</th><th className="n">Spent on rejects</th>
+                  {/* NOT "rejects": `rejected` is one specific status with its
+                    * own column further up this page, and this figure is the
+                    * superset — errored, capped and rejected together. Two
+                    * meanings for one word on one page is how the old "Failed"
+                    * column hid 384 rate limits. */}
+                  <th className="n">Average each</th><th className="n" title="Everything we paid for on this report type that did not produce a report: calls that errored, calls that stopped at a cap, and answers we threw away.">Spent on attempts that produced nothing</th>
                 </tr>
               </thead>
               <tbody>

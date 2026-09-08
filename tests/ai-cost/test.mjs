@@ -647,5 +647,124 @@ ok("...and it accumulates the 5m/1h cache split, or the split can never be price
 ok("the assistant logs on its failure path too",
   /catch[\s\S]{0,400}logUsage/.test(read("api/ai-chat.js")));
 
+
+/* ------------------------------------------------------------------ */
+/* 7. FOUR OUTCOMES, NOT TWO.                        Sep 7 2026        */
+/* ------------------------------------------------------------------ */
+/* `failed` used to mean "anything that is not ok", so a rate limit (capped)
+ * and a thrown-away answer (rejected) were both counted and printed as
+ * failures. On 7 Sep 2026 the page read 398 failures while 384 of them were
+ * Mistral being rate limited — a quota to raise, not an integration to fix,
+ * and no screen could tell the two apart. These assertions exist so the four
+ * buckets can never be folded back together silently. */
+
+const CAPPED = { ts: "2026-08-21T18:00:00Z", status: "capped", cost_micros: null,
+  meta: { tokensUnknown: true, http_status: 429 } };
+const REJECTED = { ts: "2026-08-21T19:00:00Z", status: "rejected", cost_micros: 4000,
+  input_tokens: 2000, output_tokens: 500 };
+const ERRORED = { ts: "2026-08-21T20:00:00Z", status: "failed", cost_micros: 1000, input_tokens: 100 };
+const OKAY = { ts: "2026-08-21T21:00:00Z", status: "ok", cost_micros: 2000, input_tokens: 100, output_tokens: 100 };
+
+const FOUR = summarize([OKAY, ERRORED, CAPPED, REJECTED]);
+eq("a rate-limited call is counted as capped", FOUR.capped, 1);
+eq("...and is NOT counted as a failure", FOUR.failed, 1);
+eq("...and is not counted as ok either", FOUR.ok, 1);
+eq("a thrown-away answer is counted as rejected", FOUR.rejected, 1);
+eq("every call still lands in exactly one bucket", FOUR.ok + FOUR.failed + FOUR.capped + FOUR.rejected, FOUR.calls);
+eq("`notOk` is the old superset, available by name", FOUR.notOk, 3);
+eq("...and ok + notOk is every call", FOUR.ok + FOUR.notOk, FOUR.calls);
+
+/* The specific regression: a window that is ENTIRELY rate limits must report
+ * zero failures. This is the shape the live page was in on 7 Sep. */
+const ALL_CAPPED = summarize([CAPPED, CAPPED, CAPPED]);
+eq("384 rate limits do not become 384 failures", ALL_CAPPED.failed, 0);
+eq("...they are all capped", ALL_CAPPED.capped, 3);
+eq("...and a rate limit that reported no tokens is still counted as token-blind",
+  ALL_CAPPED.tokensUnknown, 3);
+
+/* A rate limit generates nothing, so it cannot carry spend; a thrown-away
+ * answer DID generate tokens and does. Keeping that distinction is the whole
+ * reason the two are separate columns rather than one "not delivered". */
+eq("a rejected answer's money is still in the total, because it was really spent",
+  summarize([REJECTED]).costMicros, 4000);
+
+/* Every bucket has to survive a grouping, or the table columns print blanks. */
+const groupedRows = rollup([OKAY, ERRORED, CAPPED, REJECTED], "day");
+ok("a rollup row carries all four buckets",
+  groupedRows.every((r) => Number.isFinite(r.failed) && Number.isFinite(r.capped)
+    && Number.isFinite(r.rejected) && Number.isFinite(r.notOk)),
+  JSON.stringify(groupedRows.map((r) => [r.failed, r.capped, r.rejected, r.notOk])));
+eq("and the buckets add up across every row",
+  groupedRows.reduce((n, r) => n + r.capped, 0), 1);
+
+/* An empty tally must expose the columns too, or the page renders `undefined`
+ * on a window with no events at all. */
+const EMPTY = summarize([]);
+ok("an empty window still has every bucket, at zero",
+  EMPTY.failed === 0 && EMPTY.capped === 0 && EMPTY.rejected === 0 && EMPTY.notOk === 0);
+
+/* THE PAGE, NOT JUST THE MATHS. The buckets existing means nothing if the UI
+ * still prints one word for three outcomes — which is exactly how this defect
+ * survived: `capped` was in STATUSES from day one and appeared nowhere on
+ * screen. These read the built page's source. */
+const aiCostPage = read("src/components/admin/AiCost.jsx");
+ok("the page reads the capped bucket", /calc\.total\.capped/.test(aiCostPage));
+ok("the page reads the rejected bucket", /calc\.total\.rejected/.test(aiCostPage));
+/* NOT just `/r\.capped/`. That string also appears in the SORTS array, so a
+ * checker deleted the entire Capped column — header and cell — and the suite
+ * stayed green. Match the CELL, in the shape the table actually writes it. */
+ok("the table has its own rate-limit column, header and cell",
+  /<th[^>]*>Capped<\/th>/.test(aiCostPage) && /<td className=\{`n \$\{r\.capped \?/.test(aiCostPage));
+ok("the table has its own thrown-away column, header and cell",
+  /<th[^>]*>Thrown away<\/th>/.test(aiCostPage) && /<td className=\{`n \$\{r\.rejected \?/.test(aiCostPage));
+/* The three outcome columns and the three header cells must stay in step: a
+ * header added without a cell shifts every column right of it by one, silently,
+ * and the numbers under "Cost" become the numbers under "Share". */
+eq("one header cell per outcome column",
+  (aiCostPage.match(/<th className="n" title="The call errored|<th className="n" title="The call stopped at a ceiling|<th className="n" title="The AI answered and we threw/g) || []).length, 3);
+ok("no sentence on the page calls a rate limit a failure",
+  !/calls failed before the AI reported anything/.test(aiCostPage));
+
+/* ⭐ THE CORRECTION A CHECKER FORCED, AND THE ASSERTION THAT LOCKS IT IN.
+ *
+ * The first version of this file asserted that the capped figure said
+ * "nothing was generated and nothing was billed". That is true of a provider
+ * rate limit and FALSE of the other thing that lands in `capped`: lib/ai-agent.js
+ * sets cappedOut when the agent runs out of rounds, and api/ai-chat.js,
+ * api/console-report.js and api/rep-report.js all record that as `capped` WITH
+ * the usage it accrued. Those are among the most expensive calls we make. So a
+ * money screen was about to declare their spend to be zero — a worse defect
+ * than the mislabelling it replaced — and a test was holding the false sentence
+ * in place. The assertion is inverted on purpose: the page must NOT claim
+ * either billing outcome for the whole bucket. */
+ok("the capped figure does NOT claim the whole bucket was unbilled",
+  !/nothing was generated and nothing was billed\.<\/|means="[^"]*nothing was generated and nothing was billed[^"]*"/.test(aiCostPage));
+ok("...and it names BOTH caps, because they bill differently",
+  /running out of steps/i.test(aiCostPage) && /rate limit/i.test(aiCostPage));
+ok("...and it points the reader at the Cost column rather than guessing",
+  /Cost column/i.test(aiCostPage));
+ok("lib/ai-cost.js records that `capped` has two causes",
+  /cappedOut/.test(read("lib/ai-cost.js")));
+
+/* The blind-calls sentence must COUNT its own breakdown. It used to assert in
+ * hardcoded prose that rate limits were "the most common reason", which was
+ * true for one window on 7 Sep 2026 and false the moment Mistral's quota is
+ * raised — and it also mis-described the successful-but-unmeasured platform
+ * rows (SerpApi) that make up most of `tokensUnknown`. */
+ok("the blind-calls warning computes its breakdown instead of asserting one",
+  /blindBy/.test(aiCostPage) && !/most common reason/i.test(aiCostPage));
+ok("...and it counts the successful-but-unmeasured rows as their own bucket",
+  /succeeded and were never measured/.test(aiCostPage));
+ok("the per-report waste column no longer calls its superset 'rejects'",
+  !/Spent on rejects/.test(aiCostPage));
+
+/* And the definitions have to live next to the statuses, so the next person
+ * reading STATUSES cannot think `capped` is a kind of failure. */
+const costLib = read("lib/ai-cost.js");
+ok("lib/ai-cost.js says in words what each status means",
+  /WHAT EACH STATUS MEANS/.test(costLib));
+eq("STATUSES is unchanged — this split adds no new status",
+  STATUSES.join(","), "ok,failed,rejected,capped,legacy");
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

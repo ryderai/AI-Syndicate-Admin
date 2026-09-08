@@ -427,3 +427,47 @@ Next step is the key, not the name: run
 
 Also new and unexplained: `openai/gpt-5.6-sol` fails 10 of 40 now, against
 0 of 14 this morning.
+
+---
+
+# ✅ FINAL: MISTRAL IS RATE LIMITED (429). NOT THE NAME, NOT THE KEY.
+
+Settled from `admin_usage_events.meta->>'http_status'` — the meter had recorded
+the status of every failure all along. No key, no deploy, no spend.
+
+| provider | model | status | http_status | calls |
+|---|---|---|---|---|
+| mistral | mistral-medium-latest | capped | **429** | 244 |
+| mistral | mistral-medium-3.5 | capped | **429** | 140 |
+| groq | openai/gpt-oss-120b | failed | **403** | 21 |
+| anthropic | claude-sonnet-5 | failed | NULL | 33 |
+| openai | gpt-5.6-sol | failed | NULL | 14 |
+| openai | gpt-5.6 | failed | NULL | 11 |
+
+**429 on both Mistral names**, and a rate limit comes back before the model id
+is validated — so the original 140 `mistral-medium-3.5` failures were 429s too.
+The dead-name diagnosis was wrong from the start and was never tested against a
+status code. Groq's 403 confirms the account blocker from 29 Aug. A NULL status
+means no HTTP response at all — timeout or network, not a rejection — so the
+`gpt-5.6-sol` 10-of-40 is not OpenAI refusing us either.
+
+## Two defects this exposed, both ours
+
+1. **`lib/ai-cost.js` `addEvent()` folds `capped` into `failed`.** `capped` is
+   in the exported `STATUSES` and appears nowhere in the UI, so 384
+   rate-limited calls sit under "calls failed before the AI reported anything".
+2. **A failed engine is recorded as "did not mention the client."**
+   `lib/prompt-simulator.js:1036` returns `mentioned:false, mentions:0` on any
+   error, and `src/components/dash/Simulator.jsx:1541` measures coverage
+   against `summary.total` rather than `summary.answered` — so a client's
+   visibility reads out of 12 engines when 10 answered. `summary` already
+   carries `total`/`answered`/`failed` separately, and the same file already
+   excludes non-answering engines from `top1`/`top3` for exactly this reason.
+
+## Priority, and why Andrew is not needed yet
+
+429s and 403s are not billed — no money is at stake, and Groq had been failing
+for ten days unnoticed. Both defects above are ours to fix. Andrew is needed
+only after CJ answers **"do we tell clients we cover Mistral and Meta AI?"** —
+if yes it is one batched ask (Mistral quota + Groq entitlement); if no, switch
+both engines off rather than keep firing guaranteed-rejected requests.
