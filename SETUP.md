@@ -1,4 +1,10 @@
-# SETUP — from zero to admin.aisyndicate.com
+# SETUP — from zero to a live console
+
+> **The console runs at `https://ai-syndicate-admin.vercel.app`.**
+> `admin.aisyndicate.com` has NO DNS record and does not load. The custom-domain step
+> (§ 2 step 9) was never completed. Addresses below that describe what is CONFIGURED inside
+> Vercel, Supabase or Google Cloud still say `admin.aisyndicate.com` on purpose — they record
+> what is really set there, and each one is a suspected broken callback until somebody checks.
 
 Every step is one action. Do them in order. Sections 3–6 are independent —
 skip any of them and that feature just shows WAITING ON KEY until you come back.
@@ -66,7 +72,7 @@ never signed in to the platform — sign in there once, then re-run.
 
 ---
 
-## 2. Deploy (GitHub → Vercel → admin.aisyndicate.com)
+## 2. Deploy (GitHub → Vercel → ai-syndicate-admin.vercel.app)
 
 1. Move this folder into Cursor, push it to GitHub as a new repo
    (suggested name: `ai-syndicate-admin`) — your normal flow.
@@ -107,7 +113,7 @@ platform instead of the admin console.)
 
 **Prove it works:**
 
-14. Open `https://admin.aisyndicate.com` in a normal browser tab.
+14. Open `https://ai-syndicate-admin.vercel.app` in a normal browser tab.
 15. Sign in with ryder@aisyndicate.com + your password.
     - **No password because you always used Google?** Click "Forgot password?"
       on the sign-in screen, open the email, set one. That adds a password to
@@ -250,7 +256,7 @@ migrations below or nothing saves.
 1. In Chrome, sign in to **growth@aisyndicate.com** (or open a Chrome profile
    that is already signed in as growth@). This matters: Google connects whichever
    account you pick on its screen.
-2. Go to `admin.aisyndicate.com` → **Inbox**.
+2. Go to `ai-syndicate-admin.vercel.app` → **Inbox**.
 3. Click **Connect a mailbox**.
 4. On Google's screen, choose **growth@aisyndicate.com** and click **Allow**.
    You come back to the console and growth@ is in the mailbox dropdown.
@@ -285,7 +291,7 @@ that thread should have left the inbox and gained the label `AIS/Done`.
    the console side is done, this next part happens inside the platform's code):
 
 ```
-POST https://admin.aisyndicate.com/api/usage-ingest
+POST https://ai-syndicate-admin.vercel.app/api/usage-ingest
 Header: x-ingest-key: <the same secret>
 Body: { "events": [ { "ts": "2026-08-16T12:00:00Z", "source": "caite",
         "model": "claude-sonnet-4-6", "input_tokens": 1200,
@@ -677,7 +683,7 @@ sentence in a rules tab.
 3. Key: `CRON_SECRET`, value: that random string. All three environments. **Save.**
 4. Put the same string in Bitwarden so it is not only in Vercel.
 5. Set up a daily call to:
-   `GET https://admin.aisyndicate.com/api/sales-sweep`
+   `GET https://ai-syndicate-admin.vercel.app/api/sales-sweep`
    with the header `Authorization: Bearer <that random string>`
    Vercel Cron, or any scheduler. Around 3am Central is sensible.
 6. Redeploy.

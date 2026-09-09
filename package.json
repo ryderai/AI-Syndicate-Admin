@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint .",
+    "check:aiusage": "node scripts/check-ai-usage.mjs",
+    "lint": "npm run check:aiusage && eslint .",
     "preview": "vite preview"
   },
   "dependencies": {

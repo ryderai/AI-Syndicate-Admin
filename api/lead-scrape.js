@@ -27,6 +27,7 @@
  */
 
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
+import { recordAiUsage } from "../lib/ai-usage.js";
 import {
   toLeadRow, dedupeKey, dedupeWithin, splitAgainstExisting,
   normalizeApollo, normalizePlatform, assignRoundRobin,
@@ -60,7 +61,13 @@ async function fetchPlatform(query, limit) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`The platform's lead generator answered ${res.status}: ${text.slice(0, 160) || "no body"}`);
+    /* The vendor ANSWERED, with a refusal. Flagged so runSource can tell this
+     * apart from never having reached them at all — a network drop or our own
+     * 45s timeout is not a search anybody could have charged us for. */
+    const err = new Error(`The platform's lead generator answered ${res.status}: ${text.slice(0, 160) || "no body"}`);
+    err.vendorResponded = true;
+    err.httpStatus = res.status;
+    throw err;
   }
   const body = await res.json();
   // Accept the three shapes a JSON list arrives in rather than demanding one.
@@ -90,7 +97,13 @@ async function fetchApollo(query, limit) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Apollo answered ${res.status}: ${text.slice(0, 160) || "no body"}`);
+    /* The vendor ANSWERED, with a refusal. Flagged so runSource can tell this
+     * apart from never having reached them at all — a network drop or our own
+     * 45s timeout is not a search anybody could have charged us for. */
+    const err = new Error(`Apollo answered ${res.status}: ${text.slice(0, 160) || "no body"}`);
+    err.vendorResponded = true;
+    err.httpStatus = res.status;
+    throw err;
   }
   const body = await res.json();
   const people = body?.people || body?.contacts || [];
@@ -105,6 +118,74 @@ async function fetchApollo(query, limit) {
  * source row — including the failures. A scraper that fails quietly is worse
  * than one that never ran, because the pipeline looks calm instead of empty,
  * and the Notes page raises exactly that as a note. */
+/** One lead search = one row on the AI Cost page.
+ *
+ * ⭐ BOTH PROVIDERS COST MONEY PER SEARCH and neither was recorded anywhere
+ * before 8 Sep 2026, so the spend appeared on no screen at all — not even as a
+ * call. Same shape as the platform's searchapi.io and zernio.com, which spent
+ * money unseen for two months.
+ *
+ * `usage` is null on purpose: these are charged per search or per credit, not
+ * per token. Inventing a token count would be a lie and a zero would say the
+ * search was free. Both providers are in LOCAL_TOKENLESS_PROVIDERS so the row
+ * is marked `tokenless` and NOT `tokensUnknown`, which would put a working
+ * meter in the AI Cost page's metering-is-broken banner.
+ *
+ * ⭐ THE COST COLUMN WILL READ "NOT PRICED" AND A PRICE ROW WILL NOT CHANGE
+ * THAT. `costMicros()` returns null whenever usage is null, before it ever
+ * looks at a price, so a per-search fee cannot be expressed in the price book
+ * as it stands — it needs the `per_call_micros` column that is still an open
+ * item in both repos. Until that exists the honest reading of these rows is
+ * "this many searches happened, and we cannot price them here".
+ *
+ * recordAiUsage never throws, so this can never break a scrape.
+ *
+ * @param billed  true only when the search SUCCEEDED. A vendor refusal may or
+ *                may not have been charged and we do not know which, so it is
+ *                written with billable:false rather than counted as our spend.
+ */
+async function recordLeadSearch({ admin, source, provider, actor, startedAt, ok, found, latencyMs, errorMessage = null, httpStatus = null }) {
+  await recordAiUsage(admin, {
+    provider: provider === "apollo" ? "apollo" : "platform-leadgen",
+    model: provider === "apollo" ? "mixed_people/search" : "leadgen/search",
+    usage: null,
+    status: ok ? "ok" : "failed",
+    errorCode: errorMessage ? String(errorMessage).slice(0, 120) : null,
+    latencyMs,
+    /* These two are validated against FEATURES and SURFACES in lib/ai-cost.js
+     * and anything else is silently rewritten to "other" / "unknown" — which
+     * is how the first version of this filed every Apollo row as
+     * unattributable while looking correct. `leads` and `console` are NOT
+     * valid values; `lead_scrape` and `leads` are. */
+    feature: "lead_scrape",
+    surface: "leads",
+    userId: actor || null,
+    entity: { kind: "lead_source", id: source?.id },
+    /* ONE ROW PER SOURCE PER RUN, keyed on the RUN's own timestamp.
+     *
+     * The first version keyed on `new Date()` at record time, which was wrong
+     * in both directions: two genuinely different runs of the same source
+     * inside the same UTC minute collapsed to one row — and the unique index
+     * on event_key is not partial, so the second REAL billed search was
+     * silently dropped with 23505 deliberately not reported — while a Vercel
+     * retry of a timed-out invocation landed in a later minute and was not
+     * deduped at all. `startedAt` is stamped once per run, so a retry of that
+     * run reuses it and two separate runs never share it. */
+    eventKey: `${provider}:${source?.id}:${startedAt}`,
+    billable: Boolean(ok),
+    meta: {
+      /* THE VENDOR'S OWN RECORD COUNT, which is what a per-search charge is
+       * levied on. Deliberately not the same as `last_run_found` on the source
+       * row: that one is counted AFTER toLeadRow() drops rows we cannot use,
+       * so the two figures differ on the same run and neither is wrong. */
+      found,
+      perSearch: true,
+      ...(httpStatus === null ? {} : { httpStatus }),
+      ...(ok ? {} : { billedUnknown: true }),
+    },
+  });
+}
+
 export async function runSource(admin, source, { actor = null } = {}) {
   const startedAt = new Date().toISOString();
   const finish = async (patch) => {
@@ -127,13 +208,31 @@ export async function runSource(admin, source, { actor = null } = {}) {
   const query = source.query || {};
 
   let raw;
+  const calledAt = Date.now();
   try {
     raw = provider === "apollo" ? await fetchApollo(query, limit) : await fetchPlatform(query, limit);
   } catch (err) {
     const msg = err?.message || "The search failed.";
+    /* RECORD THE FAILED SEARCH TOO. Apollo bills per credit and a search that
+     * errored after the vendor accepted it can still have been charged. A
+     * failure we do not record is the same hole as a success we do not
+     * record — it is just harder to notice. */
+    /* Only if they actually answered. A network drop or our own timeout is not
+     * a search anybody could have billed, and recording it would inflate the
+     * call count with attempts that never reached the vendor. */
+    if (err?.vendorResponded) {
+      await recordLeadSearch({
+        admin, source, provider, actor, startedAt, ok: false, found: 0,
+        latencyMs: Date.now() - calledAt, errorMessage: msg, httpStatus: err.httpStatus ?? null,
+      });
+    }
     await finish({ last_run_error: msg, last_run_found: 0, last_run_new: 0 });
     return { ok: false, error: msg };
   }
+  await recordLeadSearch({
+    admin, source, provider, actor, startedAt, ok: true,
+    found: raw.length, latencyMs: Date.now() - calledAt,
+  });
 
   const rows = raw
     .map((r) => toLeadRow(r, { source: "scraper", sourceId: source.id }))

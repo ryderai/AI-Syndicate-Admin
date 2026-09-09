@@ -1,9 +1,12 @@
 # AI Syndicate — Command Console
 
-The internal admin OS at **admin.aisyndicate.com**. Separate app, separate
+The internal admin OS at **ai-syndicate-admin.vercel.app**. Separate app, separate
 repo, separate URL — you can't reach it from the customer platform. Same
 Supabase underneath, same design system, so it looks and feels like the
 platform Andrew built.
+
+> **Not `admin.aisyndicate.com`.** That hostname has no DNS record and does not load. The
+> custom-domain step (SETUP.md § 2 step 9) was never completed, or was undone.
 
 **Read `SETUP.md` to go live. This file explains what's here and how it's put together.**
 
@@ -13,7 +16,7 @@ platform Andrew built.
 |---|---|---|
 | Marketing site + platform | aisyndicate.com | Public → paying customers |
 | Customer dashboard | aisyndicate.com/#/dashboard | Customers manage their own GEO |
-| **This console** | **admin.aisyndicate.com** | **Team only, invite-only** |
+| **This console** | **ai-syndicate-admin.vercel.app** | **Team only, invite-only** |
 
 ## Pages
 

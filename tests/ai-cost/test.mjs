@@ -34,7 +34,7 @@ import {
   daysInMonth, partMonthNote, previousMonth, drift, pricedCost,
   BASIS, INTERNAL, INTERNAL_LABEL, FEATURES, SURFACES, STATUSES, UNLABELLED,
 } from "../../lib/ai-cost.js";
-import { recordAiUsage, primePriceCache, priceCacheIsStale } from "../../lib/ai-usage.js";
+import { recordAiUsage, primePriceCache, priceCacheIsStale, LOCAL_TOKENLESS_PROVIDERS } from "../../lib/ai-usage.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(ROOT, p), "utf8");
@@ -834,6 +834,196 @@ eq("...and no call is lost either",
  * rendering it is the exact shape of the defect this closes. */
 ok("the page offers the By job tab", /"job"/.test(aiCostPage) && /TABS = \["job"/.test(aiCostPage));
 ok("...and the grouping is exported for it to use", /^\s*job: \{/m.test(costLib));
+
+
+/* ================================================================== */
+console.log("\n9. a token-less vendor is not a broken meter (local path)");
+/* ================================================================== */
+
+/* THE SAME DEFECT, FOUND TWICE IN ONE DAY.
+ *
+ * api/usage-ingest.js — where the PLATFORM's spend arrives — already tells
+ * "this vendor has no tokens by its nature" apart from "this call failed to
+ * report its tokens". A provider missing from its list is stamped
+ * meta.tokensUnknown, which the AI Cost page renders in its "N calls reported
+ * no token counts" banner: the metering-is-broken banner. searchapi and zernio
+ * hit exactly that on 8 Sep 2026.
+ *
+ * recordAiUsage — where THIS console's own spend goes — writes straight to
+ * admin_usage_events and never learned the distinction. These tests hold the
+ * two apart. Flip either branch and one of them goes red. */
+
+{
+  const a = fakeAdmin();
+  await recordAiUsage(a, { provider: "apollo", model: "mixed_people/search", usage: null, status: "ok" });
+  const row = a.inserted[a.inserted.length - 1];
+  ok("a token-less vendor is marked tokenless, NOT tokensUnknown",
+    row.meta.tokenless === true && row.meta.tokensUnknown === undefined,
+    `meta was ${JSON.stringify(row.meta)}`);
+  ok("and it is not priced at zero — a call we paid for that we cannot price from tokens",
+    row.cost_micros === null || row.cost_micros === undefined,
+    `cost_micros was ${JSON.stringify(row.cost_micros)}`);
+  /* NOT a claim that a price row would fix it. costMicros() returns null
+   * whenever usage is null, before it looks at a price, so a per-search fee
+   * needs the per_call_micros column. Asserted so nobody "fixes" this by
+   * adding a price row and believing the cost will appear. */
+  ok("a price row would NOT give it a cost — that needs per_call_micros",
+    costMicros({ input_per_mtok: 1, output_per_mtok: 1 }, null) === null);
+}
+
+{
+  const a = fakeAdmin();
+  await recordAiUsage(a, { provider: "anthropic", model: "claude-sonnet-5", usage: null, status: "failed" });
+  const row = a.inserted[a.inserted.length - 1];
+  ok("a MODEL call with no usage is still tokensUnknown — that one really is unmeasured",
+    row.meta.tokensUnknown === true && row.meta.tokenless === undefined,
+    `meta was ${JSON.stringify(row.meta)}`);
+}
+
+{
+  const a = fakeAdmin();
+  await recordAiUsage(a, { provider: "APOLLO", model: "x", usage: null });
+  ok("the provider match is case-insensitive, so 'APOLLO' cannot slip past it",
+    a.inserted[a.inserted.length - 1].meta.tokenless === true);
+}
+
+{
+  const a = fakeAdmin();
+  await recordAiUsage(a, { provider: "apollo", model: "x", usage: { input_tokens: 5, output_tokens: 1 } });
+  const meta = a.inserted[a.inserted.length - 1].meta;
+  ok("a token-less vendor that DID report tokens is neither flag — it was measured",
+    meta.tokenless === undefined && meta.tokensUnknown === undefined,
+    `meta was ${JSON.stringify(meta)}`);
+}
+
+eq("the local token-less list is exactly the vendors this console charges per search",
+  [...LOCAL_TOKENLESS_PROVIDERS].sort(), ["apollo", "platform-leadgen"]);
+
+/* The two lists are for different things and must not be merged: this one is
+ * for vendors this console calls itself, ADMIN_TOKENLESS_PROVIDERS mirrors the
+ * platform's providers and must match it exactly. */
+{
+  const ingest = read("api/usage-ingest.js");
+  const block = ingest.match(/ADMIN_TOKENLESS_PROVIDERS\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
+  const platformSide = block ? [...block[1].matchAll(/["']([a-z0-9-]+)["']/g)].map((m) => m[1]) : [];
+  ok("api/usage-ingest.js still declares its own list as a readable literal", platformSide.length > 0);
+  const overlap = [...LOCAL_TOKENLESS_PROVIDERS].filter((p) => platformSide.includes(p));
+  eq("no vendor appears in both lists — they answer different questions", overlap, []);
+}
+
+
+/* ================================================================== */
+console.log("\n11. a lead search is actually recorded (the real runSource)");
+/* ================================================================== */
+
+/* ⭐ THE THING THE WHOLE CHANGE EXISTS TO DO, TESTED BY CALLING IT.
+ *
+ * A checker deleted the success-path recording from api/lead-scrape.js and the
+ * lint guard AND all 375 assertions stayed green — because the guard can only
+ * see that the file contains a recordAiUsage call somewhere, and nothing
+ * exercised runSource. A test that does not call the function proves nothing
+ * about it. This drives the real runSource against a stubbed socket. */
+
+{
+  const { runSource } = await import("../../api/lead-scrape.js");
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.APOLLO_API_KEY;
+  process.env.APOLLO_API_KEY = "test-key";
+
+  const sourceRow = { id: "11111111-1111-1111-1111-111111111111", provider: "apollo", daily_cap: 10, query: {} };
+
+  /* runSource touches more of the client than fakeAdmin() models: a chained
+   * .select().in(), a counting head select, and .update().eq(). Kept local to
+   * this section so the shared fake stays the small thing the rest relies on. */
+  const fakeLeadAdmin = () => {
+    const inserted = [];
+    const updated = [];
+    return {
+      inserted, updated,
+      from(table) {
+        const chain = {
+          insert: (row) => {
+            const rows = Array.isArray(row) ? row : [row];
+            for (const r of rows) inserted.push({ __table: table, ...r });
+            return { select: async () => ({ data: rows.map((_, i) => ({ id: `id-${i}` })), error: null }), error: null,
+              then: (res) => res({ error: null }) };
+          },
+          select: () => ({
+            in: async () => ({ data: [], error: null }),
+            eq: async () => ({ data: [], error: null, count: 0 }),
+            order: () => ({ limit: async () => ({ data: [], error: null }) }),
+            maybeSingle: async () => ({ data: null, error: null }),
+          }),
+          update: (patch) => { updated.push({ __table: table, ...patch }); return { eq: async () => ({ error: null }) }; },
+        };
+        return chain;
+      },
+    };
+  };
+
+  /* --- a search that succeeds --- */
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    people: [{ id: "p1", name: "A Person", email: "a@example.com", organization: { name: "Acme" } }],
+  }), { status: 200, headers: { "content-type": "application/json" } });
+
+  let a = fakeLeadAdmin();
+  await runSource(a, sourceRow, { actor: null });
+  let usage = a.inserted.filter((r) => r.provider === "apollo");
+  ok("a successful Apollo search writes exactly one usage row", usage.length === 1,
+    `wrote ${usage.length}: ${JSON.stringify(a.inserted.map((r) => r.provider))}`);
+  if (usage[0]) {
+    eq("...filed under a feature the page accepts", usage[0].feature, "lead_scrape");
+    eq("...and a surface the page accepts", usage[0].surface, "leads");
+    ok("...marked tokenless, not tokensUnknown", usage[0].meta.tokenless === true && usage[0].meta.tokensUnknown === undefined,
+      JSON.stringify(usage[0].meta));
+    ok("...counted as our spend", usage[0].billable === true);
+    ok("...with no invented cost", usage[0].cost_micros === null || usage[0].cost_micros === undefined);
+  }
+
+  /* --- the vendor REFUSES: still a row, but not counted as billed --- */
+  globalThis.fetch = async () => new Response("nope", { status: 402 });
+  a = fakeLeadAdmin();
+  await runSource(a, sourceRow, { actor: null });
+  usage = a.inserted.filter((r) => r.provider === "apollo");
+  ok("a vendor refusal is recorded too — it may still have been charged", usage.length === 1);
+  if (usage[0]) {
+    eq("...as failed", usage[0].status, "failed");
+    ok("...NOT counted as our spend, because we do not know if it was billed",
+      usage[0].billable === false && usage[0].meta.billedUnknown === true, JSON.stringify(usage[0].meta));
+    eq("...and the vendor's status is on the row", usage[0].meta.httpStatus, 402);
+  }
+
+  /* --- we never reached the vendor: NOTHING recorded --- */
+  globalThis.fetch = async () => { throw new Error("socket hang up"); };
+  a = fakeLeadAdmin();
+  await runSource(a, sourceRow, { actor: null });
+  ok("a call that never reached the vendor is NOT recorded — nobody could have billed it",
+    a.inserted.filter((r) => r.provider === "apollo").length === 0);
+
+  /* --- the dedupe key is the RUN's stamp, not the clock at write time --- */
+  globalThis.fetch = async () => new Response(JSON.stringify({ people: [] }), {
+    status: 200, headers: { "content-type": "application/json" },
+  });
+  a = fakeLeadAdmin();
+  await runSource(a, sourceRow, { actor: null });
+  {
+    /* DETERMINISTIC, and it proves the actual property. The first version of
+     * this slept and compared two runs' keys — which passed only if the clock
+     * ticked, and the sleep silently never got inserted, so both runs landed
+     * in the same millisecond and it failed. `last_run_at` IS the run's
+     * startedAt, written to the source row by the same run, so if the key ends
+     * with it the key is built from the run's stamp and not from Date.now() at
+     * write time. That is the whole fix: keying on write time collapsed two
+     * genuinely different billed searches into one row. */
+    const key = a.inserted.find((r) => r.provider === "apollo")?.event_key;
+    const stamp = a.updated.find((u) => u.__table === "admin_lead_sources")?.last_run_at;
+    ok("the run stamped last_run_at, so there is something to compare against", Boolean(stamp), JSON.stringify(a.updated));
+    eq("the dedupe key is built from THIS RUN's stamp", key, `apollo:${sourceRow.id}:${stamp}`);
+  }
+
+  globalThis.fetch = realFetch;
+  if (realKey === undefined) delete process.env.APOLLO_API_KEY; else process.env.APOLLO_API_KEY = realKey;
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
