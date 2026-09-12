@@ -13,6 +13,8 @@ import { useScreenContext } from "../../lib/screenContext.js";
 import RepBrief from "./repBrief.jsx";
 import TaskDrawer from "./taskDrawer.jsx";
 import { useRoute } from "../../lib/router.js";
+import { rowOpenProps, useRowPanel } from "./rowPanel.jsx";
+import SubjectPanel from "./rowPanels.jsx";
 
 /* THE SAME PANEL AS OPERATIONS — 2 Sep 2026.
  *
@@ -386,6 +388,28 @@ export default function WorkPage({ member }) {
     load();
   }
 
+  /* CLICK A ROW, SEE MORE — 12 Sep 2026.
+   *
+   * ABOVE THE EARLY RETURN, AND THAT IS THE WHOLE POINT OF THIS COMMENT.
+   *
+   * The first draft put these below it, next to the lists they read. React
+   * counts hooks by position on every render, so with `Loading your work…`
+   * returning first, this page rendered THREE FEWER HOOKS while it was loading
+   * than after — and threw the moment the data arrived. It would have been
+   * invisible in any test that rendered the page already loaded.
+   *
+   * So they sit here, before anything can return, and they are fed with `?.`
+   * because `work` is genuinely null until the fetch lands. useRowPanel treats
+   * anything that is not an array as an empty list.
+   */
+  const contactPanel = useRowPanel(work?.contactable);
+  const reminderPanel = useRowPanel(work?.reminders?.filter((r) => !r.done_at));
+  const notePanel = useRowPanel(notes);
+  const teamName = (id) => {
+    const m = team.find((x) => x.user_id === id);
+    return m ? (m.full_name || m.email || null) : null;
+  };
+
   /* ---------------- render ---------------- */
   if (!work || !notes) {
     return <div className="card" style={{ padding: 40, textAlign: "center", color: "var(--ink-dim)" }}>Loading your work…</div>;
@@ -572,7 +596,12 @@ export default function WorkPage({ member }) {
         ) : (
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
             {work.contactable.map((l, i) => (
-              <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 16px", borderTop: i ? "1px solid var(--line)" : "none", flexWrap: "wrap" }}>
+              <div
+                key={l.id}
+                className="adm-row-able"
+                {...rowOpenProps(() => contactPanel.open(l.id), { label: `Open ${l.name || l.company || "this lead"}` })}
+                style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 16px", borderTop: i ? "1px solid var(--line)" : "none", flexWrap: "wrap" }}
+              >
                 <div style={{ flex: "1 1 260px", minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink)" }}>{l.name || l.company || "Unnamed lead"}</span>
@@ -624,7 +653,12 @@ export default function WorkPage({ member }) {
               const late = ms < new Date().setHours(0, 0, 0, 0);
               const dueToday = !late && ms <= new Date().setHours(23, 59, 59, 999);
               return (
-                <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? "1px solid var(--line)" : "none", flexWrap: "wrap" }}>
+                <div
+                  key={r.id}
+                  className="adm-row-able"
+                  {...rowOpenProps(() => reminderPanel.open(r.id), { label: "Open this follow-up" })}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderTop: i ? "1px solid var(--line)" : "none", flexWrap: "wrap" }}
+                >
                   <button
                     onClick={() => tickReminder(r)}
                     title="Tick off"
@@ -689,7 +723,12 @@ export default function WorkPage({ member }) {
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
             {notes.map((n) => (
-              <div key={n.id} className="card" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div
+                key={n.id}
+                className="card adm-row-able"
+                {...rowOpenProps(() => notePanel.open(n.id), { label: `Open ${n.title || "this note"}` })}
+                style={{ padding: 16, display: "flex", flexDirection: "column", gap: 8 }}
+              >
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--ink)", minWidth: 0 }}>
                     {n.title || <span style={{ color: "var(--ink-dim)", fontWeight: 400 }}>Untitled</span>}
@@ -804,6 +843,23 @@ export default function WorkPage({ member }) {
 
       {/* THE TASK, OPEN. The same panel Operations uses — see the note at the
           top of this file for why it is not a second one. */}
+      {/* The three lists on this page, each openable. `member` is handed down
+          so a person's meetings show inside the panel — the same list the Sales
+          record draws, read from the same table. */}
+      {contactPanel.row && (
+        <SubjectPanel
+          kind="lead" row={contactPanel.row} member={member}
+          ctx={{ teamName, stageLabel: (st) => LEAD_STAGE_LABELS[st] || st }}
+          {...contactPanel.panelProps}
+        />
+      )}
+      {reminderPanel.row && (
+        <SubjectPanel kind="reminder" row={reminderPanel.row} ctx={{ teamName }} {...reminderPanel.panelProps} />
+      )}
+      {notePanel.row && (
+        <SubjectPanel kind="note" row={notePanel.row} {...notePanel.panelProps} />
+      )}
+
       {openTaskId && (() => {
         const t = work.tasks.find((x) => x.id === openTaskId);
         if (!t) return null;

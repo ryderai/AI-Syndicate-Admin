@@ -4498,3 +4498,112 @@ select.adm-mtg-in { padding-right: 4px; }
   background: var(--bg-2); color: var(--ink-faint); border: 1px solid var(--rule);
 }
 .adm-mtg-empty { font-size: 12.5px; color: var(--ink-faint); line-height: 1.55; }
+
+/* ==================================================================
+   THE ROW PANEL — click any row anywhere, see more (12 Sep 2026)
+   ==================================================================
+   Prefix `adm-row-`. READ THIS BEFORE RENAMING ANYTHING IN IT.
+
+   `.adm-drawer` belongs to the Sales lead record and has since it was built.
+   A later drawer reused those class names and squashed its own header into a
+   two-line column with its tab bar bleeding out of the side — the note about it
+   is still in this file at the `.adm-dw-` block. This shell is used by nine
+   pages, so a collision here would break nine screens at once instead of one.
+   ------------------------------------------------------------------ */
+
+.adm-row-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(10, 34, 69, 0.32);
+  z-index: 1200;                      /* above .adm-drawer (1150) — a panel
+                                         opened FROM a drawer must sit on top */
+  animation: fadeIn 0.15s ease both;
+}
+
+.adm-row-panel {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(460px, 94vw);
+  background: white;
+  border-left: 1px solid var(--rule);
+  box-shadow: var(--shadow-lg);
+  z-index: 1250;
+  display: flex; flex-direction: column;
+  animation: slideIn 0.2s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.adm-row-panel:focus { outline: none; }
+
+.adm-row-head {
+  padding: 16px 18px 13px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg-1);
+  flex: 0 0 auto;
+}
+.adm-row-headtop { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.adm-row-kicker {
+  font-family: var(--mono); font-size: 10px; font-weight: 800;
+  letter-spacing: 0.12em; color: var(--accent-deep); text-transform: uppercase;
+}
+.adm-row-steps { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.adm-row-step, .adm-row-x {
+  border: 0; background: none; cursor: pointer; color: var(--ink-faint);
+  border-radius: 6px; line-height: 1;
+}
+.adm-row-step { font-size: 13px; padding: 5px 7px; }
+.adm-row-x { font-size: 20px; padding: 2px 8px 4px; }
+.adm-row-step:hover:not(:disabled), .adm-row-x:hover { color: var(--ink); background: var(--bg-2); }
+.adm-row-step:disabled { opacity: 0.3; cursor: default; }
+
+.adm-row-title {
+  font-family: var(--display); font-size: 18px; font-weight: 700;
+  color: var(--ink); line-height: 1.25; word-break: break-word;
+}
+.adm-row-sub { font-size: 12.5px; color: var(--ink-faint); margin-top: 3px; line-height: 1.45; }
+
+.adm-row-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.adm-row-badge {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 800; letter-spacing: 0.07em;
+  padding: 3px 6px; border-radius: 5px; text-transform: uppercase;
+  background: var(--bg-2); color: var(--ink-faint); border: 1px solid var(--rule);
+}
+.adm-row-badge-bad { background: color-mix(in oklab, var(--danger) 10%, transparent); color: var(--danger); border-color: color-mix(in oklab, var(--danger) 28%, transparent); }
+.adm-row-badge-good { background: var(--success-soft, #eafce9); color: #006b1a; border-color: #b9e6b3; }
+.adm-row-badge-accent { background: var(--accent-soft); color: var(--accent-deep); border-color: color-mix(in oklab, var(--accent) 25%, transparent); }
+
+.adm-row-body { flex: 1; overflow-y: auto; padding: 16px 18px 22px; }
+.adm-row-foot { flex: 0 0 auto; padding: 12px 18px; border-top: 1px solid var(--rule); background: var(--bg-1); display: flex; gap: 8px; flex-wrap: wrap; }
+
+.adm-row-sect { margin-bottom: 18px; }
+.adm-row-sect:last-child { margin-bottom: 0; }
+.adm-row-sect-h {
+  font-family: var(--mono); font-size: 10px; font-weight: 800; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-faint);
+  margin: 0 0 8px; padding-bottom: 5px; border-bottom: 1px solid var(--rule);
+}
+.adm-row-hint { font-size: 12px; color: var(--ink-faint); line-height: 1.5; margin-bottom: 8px; }
+
+.adm-row-facts { margin: 0; display: grid; gap: 7px; }
+.adm-row-fact { display: grid; grid-template-columns: 108px 1fr; gap: 10px; align-items: baseline; }
+.adm-row-fact dt { font-size: 12px; color: var(--ink-faint); }
+.adm-row-fact dd { margin: 0; font-size: 13px; color: var(--ink); line-height: 1.45; min-width: 0; word-break: break-word; }
+.adm-row-v-bad { color: var(--danger); font-weight: 600; }
+.adm-row-v-good { color: #006b1a; font-weight: 600; }
+/* NOT A BLANK CELL. A blank reads as "nothing to say"; this reads as what it
+   is — nobody has filled it in. The two are different facts. */
+.adm-row-none { color: var(--ink-faint); font-style: italic; }
+
+.adm-row-golink {
+  border: 0; background: var(--accent-soft); color: var(--accent-deep);
+  font-weight: 600; font-size: 12.5px; padding: 7px 11px;
+  border-radius: 7px; cursor: pointer;
+}
+.adm-row-golink:hover { background: color-mix(in oklab, var(--accent) 18%, transparent); }
+
+/* A row that can be opened. Kept quiet — almost every row in the console can be
+   opened now, so a loud affordance would light up every screen at once. */
+[role="button"].adm-row-able { cursor: pointer; }
+.adm-row-able:hover { background: var(--bg-1); }
+.adm-row-able:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.adm-mtg-warnline {
+  padding: 9px 12px; border-radius: 8px;
+  border: 1px solid color-mix(in oklab, var(--danger) 30%, var(--rule));
+  background: color-mix(in oklab, var(--danger) 5%, transparent);
+}

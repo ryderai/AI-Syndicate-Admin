@@ -19,6 +19,7 @@ import {
 import { useScreenContext } from "../../lib/screenContext.js";
 import { explainConnectFailure, COMPANY_ADDRESS_NOTE } from "../../lib/connectProblem.js";
 import { peopleOptions } from "../../lib/people.js";
+import { rowOpenProps } from "./rowPanel.jsx";
 
 /* INBOX — a mailbox worked inside the console.
  *
@@ -986,7 +987,17 @@ export default function Inbox({ member, mine = false }) {
               const rem = t.rowId ? remindersByRow.get(t.rowId) : null;
               const client = clients.find((c) => c.id === t.clientId) || null;
               return (
-                <div key={t.id} className={`adm-inbox-row${t.unread ? " unread" : ""}`}>
+                /* THE WHOLE ROW OPENS THE THREAD — 12 Sep 2026. Two cells
+                   were buttons and the other five were dead, so whether a click
+                   did anything depended on which column it landed in.
+                   rowOpenProps ignores clicks that started on a control, so the
+                   status picker and the owner picker in this row keep working
+                   exactly as they did. */
+                <div
+                  key={t.id}
+                  className={`adm-inbox-row adm-row-able${t.unread ? " unread" : ""}`}
+                  {...rowOpenProps(() => open(t), { label: `Open ${t.subject || "this email"}` })}
+                >
                   <button className="adm-inbox-cellbtn" onClick={() => open(t)} title={t.from}>
                     <span className="adm-inbox-sender">{senderName(t.from)}</span>
                     <span className="adm-inbox-meta">

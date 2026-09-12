@@ -17,6 +17,7 @@ import {
   effectiveInvoiceStatus, invoiceOutstandingCents, agingBuckets, avgDaysToPay,
   billedVsCollected, nextInvoiceNumber, addDays, todayIso, monthKey, dateOnly, sum,
 } from "../../../lib/finance-math.js";
+import { rowOpenProps } from "./rowPanel.jsx";
 
 /* ==================================================================
  * INVOICES — raise them, send them, chase them, record the money.
@@ -329,7 +330,11 @@ export default function Invoices({ member }) {
                   const st = effectiveInvoiceStatus(inv);
                   const owed = invoiceOutstandingCents(inv);
                   return (
-                    <tr key={inv.id}>
+                    <tr
+                      key={inv.id}
+                      className="adm-row-able"
+                      {...rowOpenProps(() => setOpenInvoice(inv), { label: `Open invoice ${inv.number}` })}
+                    >
                       <td style={{ fontFamily: "var(--mono)", fontWeight: 700 }}>{inv.number}</td>
                       <td>
                         <div style={{ fontWeight: 600, color: "var(--ink)" }}>{inv.bill_to_name}</div>

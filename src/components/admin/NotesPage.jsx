@@ -11,6 +11,8 @@ import {
   MetricCard, SourceBadge, Modal, Field, TextInput, Select,
   EmptyState, timeAgo,
 } from "./shared.jsx";
+import { rowOpenProps, useRowPanel } from "./rowPanel.jsx";
+import SubjectPanel from "./rowPanels.jsx";
 
 /* Notes — written by the system, from the system.
  *
@@ -135,6 +137,11 @@ export default function NotesPage({ member }) {
 
   const clientName = (id) => clients.find((c) => c.id === id)?.name || null;
 
+
+  /* Click a note, see it whole — 12 Sep 2026. The card shows the first lines
+     and the evidence count; the panel shows all of it without scrolling a grid
+     cell. */
+  const notePanel = useRowPanel(shown);
   return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
@@ -203,7 +210,12 @@ export default function NotesPage({ member }) {
             const tone = CAT_TONE[n.category] || CAT_TONE.attention;
             const isOpen = n.status === "open";
             return (
-              <div key={n.id} className="card" style={{ padding: 16, opacity: isOpen ? 1 : 0.62 }}>
+              <div
+                key={n.id}
+                className="card adm-row-able"
+                {...rowOpenProps(() => notePanel.open(n.id), { label: `Open ${n.title || "this note"}` })}
+                style={{ padding: 16, opacity: isOpen ? 1 : 0.62 }}
+              >
                 <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
                   <span style={{
                     display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0,
@@ -305,6 +317,10 @@ export default function NotesPage({ member }) {
       {remindFrom && (
         <MakeReminderModal note={remindFrom} member={member}
           onClose={() => setRemindFrom(null)} reload={load} />
+      )}
+
+      {notePanel.row && (
+        <SubjectPanel kind="note" row={notePanel.row} ctx={{ clients }} {...notePanel.panelProps} />
       )}
     </>
   );
