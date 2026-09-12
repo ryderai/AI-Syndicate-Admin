@@ -65,18 +65,29 @@ function Bubble({ m }) {
 /* One line per thing the assistant actually did. Deliberately plain and
  * deliberately loud — this is the receipt. */
 function ActionReceipt({ a }) {
+  /* THREE STATES, NOT TWO — 12 Sep 2026.
+   *
+   * A tool can now succeed and deliberately write nothing: log_meeting reads a
+   * dictated list back for approval before it saves any of it. Drawn with the
+   * green tick, that run would tell somebody their meetings were recorded when
+   * not one row had been written — and they would stop reading at the tick.
+   * The third state is amber, says NOTHING SAVED YET, and carries no tick. */
+  const preview = a.ok && a.preview;
+  const bg = preview ? "#fffbeb" : a.ok ? "var(--success-soft, #eafce9)" : "#fef2f2";
+  const edge = preview ? "#fcd34d" : a.ok ? "#b9e6b3" : "#fecaca";
+  const ink = preview ? "#92400e" : a.ok ? "#006b1a" : "var(--danger)";
   return (
     <div style={{
       display: "flex", gap: 8, alignItems: "flex-start",
       padding: "7px 10px", marginBottom: 6, borderRadius: 9,
-      background: a.ok ? "var(--success-soft, #eafce9)" : "#fef2f2",
-      border: `1px solid ${a.ok ? "#b9e6b3" : "#fecaca"}`,
+      background: bg,
+      border: `1px solid ${edge}`,
       fontSize: 12, lineHeight: 1.5,
     }}>
-      <span aria-hidden="true" style={{ flexShrink: 0 }}>{a.ok ? "✓" : "✕"}</span>
+      <span aria-hidden="true" style={{ flexShrink: 0 }}>{preview ? "•" : a.ok ? "✓" : "✕"}</span>
       <span style={{ minWidth: 0 }}>
-        <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.08em", color: a.ok ? "#006b1a" : "var(--danger)", marginRight: 6 }}>
-          {a.ok ? "DID THIS" : "DID NOT RUN"}
+        <span style={{ fontFamily: "var(--mono)", fontSize: 9.5, fontWeight: 800, letterSpacing: "0.08em", color: ink, marginRight: 6 }}>
+          {preview ? "NOTHING SAVED YET" : a.ok ? "DID THIS" : "DID NOT RUN"}
         </span>
         <span style={{ color: "var(--ink-2)" }}>{a.text}</span>
       </span>

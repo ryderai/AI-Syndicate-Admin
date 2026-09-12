@@ -24,6 +24,8 @@ import { StagePill, ClaimChip, ScoreChip, FirmWarning, money, SiteLink } from ".
 /* One place decides how a date is written for a person to read, and it counts
  * days in the team's own calendar rather than the browser's. */
 import { sheetDateLong } from "../../lib/salesSheet.js";
+import MeetingsPanel from "./meetingsPanel.jsx";
+import { spellDate, wasTimed } from "../../../lib/meetings.js";
 
 /* THE PROFILE — one person, everything about them, in one place.
  *
@@ -46,8 +48,15 @@ const OUTCOMES = [
   ["booked", "Booked a meeting"], ["not_interested", "Not interested"], ["bad_number", "Bad number"],
 ];
 
+/* MEETINGS SITS SECOND, straight after Work. 12 Sep 2026.
+ *
+ * It is the answer to "when did we last actually sit down with these people",
+ * which is the first thing anybody asks before picking the phone up, and a tab
+ * at the far right is a tab nobody clicks. Timeline still carries every meeting
+ * as a dated line — this tab is the structured version, where they can be
+ * corrected. */
 const TABS = [
-  ["work", "Work"], ["timeline", "Timeline"], ["details", "Details"],
+  ["work", "Work"], ["meetings", "Meetings"], ["timeline", "Timeline"], ["details", "Details"],
   ["proposals", "Proposals"], ["playbook", "Playbook"],
 ];
 
@@ -439,6 +448,50 @@ export default function SalesProfile({
                  through this file's local `patch`. */
               onStage={onStage}
               onCloseDeal={doClose} readOnly={readOnly}
+            />
+          )}
+
+          {tab === "meetings" && (
+            <MeetingsPanel
+              leadId={lead.id}
+              clientId={lead.client_id || null}
+              member={member}
+              readOnly={readOnly}
+              /* THROUGH THE PAGE'S GATED PATH, never a write from the panel.
+                 Promoting a future meeting to the booked one is a stage move,
+                 and every stage move in this drawer goes through onStage for
+                 the reason written on that prop: restricting one control is not
+                 restricting the act. */
+              onSetBooked={(m) => {
+                /* ASK BEFORE OVERWRITING A DATE THAT IS ALREADY THERE. A lead
+                   sitting at meeting_booked already has a real date somebody
+                   put in the diary, and quietly replacing it from a list of
+                   recorded meetings is how a booking disappears without anyone
+                   seeing it happen. */
+                const existing = lead.meeting_at && new Date(lead.meeting_at) > new Date() ? lead.meeting_at : null;
+                if (existing && existing !== m.occurred_at) {
+                  const keep = window.confirm(
+                    `This person already has a meeting booked for ${spellDate(lead.meeting_at, wasTimed(lead.meeting_at))}.\n\n`
+                    + `Replace it with ${spellDate(m.occurred_at, wasTimed(m.occurred_at))}?`
+                  );
+                  if (!keep) return;
+                }
+                onStage(
+                  "meeting_booked",
+                  `Booked meeting set from a recorded meeting on ${spellDate(m.occurred_at, wasTimed(m.occurred_at))}.`,
+                  { meeting_at: m.occurred_at }
+                );
+              }}
+              /* BOTH RELOADS, and this was a real gap.
+                 `reload` is the PAGE's — it refreshes the sheet behind the
+                 drawer. `load` is this drawer's own, and it is the one that
+                 re-reads the timeline. Handing over only the page's meant a
+                 meeting added here appeared instantly in the Meetings tab and
+                 was invisible on the Timeline tab a click away, until the whole
+                 record was closed and reopened. Two tabs of the same drawer
+                 disagreeing about what happened is worse than either being
+                 empty. */
+              reload={() => { load(); reload?.(); }}
             />
           )}
 

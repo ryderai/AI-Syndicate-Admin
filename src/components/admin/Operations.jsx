@@ -24,6 +24,7 @@ import { planTaskImport, planSummary } from "../../../lib/notion-merge.js";
 import { assigneesOf, isAssignedTo } from "../../../lib/task-assignees.js";
 import TaskDrawer from "./taskDrawer.jsx";
 import { CLIENT_DELETE_CASCADES, CLIENT_DELETE_KEEPS, confirmsDelete, deleteWarning } from "../../../lib/client-delete.js";
+import MeetingsPanel from "./meetingsPanel.jsx";
 
 /* Operations — the Notion replacement, in Notion's own shape.
  *
@@ -677,6 +678,10 @@ export function ClientDetail({
                    needs you. Added Aug 25 2026 — before it, a client page began
                    on the day the money started and the whole chase was
                    invisible from here. */
+                /* MEETINGS, on the client side too — 12 Sep 2026. The Sales
+                   card has its own; a client who signed six months ago has
+                   check-ins nobody could record anywhere until now. */
+                ["meetings", "Meetings", 0],
                 ["sales", "How they started", 0],
                 ["weekly", "Weekly log", weekly.length]].map(([id, label, count]) => (
           <button key={id} onClick={() => setTab(id)} role="tab" aria-selected={tab === id} className={`aia-tab ${tab === id ? "active" : ""}`}>
@@ -700,6 +705,8 @@ export function ClientDetail({
         <VaultPanel client={client} vault={vault} />
       ) : tab === "reports" ? (
         <ClientReportsPanel client={client} reports={reports} autoOpen={reportAuto} onAutoOpened={() => setReportAuto(false)} />
+      ) : tab === "meetings" ? (
+        <MeetingsPanel clientId={client.id} member={member} />
       ) : tab === "sales" ? (
         <SalesHistoryPanel client={client} teamName={(id) => {
           const m = team.find((x) => x.user_id === id);

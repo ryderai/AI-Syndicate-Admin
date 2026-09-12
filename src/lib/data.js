@@ -58,6 +58,7 @@ import {
   tagIndex, eventsByLead, currentTags, currentSlugs, tagHistory, autoTagPlan,
 } from "../../lib/lead-tags.js";
 import { newestReportByCompany, readCompanyReport } from "./salesSheet.js";
+import { meetingBody, rowToMeeting, rowIsBlank, rowProblem } from "../../lib/meetings.js";
 
 /* ONE STAGE LADDER, replacing the outreach sheet's two overlapping columns.
  *
@@ -1095,18 +1096,32 @@ export async function listAllLeadActivity(sinceDays = 30) {
   return res;
 }
 
-export async function addLeadActivity({ leadId, actor, type, outcome, body }) {
+export async function addLeadActivity({ leadId, actor, type, outcome, body, at = null }) {
   if (!live()) {
-    const row = { id: pid("a"), lead_id: leadId, actor: actor || "preview-user", type, outcome: outcome || null, body: body || null, created_at: new Date().toISOString() };
+    const row = { id: pid("a"), lead_id: leadId, actor: actor || "preview-user", type, outcome: outcome || null, body: body || null, created_at: at || new Date().toISOString() };
     previewStore.leadActivity.unshift(row);
     const li = previewStore.leads.findIndex((l) => l.id === leadId);
     if (li >= 0) previewStore.leads[li].last_activity_at = row.created_at;
     return { ok: true, row, sample: true };
   }
   const supabase = getSupabase();
+  /* `at` BACKDATES THE ROW, and it is the whole reason a meeting that happened
+   * in June can be recorded in September without lying about when it happened.
+   *
+   * Left off, the column keeps its default of now() and every existing caller
+   * behaves exactly as it did before — this is an addition, not a change.
+   *
+   * It is safe to feed the 0009 touch trigger a backdated row, and that is
+   * deliberate rather than lucky: last_touch_at uses greatest() so a June row
+   * cannot make a cold lead look warm, first_contact_at uses least() so it
+   * CORRECTS an over-late first contact, and claim_contacted_at uses coalesce()
+   * so the first answer stands. 0009's own comment says it chose least() over
+   * coalesce() precisely so a replayed history dates from when it happened. */
+  const row = { lead_id: leadId, actor, type, outcome: outcome || null, body: body || null };
+  if (at) row.created_at = at;
   const { data, error } = await supabase
     .from("admin_lead_activity")
-    .insert({ lead_id: leadId, actor, type, outcome: outcome || null, body: body || null })
+    .insert(row)
     .select().maybeSingle();
   if (error) return { ok: false, error: error.message };
   await supabase.from("admin_leads").update({ last_activity_at: new Date().toISOString() }).eq("id", leadId);
@@ -5154,4 +5169,406 @@ export async function addImportNotesBatch(notes) {
     count += data?.length || 0;
   }
   return { ok: failed === 0, count, failed, error: firstError };
+}
+
+/* ------------------------------------------------------------------ */
+/* MEETINGS (0034)                                                      */
+/* ------------------------------------------------------------------ */
+/* Added 12 Sep 2026 for Julia's backfill. The rules are in lib/meetings.js and
+ * the table is migration 0034; this is only the writing.
+ *
+ * THE ONE THING TO KNOW BEFORE EDITING ANYTHING BELOW: nothing here writes
+ * `stage`, `meeting_at` or `next_follow_up_at`. That is not an omission, it is
+ * the design — see the long note at the top of 0034. If a future version of
+ * saveMeetingBatch starts touching any of those three, that is the bug.
+ */
+
+/* (the meetings helpers are imported at the top of this file) */
+
+/* Preview mode grows its shelves on demand rather than by editing the big
+ * literal at the top of this file — a smaller edit to a shared object is a
+ * smaller chance of clobbering somebody else's session. */
+function previewMeetings() {
+  if (!previewStore.meetings) previewStore.meetings = [];
+  if (!previewStore.meetingBatches) previewStore.meetingBatches = [];
+  return previewStore;
+}
+
+/** Every meeting for one person, newest first. Pass whichever id you have. */
+export async function listMeetings({ leadId = null, clientId = null } = {}) {
+  if (!leadId && !clientId) return { ok: true, rows: [] };
+  if (!live()) {
+    const store = previewMeetings();
+    const rows = store.meetings
+      .filter((m) => (leadId && m.lead_id === leadId) || (clientId && m.client_id === clientId))
+      .sort((a, b) => String(b.occurred_at).localeCompare(String(a.occurred_at)));
+    return { ok: true, rows, sample: true };
+  }
+  const supabase = getSupabase();
+  let q = supabase.from("admin_meetings").select("*").order("occurred_at", { ascending: false });
+  /* ONE SUBJECT AT A TIME, AND THE LEAD WINS WHEN BOTH ARE GIVEN.
+   *
+   * The first version asked for `lead_id = X OR client_id = Y`, so a person's
+   * card showed every meeting recorded against their FIRM as well. Migrations
+   * 0015 and 0023 stamp the same `client_id` onto every contact at a firm when
+   * one of them closes — so a single firm-level meeting appeared on four
+   * people's cards, under a heading reading "everything recorded with this
+   * person". A list that is wrong in a way the heading contradicts is worse
+   * than a list that is short.
+   *
+   * A meeting carrying both ids still appears on the person's card, because
+   * that is what the lead_id on it means. Firm-level meetings live on the
+   * client page, which is where somebody looking for "what have we done with
+   * this firm" goes. */
+  if (leadId) q = q.eq("lead_id", leadId);
+  else q = q.eq("client_id", clientId);
+  const { data, error } = await q;
+  if (error) return { ok: false, error: error.message, rows: [] };
+  return { ok: true, rows: data || [] };
+}
+
+/**
+ * SAVE A WHOLE GRID AT ONCE.
+ *
+ * The order below is the design, the same way logTouch()'s order is:
+ *
+ *   1. REFUSE THE WHOLE THING IF ANY ROW IS BROKEN. Rule 4 in lib/meetings.js.
+ *      A part-saved batch leaves half a backlog and no way to tell which half,
+ *      and the half that failed is the half that was hardest to type. The grid
+ *      checks this too; it is checked again here because the grid is not the
+ *      only thing that will ever call this function — the assistant does as well.
+ *   2. OPEN THE BATCH FIRST, so that anything written after it is undoable even
+ *      if the run dies in the middle. A batch with no meetings in it is a wasted
+ *      row; meetings with no batch are an afternoon of hand-deleting.
+ *   3. CREATE THE NEW PEOPLE, and stop dead if that fails. A meeting pointing at
+ *      a lead that was never created is a meeting attached to nothing.
+ *   4. THE MEETINGS, with ids generated here rather than by the database.
+ *   5. THE TIMELINE ROWS, BACKDATED, each carrying the id of its meeting.
+ *      This order is the reason there is no positional pairing left anywhere in
+ *      this function — see the long note at step 4. An earlier version did it
+ *      the other way round and matched the returned ids back by position, which
+ *      is not a guard when two meetings in one batch are with the same person.
+ *      A failure here leaves the meetings saved and says so; it does not roll
+ *      correct work back.
+ *   6. The count on the batch, last, because nothing reads it until later.
+ *
+ * @returns { ok, written, batchId, createdLeads, error }
+ */
+export async function saveMeetingBatch({ rows, userId, entry = "grid", source = "typed", note = null }) {
+  const live_rows = (rows || []).filter((r) => !rowIsBlank(r));
+  if (!userId) return { ok: false, error: "Nobody is signed in, so there is no one to save these under." };
+  if (!live_rows.length) return { ok: false, error: "There is nothing to save yet." };
+
+  /* ---- 1. all or nothing ---- */
+  const broken = live_rows.map((r) => rowProblem(r)).filter(Boolean);
+  if (broken.length) {
+    return { ok: false, error: `${broken.length} ${broken.length === 1 ? "row still needs" : "rows still need"} fixing: ${broken[0]}` };
+  }
+
+  /* WORK ON COPIES. An earlier version wrote the created lead id straight onto
+   * the row objects it was handed — which are React state owned by the grid.
+   * Mutating state outside setRows leaves the component rendering from an
+   * object it no longer matches, and after a failed save the grid would be
+   * showing rows it did not think it had. Nothing below touches the caller's
+   * objects. */
+  const plan = live_rows.map((r) => ({ row: r, person: r.person || null, newLead: r.newLead || null }));
+
+  if (!live()) {
+    const store = previewMeetings();
+    const batchId = pid("mb");
+    store.meetingBatches.unshift({ id: batchId, created_by: userId, entry, note, row_count: live_rows.length, created_at: new Date().toISOString(), undone_at: null });
+
+    /* PREVIEW MAKES THE NEW PEOPLE TOO, and that is not padding. Without it the
+     * check screen said "1 will also add a new person" and the screen after it
+     * said nothing about a person — the console promising something in sample
+     * mode and then not doing it. A preview that behaves differently from the
+     * real thing is worse than no preview, because it is the version people
+     * form their expectations on. */
+    let createdLeads = 0;
+    for (const p of plan) {
+      if (p.newLead && !p.person?.leadId) {
+        const made = { id: pid("l"), name: p.newLead.name || p.row.who, company: p.newLead.firm || null,
+          email: p.newLead.email || null, source: "manual", stage: "new", owner_id: null,
+          became_customer: false, created_at: new Date().toISOString() };
+        previewStore.leads.unshift(made);
+        p.person = { leadId: made.id, clientId: null, name: made.name };
+        createdLeads += 1;
+      }
+    }
+    for (const p of plan) {
+      const mid = pid("m");
+      store.meetings.unshift({
+        id: mid,
+        ...rowToMeeting({ ...p.row, person: p.person }, { enteredBy: userId, batchId, source }),
+        created_at: new Date().toISOString(),
+      });
+      /* THE TIMELINE ROW IN PREVIEW TOO — the same reasoning as the new people
+       * above, which an earlier version applied to one and not the other. The
+       * Saved screen tells the person these are "on their timeline, dated to
+       * the day it happened"; in sample mode that was simply untrue, and sample
+       * mode is where somebody forms their expectation of what the button does. */
+      if (p.person?.leadId) {
+        previewStore.leadActivity.unshift({
+          id: pid("a"), lead_id: p.person.leadId, actor: userId, type: "meeting",
+          outcome: p.row.outcome, body: meetingBody(p.row),
+          created_at: p.row.when.iso, meeting_id: mid,
+        });
+      }
+    }
+    return { ok: true, written: plan.length, batchId, createdLeads, sample: true };
+  }
+
+  const supabase = getSupabase();
+
+  /* ---- 2. the batch, first, so everything after it is undoable ---- */
+  const { data: batch, error: batchErr } = await supabase
+    .from("admin_meeting_batches")
+    .insert({ created_by: userId, entry, note, row_count: 0 })
+    .select().maybeSingle();
+  if (batchErr || !batch?.id) {
+    return { ok: false, error: `Could not start the save: ${batchErr?.message || "no batch came back"}` };
+  }
+  const batchId = batch.id;
+
+  /* ---- 3. the new people ---- */
+  let createdLeads = 0;
+  const needLeads = plan.filter((p) => p.newLead && !p.person?.leadId);
+  if (needLeads.length) {
+    const made = await insertLeadsBatch(needLeads.map((p) => ({
+      name: p.newLead.name || p.row.who,
+      company: p.newLead.firm || null,
+      email: p.newLead.email || null,
+      source: "manual",
+      /* AT `new`, NOT AT A MEETING STAGE. Creating somebody as a side effect of
+       * bookkeeping must not also place them in the pipeline — that is a
+       * judgement for whoever works them, and a backfill never moves anybody
+       * along. Unowned, for the reason 0020 gives: handing a rep a lead they
+       * did not claim draws their name on a row they never took. */
+      stage: "new",
+      owner_id: null,
+    })));
+
+    /* THREE DIFFERENT ANSWERS, AND THEY MEAN DIFFERENT THINGS.
+     *
+     * insertLeadsBatch can come back `ok:true` having written every row and
+     * still hand back NO IDS — its `shortReturn` branch, which exists for
+     * thousand-row imports where the ids stop being worth collecting. An
+     * earlier version here tested only `ids.length !== needLeads.length` and
+     * reported "nothing was saved", while the people it had just created sat in
+     * the pipeline. Saying nothing happened when something did is the one
+     * failure message that actively costs somebody time. */
+    if (!made.ok) {
+      return { ok: false, batchId, written: 0, createdLeads: made.count || 0,
+        error: `The new people could not be added, so no meetings were saved${made.count ? ` — but ${made.count} of them did get created, at New, and are in the pipeline` : ""}: ${made.error}` };
+    }
+    if (!made.ids || made.ids.length !== needLeads.length) {
+      return { ok: false, batchId, written: 0, createdLeads: made.count || needLeads.length,
+        error: `The new people were added to the pipeline, but the console could not tell which row is which, so no meetings were saved. They are at New, unowned — attach the meetings to them by name and save again.` };
+    }
+    needLeads.forEach((p, i) => { p.person = { leadId: made.ids[i], clientId: null, name: p.newLead.name || p.row.who }; });
+    createdLeads = made.ids.length;
+  }
+
+  /* ---- 4. THE MEETINGS FIRST, with ids we choose ourselves ----
+   *
+   * This ordering is the whole reason there is no positional pairing left in
+   * this function. The first version inserted the timeline rows first and
+   * matched the returned ids back to the rows it sent BY POSITION, guarded by
+   * "the lead_id at position i is the one I sent at position i" — which is not a
+   * guard at all when two meetings in one batch are with the SAME PERSON. That
+   * is the normal case here: this screen exists so somebody can record their
+   * history with a contact, which is several meetings with one person. A
+   * reordered result would have hung June's meeting off July's timeline line,
+   * and editing June would then have rewritten July.
+   *
+   * Generating the ids up front removes the question. Each timeline row simply
+   * carries the id of the meeting it describes. */
+  for (const p of plan) p.id = newId();
+  const { error: mErr } = await supabase
+    .from("admin_meetings")
+    .insert(plan.map((p) => ({
+      id: p.id,
+      ...rowToMeeting({ ...p.row, person: p.person }, { enteredBy: userId, batchId, source }),
+    })));
+  if (mErr) {
+    return { ok: false, batchId, written: 0, createdLeads,
+      error: `The meetings did not save: ${mErr.message}` };
+  }
+
+  /* ---- 5. the backdated timeline rows ----
+   *
+   * Only for meetings that have a lead: admin_lead_activity is keyed on a
+   * lead_id that cannot be null (0001), so a client-only meeting has no
+   * timeline row to write and the client page reads admin_meetings directly.
+   *
+   * THE BACKDATE IS THE POINT. Without `created_at`, every one of Julia's June
+   * meetings would read as today and the whole exercise would be pointless. */
+  const withLead = plan.filter((p) => p.person?.leadId);
+  let timelineProblem = null;
+  if (withLead.length) {
+    const { error: actErr } = await supabase
+      .from("admin_lead_activity")
+      .insert(withLead.map((p) => ({
+        lead_id: p.person.leadId,
+        actor: userId,
+        type: "meeting",
+        outcome: p.row.outcome,
+        body: meetingBody(p.row),
+        created_at: p.row.when.iso,
+        meeting_id: p.id,
+      })));
+    /* REPORTED, NOT SWALLOWED, AND NOT ROLLED BACK. The meetings are saved and
+     * they are the record; what is missing is their line on the timeline. Those
+     * are two different facts and the person is told which one failed, rather
+     * than being shown a success message over a half-done job or having correct
+     * work thrown away. */
+    if (actErr) timelineProblem = actErr.message;
+  }
+
+  /* ---- 6. the count ---- */
+  await supabase.from("admin_meeting_batches").update({ row_count: plan.length }).eq("id", batchId);
+
+  await logActivity({
+    actor: userId,
+    kind: "meetings_backfill",
+    title: `${plan.length} ${plan.length === 1 ? "meeting" : "meetings"} recorded`,
+    body: `Entered by hand${createdLeads ? `, adding ${createdLeads} new ${createdLeads === 1 ? "person" : "people"}` : ""}.`,
+  });
+
+  return {
+    ok: true, written: plan.length, batchId, createdLeads,
+    error: timelineProblem
+      ? `Saved, but the lines on the timeline did not write, so these will not show in anybody's history yet: ${timelineProblem}`
+      : undefined,
+  };
+}
+
+/** An id we can put on a row before the database sees it.
+ *
+ *  `crypto.randomUUID` is in every browser this console supports and in node 19
+ *  and up, but it needs a secure context — so the fallback is here rather than
+ *  discovered on somebody's http:// preview. The fallback is not
+ *  cryptographically strong and does not need to be: this is a row id, not a
+ *  secret, and the database's primary key is what actually enforces uniqueness. */
+function newId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const hex = (n) => Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+  return `${hex(8)}-${hex(4)}-4${hex(3)}-${"89ab"[Math.floor(Math.random() * 4)]}${hex(3)}-${hex(12)}`;
+}
+
+/** Put a batch back. Returns how many meetings went — which can be fewer than
+ *  were written if somebody already removed some by hand, and the caller is
+ *  told the number rather than left to assume it matched. */
+export async function undoMeetingBatch(batchId) {
+  if (!batchId) return { ok: false, error: "No batch to undo." };
+  if (!live()) {
+    const store = previewMeetings();
+    const before = store.meetings.length;
+    store.meetings = store.meetings.filter((m) => m.batch_id !== batchId);
+    const b = store.meetingBatches.find((x) => x.id === batchId);
+    if (b) b.undone_at = new Date().toISOString();
+    return { ok: true, removed: before - store.meetings.length, sample: true };
+  }
+  const supabase = getSupabase();
+  const { data, error } = await supabase.rpc("admin_meetings_undo_batch", { p_batch: batchId });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, removed: Number(data) || 0 };
+}
+
+/** The batches this person saved recently, so the screen can offer the undo.
+ *  Undone ones come back too — a banner that says "you already put that back"
+ *  is better than a button that does nothing. */
+export async function listMyMeetingBatches(userId, { limit = 5 } = {}) {
+  if (!userId) return { ok: true, rows: [] };
+  if (!live()) {
+    const store = previewMeetings();
+    return { ok: true, rows: store.meetingBatches.filter((b) => b.created_by === userId).slice(0, limit), sample: true };
+  }
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("admin_meeting_batches").select("*")
+    .eq("created_by", userId).order("created_at", { ascending: false }).limit(limit);
+  if (error) return { ok: false, error: error.message, rows: [] };
+  return { ok: true, rows: data || [] };
+}
+
+/** Fix one meeting. A backfilled meeting is somebody's memory and memories get
+ *  corrected; the row lock in 0034 means only the person who entered it, or an
+ *  admin, gets to do the correcting. */
+export async function updateMeeting(id, patch) {
+  if (!id) return { ok: false, error: "No meeting to change." };
+  if (!live()) {
+    const store = previewMeetings();
+    const i = store.meetings.findIndex((m) => m.id === id);
+    if (i < 0) return { ok: false, error: "No such meeting." };
+    store.meetings[i] = { ...store.meetings[i], ...patch };
+    const row = store.meetings[i];
+    previewStore.leadActivity = previewStore.leadActivity.map((a) => (a.meeting_id === id
+      ? { ...a, created_at: row.occurred_at, outcome: row.outcome,
+          body: meetingBody({ kind: row.kind, outcome: row.outcome, note: row.notes }) }
+      : a));
+    return { ok: true, row, sample: true };
+  }
+  const supabase = getSupabase();
+  const { data, error } = await supabase.from("admin_meetings").update(patch).eq("id", id).select().maybeSingle();
+  if (error) return { ok: false, error: error.message };
+
+  /* NOTHING MATCHED IS NOT SUCCESS. `.update().eq().select().maybeSingle()`
+   * answers `data: null, error: null` when no row was touched — the meeting was
+   * removed in another tab, or the row lock in 0034 refused it because somebody
+   * else recorded it.
+   *
+   * An earlier version carried on regardless and built the timeline body from
+   * `data?.kind` and `data?.outcome`. Both undefined fall through to defaults
+   * ("Meeting", "It happened"), so it wrote `Meeting · Meeting · It happened.`
+   * over a line whose meeting it had just failed to change — an optional chain
+   * that read as defensive and was what turned a no-op into a corrupting
+   * write. */
+  if (!data) {
+    return { ok: false, error: "That meeting could not be changed — it may have been removed, or it belongs to somebody else." };
+  }
+
+  /* KEEP THE TIMELINE LINE IN STEP — found BY THE MEETING'S OWN ID, not by a
+   * link stored on the meeting. A meeting whose date was corrected while its
+   * line still reads the old day is two answers to one question, and the
+   * timeline is the one people actually look at.
+   *
+   * Reported, not swallowed: the meeting itself did save, and that is a
+   * different fact from whether its line followed. */
+  const line = {};
+  if (patch.occurred_at) line.created_at = patch.occurred_at;
+  if (patch.outcome) line.outcome = patch.outcome;
+  if (patch.kind || patch.outcome || Object.prototype.hasOwnProperty.call(patch, "notes")) {
+    line.body = meetingBody({ kind: data.kind, outcome: data.outcome, note: data.notes });
+  }
+  if (Object.keys(line).length) {
+    const { error: lineErr } = await supabase.from("admin_lead_activity").update(line).eq("meeting_id", id);
+    if (lineErr) return { ok: true, row: data, error: `Saved, but the line on the timeline still shows the old details: ${lineErr.message}` };
+  }
+  return { ok: true, row: data };
+}
+
+/** Remove one meeting, and the line it put on the timeline. */
+export async function deleteMeeting(id) {
+  if (!id) return { ok: false, error: "No meeting to remove." };
+  if (!live()) {
+    const store = previewMeetings();
+    store.meetings = store.meetings.filter((m) => m.id !== id);
+    /* What `on delete cascade` does in the real database, done by hand here so
+     * the two modes behave the same. */
+    previewStore.leadActivity = previewStore.leadActivity.filter((a) => a.meeting_id !== id);
+    return { ok: true, sample: true };
+  }
+  const supabase = getSupabase();
+  /* ONE STATEMENT. The timeline line carries `meeting_id ... on delete cascade`
+   * (0034), so the database removes it in the same breath.
+   *
+   * The first version did it by hand in three steps — read the link off the
+   * meeting, delete the meeting, then delete the line — which meant the line
+   * survived whenever the third step failed, or whenever anything other than
+   * this function removed a meeting. A rule the application has to remember is
+   * a rule that holds until somebody writes a second caller. */
+  const { error } = await supabase.from("admin_meetings").delete().eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }

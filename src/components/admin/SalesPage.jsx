@@ -91,6 +91,7 @@ import { Popover } from "./opsCells.jsx";
 import { StartOverPanel } from "./salesStartOver.jsx";
 import SalesOwnersPanel from "./salesOwners.jsx";
 import { SalesImportModal } from "./salesImport.jsx";
+import MeetingsGridModal from "./meetingsGrid.jsx";
 /* Saved searches and imported-list records. Carried over from the old Leads
  * page rather than rewritten — it already works, and dropping it would have
  * quietly removed the scraper controls along with the page's old name. */
@@ -297,6 +298,9 @@ export default function SalesPage({ member, mode = null }) {
   );
   const [openId, setOpenId] = useState(seed.openId ?? null);
   const [importOpen, setImportOpen] = useState(false);
+  /* Julia, 11 Sep 2026: backfilling meetings one at a time. Top level and not
+   * in the ⋯ menu, because it is a thing a rep does, not an admin chore. */
+  const [meetingsOpen, setMeetingsOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [startOverOpen, setStartOverOpen] = useState(false);
@@ -699,7 +703,22 @@ export default function SalesPage({ member, mode = null }) {
      * and it carries the note it was handed so a drag's own sentence is kept. */
     if (patch.stage && patch.stage !== lead.stage) {
       const need = STAGE_REQUIRES[patch.stage];
-      if (need && !stageRequirementMet(patch.stage, lead, { proposals: board?.proposals || [] })) {
+      /* TESTED AGAINST THE LEAD AS THIS PATCH WOULD LEAVE IT, not as it stands.
+       *
+       * It used to read `lead` alone, so a caller that SUPPLIED the missing
+       * field was still stopped and asked for it. That was invisible until
+       * something actually did supply one: "make this the booked meeting" on a
+       * recorded meeting passes `meeting_at` in the patch, and the gate — not
+       * looking at the patch — decided the date was missing, opened the box,
+       * and then dropped the patch entirely (setStaging carries only the lead,
+       * the stage and the note). The person was made to retype by hand the
+       * exact date they had just clicked on, and whatever they typed is what
+       * got written.
+       *
+       * Merging first is also simply the right question: the gate exists to
+       * stop a lead reaching a stage without the fact that stage requires, and
+       * a patch that carries the fact satisfies it. */
+      if (need && !stageRequirementMet(patch.stage, { ...lead, ...patch }, { proposals: board?.proposals || [] })) {
         setStaging({ lead, stage: patch.stage, note });
         return false;
       }
@@ -1838,6 +1857,14 @@ export default function SalesPage({ member, mode = null }) {
             ⋯
           </button>
 
+          <button
+            type="button" className="btn"
+            title="Record meetings you have already had — many at once"
+            onClick={() => setMeetingsOpen(true)}
+          >
+            + Past meetings
+          </button>
+
           <button className="btn btn-accent" onClick={() => setAddOpen(true)}>+ Add a contact</button>
         </div>
       </div>
@@ -2207,6 +2234,15 @@ export default function SalesPage({ member, mode = null }) {
                screens, and this page already keeps one for exactly that. */
             now,
           )}
+        />
+      )}
+
+      {meetingsOpen && (
+        <MeetingsGridModal
+          member={member}
+          leads={board.leads}
+          onClose={() => setMeetingsOpen(false)}
+          reload={load}
         />
       )}
 

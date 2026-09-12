@@ -4339,3 +4339,162 @@ select.adm-input { cursor: pointer; }
 .adm-work-openrow:focus-visible { outline: 2px solid var(--accent, #6d5bd0); outline-offset: 0; }
 .adm-work-openrow-name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
 .adm-work-openrow:hover .adm-work-openrow-name { text-decoration: underline; }
+
+/* ==================================================================
+   MEETINGS — the grid, and the list on a person's card (12 Sep 2026)
+   ==================================================================
+   Prefix `adm-mtg-`. NOT `adm-drawer-` and NOT `adm-dw-`: both are taken, and
+   a collision between two drawers on this project has already squashed a
+   header once (see the note at the .adm-drawer block above). A new prefix is
+   cheaper than finding out.
+   ------------------------------------------------------------------ */
+
+.adm-mtg-lead {
+  font-size: 13px; line-height: 1.55; color: var(--ink);
+  background: var(--bg-1); border: 1px solid var(--rule);
+  border-radius: 8px; padding: 11px 13px; margin-bottom: 12px;
+}
+.adm-mtg-lead code {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--bg-2); border-radius: 4px; padding: 1px 5px;
+}
+
+.adm-mtg-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.adm-mtg-quiet { color: var(--ink-faint); font-size: 12px; }
+
+.adm-mtg-paste { margin-bottom: 14px; }
+
+/* ---- the grid ---- */
+/* One column layout shared by the header and every row, so nothing can drift
+   out of line as content changes width. The last column is the remove button. */
+.adm-mtg-grid { border: 1px solid var(--rule); border-radius: 9px; overflow: visible; }
+
+.adm-mtg-head,
+.adm-mtg-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.5fr) minmax(130px, 1.3fr) minmax(110px, 1fr) minmax(120px, 1fr) minmax(120px, 1.2fr) 34px;
+  gap: 8px;
+  align-items: start;
+}
+
+.adm-mtg-head {
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--mono); font-size: 10px; font-weight: 800;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint);
+  border-radius: 8px 8px 0 0;
+}
+
+.adm-mtg-row { padding: 8px 10px; border-bottom: 1px solid var(--rule); }
+.adm-mtg-row:last-child { border-bottom: 0; }
+/* A row that cannot be saved is marked, but softly. This grid is FILLED with
+   incomplete rows for most of its life — every blank line at the bottom, every
+   row mid-type — so a loud red would mean the screen is shouting the whole
+   time somebody is using it. rowProblem() ignores blank rows for the same
+   reason. */
+.adm-mtg-row-bad { background: color-mix(in oklab, var(--danger) 4%, transparent); }
+
+.adm-mtg-cell { min-width: 0; position: relative; }
+.adm-mtg-in { width: 100%; font-size: 13px; padding: 6px 8px; }
+select.adm-mtg-in { padding-right: 4px; }
+
+/* ---- the resolved date, printed back ---- */
+.adm-mtg-resolved {
+  margin-top: 3px; font-size: 11.5px; line-height: 1.3;
+  color: var(--success); font-weight: 600;
+}
+.adm-mtg-resolved-bad { color: var(--danger); font-weight: 500; }
+.adm-mtg-resolved-future { color: var(--ink-faint); }
+.adm-mtg-flag { font-weight: 500; color: var(--ink-faint); }
+
+/* ---- who ---- */
+.adm-mtg-who { position: relative; }
+.adm-mtg-chosen {
+  margin-top: 3px; font-size: 11.5px; line-height: 1.3;
+  color: var(--ink-faint);
+}
+.adm-mtg-chosen-new { color: var(--accent-deep); font-weight: 600; }
+
+.adm-mtg-menu {
+  position: absolute; z-index: 40; top: calc(100% + 3px); left: 0;
+  min-width: 260px; max-width: 340px; max-height: 260px; overflow-y: auto;
+  background: var(--bg-0, #fff); border: 1px solid var(--rule);
+  border-radius: 8px; box-shadow: 0 10px 30px rgba(16, 32, 56, 0.14);
+}
+.adm-mtg-opt {
+  display: block; width: 100%; text-align: left;
+  padding: 7px 10px; border: 0; background: none; cursor: pointer;
+  border-bottom: 1px solid var(--rule);
+}
+.adm-mtg-opt:last-child { border-bottom: 0; }
+.adm-mtg-opt:hover { background: var(--bg-1); }
+.adm-mtg-opt-name { display: block; font-size: 13px; font-weight: 600; color: var(--ink); }
+.adm-mtg-opt-firm { display: block; font-size: 11.5px; color: var(--ink-faint); margin-top: 1px; }
+.adm-mtg-opt-new { background: var(--accent-soft); }
+.adm-mtg-opt-new:hover { background: color-mix(in oklab, var(--accent) 16%, transparent); }
+.adm-mtg-opt-new .adm-mtg-opt-name { color: var(--accent-deep); }
+.adm-mtg-opt-none { padding: 8px 10px; font-size: 12px; color: var(--ink-faint); }
+
+.adm-mtg-x {
+  border: 0; background: none; cursor: pointer; font-size: 17px; line-height: 1;
+  color: var(--ink-faint); padding: 5px 6px; border-radius: 6px;
+}
+.adm-mtg-x:hover { color: var(--danger); background: var(--bg-1); }
+
+.adm-mtg-add { margin-top: 10px; }
+
+/* ---- what is wrong, and what is about to happen ---- */
+.adm-mtg-problems {
+  margin-top: 12px; padding: 10px 13px;
+  border: 1px solid color-mix(in oklab, var(--danger) 30%, var(--rule));
+  background: color-mix(in oklab, var(--danger) 5%, transparent);
+  border-radius: 8px; font-size: 12.5px; line-height: 1.55;
+}
+.adm-mtg-problems ul { margin: 6px 0 0; padding-left: 18px; }
+.adm-mtg-problems em { font-style: normal; font-weight: 600; }
+
+.adm-mtg-headline { flex: 1; font-size: 12.5px; color: var(--ink-faint); }
+.adm-mtg-headline-bad { color: var(--danger); font-weight: 600; }
+
+.adm-mtg-check { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.75; }
+.adm-mtg-check .adm-mtg-warn { color: var(--danger); }
+.adm-mtg-check .adm-mtg-quiet { color: var(--ink-faint); font-size: 12.5px; }
+
+.adm-mtg-done { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.adm-mtg-done-n {
+  font-family: var(--display); font-size: 40px; font-weight: 800;
+  color: var(--accent-deep); line-height: 1;
+}
+.adm-mtg-note { font-size: 13px; line-height: 1.6; color: var(--ink); margin: 0 0 9px; }
+.adm-mtg-note.adm-mtg-quiet { color: var(--ink-faint); font-size: 12.5px; }
+
+.adm-mtg-bad {
+  padding: 10px 13px; margin-bottom: 12px; border-radius: 8px; font-size: 13px; line-height: 1.55;
+  border: 1px solid color-mix(in oklab, var(--danger) 34%, var(--rule));
+  background: color-mix(in oklab, var(--danger) 6%, transparent);
+}
+.adm-mtg-link {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  color: var(--accent-deep); font-weight: 600; text-decoration: underline; font-size: 13px;
+}
+
+/* ---- the list on a person's card ---- */
+.adm-mtg-list { display: flex; flex-direction: column; gap: 8px; }
+.adm-mtg-item {
+  border: 1px solid var(--rule); border-radius: 8px; padding: 9px 11px; background: var(--bg-1);
+}
+.adm-mtg-item-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.adm-mtg-item-when { font-weight: 700; font-size: 13px; color: var(--ink); }
+.adm-mtg-item-what { font-size: 12.5px; color: var(--ink-faint); }
+.adm-mtg-item-note { font-size: 12.5px; line-height: 1.5; color: var(--ink); margin-top: 4px; white-space: pre-wrap; }
+.adm-mtg-item-acts { margin-left: auto; display: flex; gap: 6px; }
+/* MEASURED vs CLAIMED, on every single row. The house rule: a fact is the fact
+   plus where it was read from. A meeting somebody typed from memory and one
+   read out of a calendar must never sit in a list looking identical. */
+.adm-mtg-badge {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 800; letter-spacing: 0.08em;
+  padding: 2px 5px; border-radius: 4px;
+  background: var(--bg-2); color: var(--ink-faint); border: 1px solid var(--rule);
+}
+.adm-mtg-empty { font-size: 12.5px; color: var(--ink-faint); line-height: 1.55; }
