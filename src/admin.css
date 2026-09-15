@@ -4607,3 +4607,107 @@ select.adm-mtg-in { padding-right: 4px; }
   border: 1px solid color-mix(in oklab, var(--danger) 30%, var(--rule));
   background: color-mix(in oklab, var(--danger) 5%, transparent);
 }
+
+/* ==================================================================
+   HOME SERVICES — the landing-page console. 14 Sep 2026. APPENDED.
+   Nothing above this line was changed.
+   ================================================================== */
+
+.adm-hs { display: flex; flex-direction: column; gap: 22px; }
+.adm-hs-loading { padding: 40px; color: var(--ink-dim); font-size: 14px; }
+
+/* --- the range picker --- */
+.adm-hs-range {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2);
+}
+.adm-hs-presets { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.adm-hs-presets button {
+  padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--bg-1); color: var(--ink-dim); font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.adm-hs-presets button:hover { color: var(--ink); }
+.adm-hs-presets button.active {
+  background: var(--accent-soft); border-color: var(--accent-deep); color: var(--accent-deep);
+}
+.adm-hs-presets button:focus-visible,
+.adm-hs-sort:focus-visible,
+.adm-hs-link:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+.adm-hs-date {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  font-family: var(--mono); font-weight: 700; color: var(--ink-dim);
+}
+.adm-hs-date input {
+  font-family: var(--mono); font-size: 12.5px; padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg-1); color: var(--ink);
+}
+
+/* --- the notices --- */
+.adm-hs-warn {
+  border: 1px solid var(--line); border-left: 3px solid var(--ink-dim);
+  border-radius: 8px; padding: 12px 14px; background: var(--bg-2);
+  font-size: 13px; line-height: 1.6; color: var(--ink-dim);
+}
+.adm-hs-warn strong { color: var(--ink); }
+/* Amber, not red. "Nothing has been deployed yet" is a state of the world,
+   not a fault — colouring it as an error teaches people to ignore errors. */
+.adm-hs-warn-amber { border-left-color: #92400e; background: #fffbeb; color: #7c4a09; }
+.adm-hs-warn-amber strong { color: #7c2d12; }
+.adm-hs-warn code {
+  font-family: var(--mono); font-size: 12px; padding: 1px 5px;
+  border-radius: 4px; background: rgba(0, 0, 0, 0.06);
+}
+
+/* --- the tables --- */
+.adm-hs-tablewrap { overflow-x: auto; }
+.adm-hs-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 720px; }
+.adm-hs-table th {
+  text-align: left; padding: 6px 10px; font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-dim); font-weight: 700;
+  font-family: var(--mono); border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.adm-hs-table td { padding: 9px 10px; border-bottom: 1px solid var(--line-soft, var(--line)); vertical-align: middle; }
+.adm-hs-table tbody tr:last-child td { border-bottom: 0; }
+.adm-hs-table .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.adm-hs-table .dim { color: var(--ink-dim); }
+/* The overarching page is the row every other row is being read against, so
+   it is marked. Weight and a rule, not colour alone. */
+.adm-hs-overarching td { background: var(--bg-2); font-weight: 600; }
+
+.adm-hs-sort {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: inherit; letter-spacing: inherit; text-transform: inherit;
+}
+.adm-hs-sort:hover { color: var(--ink); }
+.adm-hs-sort.active { color: var(--accent-deep); }
+.adm-hs-caret { font-size: 8px; opacity: 0.6; }
+.adm-hs-sort.active .adm-hs-caret { opacity: 1; }
+.adm-hs-table th.n .adm-hs-sort { justify-content: flex-end; width: 100%; }
+
+.adm-hs-link {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: var(--accent-deep); font-weight: 600; text-align: left;
+}
+.adm-hs-link:hover { text-decoration: underline; }
+
+/* A missing figure. Dimmed AND an em dash — never a 0. */
+.adm-hs-blank { color: var(--ink-faint, var(--ink-dim)); cursor: help; font-family: var(--mono); }
+.adm-hs-note { margin: 12px 0 0; font-size: 12.5px; color: var(--ink-dim); line-height: 1.6; }
+
+/* --- the funnel --- */
+.adm-hs-funnel { display: flex; flex-direction: column; gap: 10px; }
+.adm-hs-funnel-head { display: flex; align-items: center; gap: 10px; }
+.adm-hs-funnel-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.adm-hs-funnel-row {
+  display: flex; align-items: baseline; gap: 10px; font-size: 13.5px;
+}
+.adm-hs-funnel-label { flex: 1; min-width: 0; }
+.adm-hs-funnel-n { font-variant-numeric: tabular-nums; font-weight: 600; }
+.adm-hs-funnel-pct { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); min-width: 48px; text-align: right; }
+.adm-hs-funnel-bar {
+  display: block; height: 8px; border-radius: 99px; background: var(--bg-3); overflow: hidden; margin-top: 5px;
+}
+.adm-hs-funnel-bar span { display: block; height: 100%; background: var(--accent-deep); border-radius: 99px; }
+.adm-hs-funnel-drop { margin-top: 5px; font-size: 12px; color: var(--ink-dim); }

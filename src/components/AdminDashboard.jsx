@@ -11,6 +11,7 @@ import Overview from "./admin/Overview.jsx";
 import Finance from "./admin/Finance.jsx";
 import Invoices from "./admin/Invoices.jsx";
 import AiCost from "./admin/AiCost.jsx";
+import HomeServices from "./admin/HomeServices.jsx";
 import ClientsPage from "./admin/Clients.jsx";
 import SalesPage from "./admin/SalesPage.jsx";
 import SalesStats from "./admin/SalesStats.jsx";
@@ -137,6 +138,10 @@ export default function AdminDashboard({ go }) {
       case "finance": return <Finance member={member} setSection={setSection} />;
       case "invoices": return <Invoices member={member} />;
       case "ai-cost": return <AiCost member={member} />;
+      /* HOME SERVICES — 14 Sep 2026. Takes no props: everything on it is read
+       * from two tables that are the same for everybody who can open the page,
+       * and the role gate is `pageIdsForRole` above, not a prop. */
+      case "home-services": return <HomeServices />;
       /* The query comes through: `?id=` is which client is open, and the
        * Google sign-in bounces back through `?connect=`. Dropping it would
        * swallow both. */

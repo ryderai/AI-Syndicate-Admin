@@ -12,6 +12,11 @@ const Icon = {
      every one of its siblings has a mark, which reads as a page that failed to
      load rather than one that has no icon. A bar chart, matching the page. */
   "sales-stats": <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></svg>,
+  /* HOME SERVICES — 14 Sep 2026. A house with a spanner across it: the page is
+   * about trades, and every other Command icon is a shape rather than a letter.
+   * An item with no entry here renders an empty square that reads as a page
+   * that failed to load, which is the note already written above `sales-stats`. */
+  "home-services": <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.8V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.8" /><path d="M9.5 17.5 15 12" /><path d="M14 11l2-2a2.2 2.2 0 1 1 3 3l-2 2z" /></svg>,
   invoices: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16l3-2 2 2 2-2 2 2 3-2V8z" /><line x1="8" y1="9" x2="14" y2="9" /><line x1="8" y1="13" x2="12" y2="13" /></svg>,
   /* A person, not a dollar sign. The page stopped being "everyone who pays"
    * on Aug 24 2026 and became "everyone we deal with", so the money symbol was
@@ -60,6 +65,14 @@ const SECTIONS = [
     ["overview", "Overview"],
     ["finance", "Finance", [["invoices", "Invoices"], ["ai-cost", "AI Cost"]]],
     ["clients", "Clients"],
+    /* HOME SERVICES — 14 Sep 2026. Under Command, next to Clients, because it
+     * answers a Command question: which of the six landing pages is worth
+     * spending on. It is a TOP-LEVEL item rather than a child of anything.
+     * Finance carries children because Invoices is a job you sit down and do
+     * inside the money screen; this page belongs to nothing above it, and
+     * hanging it off Clients would say it is about the clients we already have
+     * when it is about the ones we do not. */
+    ["home-services", "Home Services"],
   ]},
   /* WORK AND OPERATIONS SIT TOGETHER — Ryder, 2 Sep 2026: "make work and
    * operations right next to each other, they both do a very similar task and

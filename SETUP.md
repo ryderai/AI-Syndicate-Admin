@@ -1388,3 +1388,85 @@ this database`, copy that whole line and send it to me — it means a migration 
 never finished, and the missing ones name which.
 
 9. Go back to the console and reload the page (**Cmd + R**). Start over works now.
+
+---
+
+## Migration 0035 — the Home Services landing pages (added Sep 14 2026)
+
+**What it does.** Adds two brand-new tables — `hs_page_events` and `hs_lead_sources` — that record
+what people do on the Home Services landing pages and which page each lead came from. It also
+switches on the Home Services screen under **Command** in the sidebar.
+
+**It cannot break anything.** It only creates. It does not change, drop or delete any table you
+already have, it touches no existing row, and every statement is guarded, so running it twice does
+nothing the second time.
+
+### Run the migration
+
+1. Open **https://supabase.com/dashboard** and sign in.
+2. In the left sidebar click your project.
+3. In the left sidebar click **SQL Editor**.
+4. Click the green **New query** button, top right.
+5. Open `supabase/migrations/0035_home_services_pages.sql` in Cursor.
+6. Select all of it (**Cmd + A**), copy it (**Cmd + C**).
+7. Click into the big empty box and paste (**Cmd + V**).
+8. Click **Run**, bottom right.
+
+**What you should see.** "Success. No rows returned." That is the right answer — this file creates
+tables, it does not ask questions.
+
+**If it says something went wrong**, copy the whole red message and send it to me. Do not run it
+again first.
+
+### Check it worked
+
+1. In the left sidebar click **Table Editor**.
+2. In the table list you should now see **`hs_page_events`** and **`hs_lead_sources`**.
+3. Both will be empty. That is correct — nothing has been sent to them yet.
+
+### Then set one setting on Vercel
+
+This is the setting that lets the landing pages talk to the console. **Until it is set, every
+message from them is refused.** That is on purpose: the door is shut until you open it.
+
+1. Open **https://vercel.com** and sign in.
+2. Click the **ai-syndicate-admin** project.
+3. Click **Settings** along the top, then **Environment Variables** on the left.
+4. Click **Add New**.
+5. Name: `HS_ALLOWED_ORIGINS`
+6. Value: the web address of each landing page, separated by commas, with **no slash on the end**.
+   For example:
+
+   ```
+   https://homeservices.aisyndicate.com,https://lawn.aisyndicate.com
+   ```
+
+7. Tick **Production**, **Preview** and **Development**.
+8. Click **Save**.
+9. Go to **Deployments**, find the newest one, click the **⋯** menu on the right and click
+   **Redeploy**. A setting only reaches the site on the next deploy.
+
+### What you get after both steps
+
+| | |
+|---|---|
+| A new page | **Command → Home Services** in the sidebar |
+| Two new addresses the landing pages post to | `/api/hs-event` and `/api/hs-lead` |
+| Until a landing page exists | the page says "no events recorded yet — nothing has been deployed to a landing page". That is the truth, not an error. |
+
+### The full list of settings this build needs
+
+| Setting | Where | Needed for |
+|---|---|---|
+| `HS_ALLOWED_ORIGINS` | Vercel, **new** | letting the landing pages post at all |
+| `SUPABASE_SERVICE_ROLE_KEY` | Vercel, already set | writing the rows server-side |
+| `VITE_SUPABASE_URL` / `SUPABASE_URL` | Vercel, already set | the same |
+
+No new key has to be bought or created. The only new setting is `HS_ALLOWED_ORIGINS`.
+
+### One thing to know if a page is live and the console stays empty
+
+Check `HS_ALLOWED_ORIGINS` first. An address that is not on that list is turned away, deliberately,
+and the landing page will not show an error when that happens — it is a tracking beacon, and a
+beacon that shouts at a visitor is worse than one that goes quiet. The console showing nothing is
+the symptom. That setting is the usual cause.

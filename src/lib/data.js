@@ -5572,3 +5572,85 @@ export async function deleteMeeting(id) {
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
+
+/* ------------------------------------------------------------------------
+ * HOME SERVICES LANDING PAGES — 14 Sep 2026 (appended section)
+ *
+ * Three readers for the two tables migration 0035 adds. Both tables are
+ * SELECT-only for anybody signed in: every row in them was written server
+ * side by /api/hs-event or /api/hs-lead with the service role, because the
+ * pages that produce them are public and hold no key. There is deliberately
+ * no writer here to match.
+ *
+ * Paged through lib/paging.js like every other reader that can exceed a
+ * thousand rows — a busy landing page passes 1,000 events in an afternoon,
+ * and an unpaged read would quietly show the newest thousand as if they were
+ * all of them (the bug that cost the Sales page a week, 30 Aug 2026).
+ *
+ * PREVIEW MODE RETURNS NOTHING, ON PURPOSE. Every other reader in this file
+ * hands back invented sample rows so the console can be clicked through
+ * before a key exists. Not these. The whole point of the Home Services page
+ * is to compare six real pages against each other, and a fake row on it would
+ * be a fake business decision — "the painting page converts at 4%" is exactly
+ * the kind of sentence somebody repeats in a meeting. Empty plus
+ * `sample: true` makes the page say it has nothing to measure, which is true.
+ * --------------------------------------------------------------------- */
+
+/** How many event rows one read will fetch before it says it stopped. */
+export const HS_EVENT_FETCH_CAP = 50000;
+
+/** Every tracked event between two instants. `fromMs` / `toMs` are epoch ms
+ * and must be worked out from the team's calendar by the caller — see
+ * teamDayStartMs in lib/home-services.js. `toMs` is EXCLUSIVE. */
+export async function listHsEvents({ fromMs, toMs } = {}) {
+  if (!live()) return { rows: [], sample: true };
+  const supabase = getSupabase();
+  return fetchPaged(
+    () => {
+      let q = supabase.from("hs_page_events").select("*");
+      if (typeof fromMs === "number") q = q.gte("created_at", new Date(fromMs).toISOString());
+      if (typeof toMs === "number") q = q.lt("created_at", new Date(toMs).toISOString());
+      return q;
+    },
+    { order: "created_at", ascending: true, max: HS_EVENT_FETCH_CAP },
+  );
+}
+
+/** Every lead these pages produced between two instants, newest first.
+ * Ordered on `converted_at`, which is this table's own clock — it has no
+ * `created_at` column. */
+export async function listHsLeadSources({ fromMs, toMs } = {}) {
+  if (!live()) return { rows: [], sample: true };
+  const supabase = getSupabase();
+  return fetchPaged(
+    () => {
+      let q = supabase.from("hs_lead_sources").select("*");
+      if (typeof fromMs === "number") q = q.gte("converted_at", new Date(fromMs).toISOString());
+      if (typeof toMs === "number") q = q.lt("converted_at", new Date(toMs).toISOString());
+      return q;
+    },
+    { order: "converted_at", ascending: false, max: HS_EVENT_FETCH_CAP },
+  );
+}
+
+/** The lead rows behind a handful of ids, so the Recent leads table can print
+ * a name instead of a uuid. Asked in chunks because a URL has a length and an
+ * `in` filter goes in the URL. */
+export async function listLeadsByIds(ids = []) {
+  const wanted = [...new Set((ids || []).filter(Boolean))];
+  if (!wanted.length) return { rows: [], sample: !live() };
+  if (!live()) {
+    return { rows: previewStore.leads.filter((l) => wanted.includes(l.id)), sample: true };
+  }
+  const supabase = getSupabase();
+  const rows = [];
+  for (let i = 0; i < wanted.length; i += 100) {
+    const { data, error } = await supabase
+      .from("admin_leads")
+      .select("id, name, company, email, phone, city, state, vertical, stage, owner_id, created_at")
+      .in("id", wanted.slice(i, i + 100));
+    if (error) return { rows, error: error.message, sample: false };
+    rows.push(...(data || []));
+  }
+  return { rows, sample: false };
+}

@@ -7125,3 +7125,194 @@ anything it does not name, so a fifth status can never be savable and unselectab
 - **A ROLLBACK RESTORES THE FIELDS THE CALL TOUCHED, NEVER THE WHOLE PAGE.**
 - **A SAVE FUNCTION RETURNS WHETHER IT SAVED.** `undefined` reads as success.
 - **`innerText` APPLIES `text-transform`** — a browser check against an uppercase label needs `/i`.
+
+---
+
+## §61. HOME SERVICES — six landing pages, and a console that counts them — Sun 14 Sep 2026 (append-only section)
+
+Nothing above this line was changed. This section is added at the end, per the append-only rule.
+
+### The one-paragraph version
+
+AI Syndicate is putting up one overarching **Home Services** landing page and five trade pages
+(lawn care, painting, pool cleaning, mobile detailing, pressure washing). Nothing in this console
+could see them, so nothing could say which one is worth spending on. This build adds the two
+tables that record what a visitor does and where a lead came from, the two public endpoints the
+pages post to, and one new page under **Command → Home Services** that compares all six against
+each other. **None of it is deployed and the migration has not been run.** There are no landing
+pages yet either, so the screen currently says, correctly, "no events recorded yet — nothing has
+been deployed to a landing page."
+
+### The two tables (migration `0035_home_services_pages.sql`)
+
+| Table | One row is | Key columns |
+|---|---|---|
+| `public.hs_page_events` | one tracked thing a visitor did | `page_slug`, `event`, `session_id`, `lead_id`, `cta`, `path`, `referrer`, the five `utm_*`, `device`, `created_at` |
+| `public.hs_lead_sources` | where one lead came from | `lead_id` (PK), `page_slug`, `session_id`, `first_seen_at`, `converted_at`, the five `utm_*`, `reached_checkout`, `paid` |
+
+`event` is a check constraint of thirteen values: `view`, `scroll_50`, `scan_start`, `scan_step2`,
+`scan_complete`, `checkout_open`, `checkout_contact`, `checkout_paid`, `call_open`, `call_booked`,
+`exit_shown`, `exit_captured`, `cta_click`. `page_slug` is a check constraint of the six pages, on
+**both** tables.
+
+**RLS.** Both tables: `grant select … to authenticated`, RLS on, a `for select using
+(admin_is_member())` policy and a `for delete using (admin_is_admin())` policy. **No insert grant,
+no insert policy, nothing for `anon`.** Every write comes from the service role through the two
+endpoints. That is not a convention to be polite about — the landing pages are public, on another
+domain, and anybody can open the console on them, so a browser insert right would be an open door
+into the leads table.
+
+`hs_lead_sources.lead_id` is `on delete cascade` (it is nothing but a fact about that lead).
+`hs_page_events.lead_id` is `on delete set null` (the visit really happened either way).
+
+### The two endpoints
+
+`api/hs-event.js` — POST, public. Origin allow-list, 8KB body cap, 120 events/minute/session, one
+row, **204 always**. A tracking beacon is not allowed to be why a visitor sees something break, so
+a database that is down is logged and swallowed; the gap shows up on the console as a gap.
+
+`api/hs-lead.js` — POST, public, same door, 6/minute/session. Normalises the email to lower case
+and the phone to digits, **dedupes on `lower(email)` before it inserts**, and answers
+`{ ok, lead_id, created, updated }` so the caller can tell a new lead from a returning one. An
+update **fills blanks only** — a phone number somebody in this business typed by hand is never
+overwritten by a stranger's form — except `notes`, which is appended to, because appending loses
+nothing.
+
+Both live behind `lib/hs-http.js`: `applyCors`, `readCappedJson`, `allowHit`. One file, so the two
+endpoints cannot enforce the door differently.
+
+### The env var this needs, and what happens without it
+
+```
+HS_ALLOWED_ORIGINS = https://homeservices.example.com,https://lawn.example.com
+```
+
+Comma separated, no trailing slashes. **If it is unset, every cross-origin call is refused.** That
+is deliberate: the endpoints are off until somebody deliberately turns them on, rather than open
+until somebody remembers to close them. It is also the first thing to check if a page is live and
+the console is still empty.
+
+### The honesty badges
+
+The page carries the same rule as Finance and AI Cost, with two badges added to `BASIS` in
+`financeParts.jsx`:
+
+| Badge | Means |
+|---|---|
+| **MEASURED** (`counted`) | a count of rows that exist. Visits, unique visits, scans, leads, purchases. |
+| **DERIVED** (`derived`) | one measured count divided by another. Every percentage on the page. |
+| a dash, or "not measured yet" | we cannot work it out, with the reason on hover. **Never a zero.** |
+
+**The distinction that does the work:** a conversion rate with no visitors underneath it is *not*
+0%. `rate()` in `lib/home-services.js` returns `null` for an empty denominator and every
+percentage on the page comes through it. `rate(0, 10)` is still `0` — zero out of ten is a
+measurement. `rate(0, 0)` is `null`. A test asserts the two are different values.
+
+And when nothing at all is in range, the page prints one sentence — *"no events recorded yet —
+nothing has been deployed to a landing page"* — instead of a full dashboard of zeroes that reads
+like a measurement of six failing pages.
+
+### Days are Chicago days
+
+The range is two plain `YYYY-MM-DD` strings and they are **never** handed to `new Date()` —
+that reads them as UTC, which is the evening before here. `teamDayStartMs` / `teamDayEndMs` solve
+for the real instant and are pinned by tests either side of both 2026 clock changes: the 8 March
+day is 23 hours long, the 1 November day is 25.
+
+### BLOCKED, and left out rather than faked
+
+**The timeline row.** The brief asked for an `admin_lead_activity` row of type `note` recording
+each capture. It cannot be written honestly. That table's `actor` is
+`uuid not null references auth.users` (0001:203) and its insert policy is `actor = auth.uid()`
+(0001:415) — every line on a lead's timeline is filed under the person who did it. A service-role
+insert has no `auth.uid()`, and a stranger on a marketing page is not a user of this console.
+There is no honest value for that column, and inventing one would put a stranger's form fill on the
+timeline under a real person's name — which is verbatim the forgery migration 0023 was written to
+close ("A FORGED AUTHOR").
+
+So it is **left out**. The capture is recorded in the lead's `notes` and in `hs_lead_sources`, both
+of which are true. Two honest ways to close it later, neither done here because both are somebody's
+decision rather than a coding choice:
+
+1. Make `actor` nullable and add a policy that allows a null actor, with the screens rendering a
+   null actor as "came in from a landing page" rather than as a person.
+2. Give the console a real `auth.users` row for a service account, and put its id in an env var —
+   at which point the timeline line is true, because that account really did write it.
+
+### Two columns `admin_leads` does not have
+
+The landing form collects a **postcode** and a **website**. `admin_leads` has no `zip` column at
+all, and has `domain` rather than `website`. So: the website's bare host goes in `domain` (what
+every other screen in this console already reads), and the postcode goes into the lead's `notes`
+line. A later migration can add a real column and the endpoint moves one line. Nothing invents a
+column on a 3,600-row table for a page that has never been deployed. `tests/home-services/columns.mjs`
+pins both facts so they cannot be quietly "fixed" wrong.
+
+### Files added or changed
+
+| File | What |
+|---|---|
+| `supabase/migrations/0035_home_services_pages.sql` | **NEW, NOT RUN.** the two tables, indexes, grants, RLS |
+| `lib/home-services.js` | **NEW.** the vocabulary, the Chicago-day maths, the cleaners, all the counting |
+| `lib/hs-http.js` | **NEW.** the public door: CORS allow-list, capped body reader, rate limiter |
+| `api/hs-event.js` | **NEW.** one event in, 204 out |
+| `api/hs-lead.js` | **NEW.** dedupe, insert or fill-blanks update, upsert the source row, back-fill the visit's events |
+| `src/components/admin/HomeServices.jsx` | **NEW.** the page |
+| `src/components/admin/homeServicesParts.jsx` | **NEW.** `Pct`, `Num`, `SortHeader`, `RangePicker`, `Funnel` |
+| `src/components/admin/financeParts.jsx` | two badges added to `BASIS`: `counted` and `derived` |
+| `src/lib/data.js` | **appended section**: `listHsEvents`, `listHsLeadSources`, `listLeadsByIds` |
+| `src/components/admin/Sidebar.jsx` | `home-services` added to the Command group, plus its icon |
+| `src/components/AdminDashboard.jsx` | the import and the `case "home-services"` |
+| `src/admin.css` | **appended block**: `.adm-hs-*` |
+| `tests/home-services/` | **NEW.** 63 logic checks + 13 column checks = **76** |
+
+### Rules this section adds, or re-states because they were nearly broken again
+
+- **A PUBLIC ENDPOINT IS A DOOR, AND ITS LOCK LIVES IN ONE FILE.** Two endpoints with two copies of
+  a CORS check is two endpoints that eventually disagree about who may knock.
+- **`Access-Control-Allow-Origin: *` ON A WRITE ENDPOINT IS AN OPEN DATABASE.** The allow-list
+  defaults to empty, so the feature is off until it is turned on.
+- **A RATE LIMIT IN PROCESS MEMORY IS BEST-EFFORT, AND MUST SAY SO.** It stops our own stuck loop;
+  it does not stop somebody who is trying. A table-based limit is the upgrade if it is ever abused.
+- **A LITERAL PASSED BY NAME IS A LITERAL THE COLUMN GUARD CANNOT SEE.** Both endpoints write their
+  objects inline, with no spread, and there is a comment in each saying why.
+- **A GUARD THAT DOES NOT NAME ITS TABLE READS WHICHEVER TABLE IT HITS LAST.** The first version of
+  the constraint test searched for any `source in (…)` and found `admin_notes`', then reported that
+  `inbound` was illegal on `admin_leads`. Constraints are looked up by their **name** now.
+- **COUNT A FUNNEL IN VISITS, NOT EVENTS.** One person who scrolls up and back down fires
+  `scroll_50` twice; counting events would show 200% of visitors reading half the page.
+- **NOTHING IS A DIFFERENT ANSWER FROM ZERO**, and the screen must show which one it has.
+
+### STATE BOARD — what exists and what is still needed (14 Sep 2026)
+
+**Built, linted, tested, on disk. Not committed, not deployed, migration not run.**
+
+| | |
+|---|---|
+| Migrations run | 0001 – 0034 as before. **0035 is NOT run.** |
+| Deployed | nothing from this build |
+| Landing pages | **none exist yet.** Nothing has ever posted to either endpoint |
+| `HS_ALLOWED_ORIGINS` | **not set anywhere** |
+| Rows in `hs_page_events` | 0 — the table does not exist yet |
+| `npm run lint` | clean |
+| `tests/home-services` | 76 checks, all passing |
+| `npm run build` | **not run.** It cannot be run through the Mac-folder bridge — the installed `node_modules` are darwin-arm64 and the bridge runs Linux, so rollup fails with MODULE_NOT_FOUND. Run it in Cursor. |
+
+**Still needed, in the order it should be picked up:**
+
+1. Run `supabase/migrations/0035_home_services_pages.sql` in the Supabase SQL editor (SETUP.md has
+   the clicks).
+2. Push and deploy from Cursor. `npm run build` there first.
+3. Build the six landing pages. Each one needs: a random `session_id` made once per visit, a POST
+   to `/api/hs-event` on each of the thirteen events, and a POST to `/api/hs-lead` when the form is
+   submitted. **The pages hold no database key of any kind.**
+4. Set `HS_ALLOWED_ORIGINS` in Vercel to those pages' origins, and redeploy. Until then every call
+   from them is refused, by design.
+5. Send one test event and one test lead from a real page, then look at the console. The Recent
+   leads table and the Sales page must show the same person.
+6. Decide the timeline question above — option 1 or option 2 — if a landing-page capture should
+   appear on a lead's timeline.
+
+**Known gaps, stated rather than hidden:** no timeline row (above); no `zip` column (above); the
+rate limit is per process; and nothing on this page has ever been driven against real data, because
+no real data can exist until step 3 is done.

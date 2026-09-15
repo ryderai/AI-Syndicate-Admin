@@ -32,6 +32,15 @@ const BASIS = {
   billed: { label: "BILLED", c: "#1e3a8a", bg: "#eff6ff", hint: "The AI company's own figure — from their admin API, or typed off an invoice." },
   unpriced: { label: "NOT PRICED", c: "#92400e", bg: "#fffbeb", hint: "We have the token counts but no price for that model yet. Shown as a gap on purpose — a zero here would read as free." },
   drift: { label: "DRIFT", c: "#7c2d12", bg: "#fff7ed", hint: "The gap between what we counted and what the AI company charged, for the same month." },
+  /* Added 14 Sep 2026 for the Home Services page. That page has no money on
+   * it at all — it counts visits — so neither "stripe" nor "typed" is true of
+   * anything on it, and borrowing one of them would put a money word on a
+   * traffic figure. Two badges, and the difference between them is the whole
+   * rule that page runs on:
+   *   counted — somebody did a thing and a row exists saying so
+   *   derived — a division of two counted numbers, and nothing new was seen */
+  counted: { label: "MEASURED", c: "#006b1a", bg: "var(--success-soft)", hint: "Counted from rows the landing pages actually sent. Nobody typed it and nothing was worked out." },
+  derived: { label: "DERIVED", c: "var(--accent-deep)", bg: "var(--accent-soft)", hint: "Worked out from the measured counts beside it. No new measurement — if those are right, this is right." },
 };
 
 export function BasisBadge({ basis, hint }) {
