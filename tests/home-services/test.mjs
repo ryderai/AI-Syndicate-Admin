@@ -39,7 +39,7 @@ const MIG = src("supabase/migrations/0035_home_services_pages.sql");
 const MIG_CODE = MIG.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
 /* 0036 re-states both page_slug constraints with the restaurants page added.
  * The page list is read from the NEWEST migration that states it. */
-const MIG36 = src("supabase/migrations/0036_restaurants_page.sql");
+const MIG36 = src("supabase/migrations/0037_electrical_page_and_scan_events.sql");   // newest statement of both lists
 const MIG36_CODE = MIG36.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
 const slugLists = (code) => [...code.matchAll(/page_slug\s+in\s*\(([^)]*)\)/g)]
   .map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
@@ -64,24 +64,32 @@ test("the migration's event list was read at all", () => {
   assert.ok((valuesOf("event") || []).length > 5);
 });
 
-test("HS_EVENTS matches the check constraint exactly, in both directions", () => {
-  const sqlVals = valuesOf("event");
+test("HS_EVENTS matches the newest event constraint (0037) exactly, in both directions", () => {
+  const m = /event\s+in\s*\(([^)]*)\)/.exec(MIG36_CODE);
+  assert.ok(m, "0037 states no event list");
+  const sqlVals = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
   assert.deepEqual([...sqlVals].sort(), [...HS_EVENTS].sort());
 });
 
-test("PAGE_SLUGS matches the newest page_slug constraint (0036) on hs_page_events", () => {
+test("0037's event list is a superset of 0035's — no event was silently dropped", () => {
+  const m = /event\s+in\s*\(([^)]*)\)/.exec(MIG36_CODE);
+  const now = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+  for (const e of valuesOf("event")) assert.ok(now.includes(e), `0037 dropped ${e}`);
+});
+
+test("PAGE_SLUGS matches the newest page_slug constraint (0037) on hs_page_events", () => {
   const lists = slugLists(MIG36_CODE);
-  assert.ok(lists.length >= 1, "0036 states no page_slug list");
+  assert.ok(lists.length >= 1, "0037 states no page_slug list");
   assert.deepEqual([...lists[0]].sort(), [...PAGE_SLUGS].sort());
 });
 
-test("0036 is a superset of 0035 — no page was silently dropped", () => {
+test("0037 is a superset of 0035 — no page was silently dropped", () => {
   const old = valuesOf("page_slug");
   const now = slugLists(MIG36_CODE)[0];
-  for (const s of old) assert.ok(now.includes(s), `0036 dropped ${s}`);
+  for (const s of old) assert.ok(now.includes(s), `0037 dropped ${s}`);
 });
 
-test("hs_lead_sources allows the same pages as hs_page_events — the two constraints agree (0036)", () => {
+test("hs_lead_sources allows the same pages as hs_page_events — the two constraints agree (0037)", () => {
   const all = slugLists(MIG36_CODE).map((l) => [...l].sort().join("|"));
   assert.equal(all.length, 2, "expected the slug list to appear on both tables");
   assert.equal(all[0], all[1]);
@@ -398,9 +406,29 @@ test("with no rows at all, every rate is null and every count is zero", () => {
   assert.equal(s.buyRate, null);
 });
 
+test("captureNote carries the quick GEO Score the visitor saw, and only a real one", () => {
+  assert.match(captureNote({ pageSlug: "electrical", kind: "free_check", score: 42 }), /free GEO Score on the page: 42\/100/);
+  assert.doesNotMatch(captureNote({ pageSlug: "electrical", kind: "free_check", score: null }), /GEO Score/);
+  assert.doesNotMatch(captureNote({ pageSlug: "electrical", kind: "free_check" }), /GEO Score/);
+});
+
+/* Two regressions found on the live console, 16 Sep 2026, pinned by reading source. */
+test("listHsLeadSources orders on lead_id — the table has no id column", () => {
+  const data = src("src/lib/data.js");
+  const fn = data.slice(data.indexOf("export async function listHsLeadSources"), data.indexOf("export async function listLeadsByIds"));
+  assert.match(fn, /idColumn:\s*"lead_id"/);
+  assert.match(src("lib/paging.js"), /idColumn = "id"/);
+});
+
+test("hs-lead reads the utm tags under the names the page sends (utm_source, …)", () => {
+  const api = src("api/hs-lead.js");
+  assert.match(api, /rawUtm\.utm_source/);
+  assert.match(api, /rawUtm\.utm_campaign/);
+});
+
 test("comparePages returns every page in PAGE_SLUGS, even ones nobody has visited", () => {
   const rows = comparePages(EV, LS);
-  assert.equal(rows.length, PAGE_SLUGS.length);   // 7 since 0036 added restaurants
+  assert.equal(rows.length, PAGE_SLUGS.length);   // 8 since 0037 added electrical
   const pool = rows.find((r) => r.slug === "pool-cleaning");
   assert.equal(pool.visits, 0);
   assert.equal(pool.leadPct, null, "a page with no visits has no conversion rate — not 0%");

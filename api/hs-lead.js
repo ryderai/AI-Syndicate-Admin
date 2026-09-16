@@ -108,12 +108,26 @@ export default async function handler(req, res) {
     return res.status(503).json({ ok: false, error: "The lead could not be saved. Nothing is configured to receive it." });
   }
 
-  const utm = (b.utm && typeof b.utm === "object") ? b.utm : {};
+  /* The page sends { utm_source, utm_medium, … } (the names in the URL). An
+   * earlier version of this file read utm.source, so no lead ever carried its
+   * ad tags — fixed 16 Sep 2026. Both spellings are accepted. */
+  const rawUtm = (b.utm && typeof b.utm === "object") ? b.utm : {};
+  const utm = {
+    source: rawUtm.utm_source ?? rawUtm.source ?? "",
+    medium: rawUtm.utm_medium ?? rawUtm.medium ?? "",
+    campaign: rawUtm.utm_campaign ?? rawUtm.campaign ?? "",
+    content: rawUtm.utm_content ?? rawUtm.content ?? "",
+    term: rawUtm.utm_term ?? rawUtm.term ?? "",
+  };
   const reachedCheckout = b.reached_checkout === true;
   const paid = b.paid === true;
   const zip = clean(b.zip, 20);
   const bestTime = clean(b.best_time, 120);
   const kind = clean(b.kind, 120);
+  /* The quick GEO Score the visitor saw on the page, 0-100. Anything that is
+   * not a whole number in that range is dropped, never guessed. */
+  const scoreNum = Number(b.score);
+  const score = Number.isInteger(scoreNum) && scoreNum >= 0 && scoreNum <= 100 ? scoreNum : null;
 
   const incoming = {
     name,
@@ -127,7 +141,7 @@ export default async function handler(req, res) {
     state: clean(b.state, 120),
   };
 
-  const note = captureNote({ pageSlug, kind, reachedCheckout, paid, zip, bestTime });
+  const note = captureNote({ pageSlug, kind, reachedCheckout, paid, zip, bestTime, score });
 
   const admin = getAdminSupabase();
   const nowIso = new Date().toISOString();
@@ -144,13 +158,21 @@ export default async function handler(req, res) {
       for (const key of FILLABLE) {
         if (!isBlank(incoming[key]) && isBlank(existing[key])) patch[key] = incoming[key];
       }
-      /* Appended, never replaced — see rule 2 in the header. */
-      patch.notes = isBlank(existing.notes) ? note : `${existing.notes}\n${note}`;
-
       const { error } = await admin.from("admin_leads").update(patch).eq("id", leadId);
       if (error) {
         console.error("[hs-lead] update failed", error.message);
         return res.status(500).json({ ok: false, error: "That lead could not be updated." });
+      }
+      /* Appended, never replaced — see rule 2 in the header. Done INSIDE the
+       * database (migration 0037) so two submits a second apart cannot read the
+       * same old notes and erase each other's line. If the function is not
+       * there yet (0037 not run), fall back to the old read-then-write. */
+      const { error: noteErr } = await admin.rpc("hs_append_lead_note", { p_lead: leadId, p_note: note });
+      if (noteErr) {
+        console.error("[hs-lead] hs_append_lead_note unavailable, falling back", noteErr.message);
+        const notes = isBlank(existing.notes) ? note : `${existing.notes}\n${note}`;
+        const { error: e2 } = await admin.from("admin_leads").update({ notes }).eq("id", leadId);
+        if (e2) console.error("[hs-lead] note fallback failed", e2.message);
       }
     } else {
       /* EVERY COLUMN NAMED IN FULL, inline, and no spread. A spread makes the

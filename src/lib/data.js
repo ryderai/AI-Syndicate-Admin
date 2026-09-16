@@ -5629,7 +5629,9 @@ export async function listHsLeadSources({ fromMs, toMs } = {}) {
       if (typeof toMs === "number") q = q.lt("converted_at", new Date(toMs).toISOString());
       return q;
     },
-    { order: "converted_at", ascending: false, max: HS_EVENT_FETCH_CAP },
+    /* idColumn: this table's key is lead_id — there is no `id`. Without this
+     * the order() on `id` failed and the page showed "No leads yet" forever. */
+    { order: "converted_at", ascending: false, max: HS_EVENT_FETCH_CAP, idColumn: "lead_id" },
   );
 }
 
