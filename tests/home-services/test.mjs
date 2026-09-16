@@ -37,6 +37,12 @@ const MIG = src("supabase/migrations/0035_home_services_pages.sql");
  * comment is not a value the constraint allows — the trap tests/db-columns
  * hit on its first run, and this file quotes both lists in its own prose. */
 const MIG_CODE = MIG.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+/* 0036 re-states both page_slug constraints with the restaurants page added.
+ * The page list is read from the NEWEST migration that states it. */
+const MIG36 = src("supabase/migrations/0036_restaurants_page.sql");
+const MIG36_CODE = MIG36.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+const slugLists = (code) => [...code.matchAll(/page_slug\s+in\s*\(([^)]*)\)/g)]
+  .map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
 
 /* ================================================================
  * 1. THE TWO COPIES OF EVERY LIST, COMPARED
@@ -63,14 +69,20 @@ test("HS_EVENTS matches the check constraint exactly, in both directions", () =>
   assert.deepEqual([...sqlVals].sort(), [...HS_EVENTS].sort());
 });
 
-test("PAGE_SLUGS matches the page_slug constraint on hs_page_events", () => {
-  const sqlVals = valuesOf("page_slug");
-  assert.deepEqual([...sqlVals].sort(), [...PAGE_SLUGS].sort());
+test("PAGE_SLUGS matches the newest page_slug constraint (0036) on hs_page_events", () => {
+  const lists = slugLists(MIG36_CODE);
+  assert.ok(lists.length >= 1, "0036 states no page_slug list");
+  assert.deepEqual([...lists[0]].sort(), [...PAGE_SLUGS].sort());
 });
 
-test("hs_lead_sources allows the same six pages — the two constraints agree", () => {
-  const all = [...MIG_CODE.matchAll(/page_slug\s+in\s*\(([^)]*)\)/g)]
-    .map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]).sort().join("|"));
+test("0036 is a superset of 0035 — no page was silently dropped", () => {
+  const old = valuesOf("page_slug");
+  const now = slugLists(MIG36_CODE)[0];
+  for (const s of old) assert.ok(now.includes(s), `0036 dropped ${s}`);
+});
+
+test("hs_lead_sources allows the same pages as hs_page_events — the two constraints agree (0036)", () => {
+  const all = slugLists(MIG36_CODE).map((l) => [...l].sort().join("|"));
   assert.equal(all.length, 2, "expected the slug list to appear on both tables");
   assert.equal(all[0], all[1]);
 });
@@ -386,9 +398,9 @@ test("with no rows at all, every rate is null and every count is zero", () => {
   assert.equal(s.buyRate, null);
 });
 
-test("comparePages returns all six pages, even ones nobody has visited", () => {
+test("comparePages returns every page in PAGE_SLUGS, even ones nobody has visited", () => {
   const rows = comparePages(EV, LS);
-  assert.equal(rows.length, 6);
+  assert.equal(rows.length, PAGE_SLUGS.length);   // 7 since 0036 added restaurants
   const pool = rows.find((r) => r.slug === "pool-cleaning");
   assert.equal(pool.visits, 0);
   assert.equal(pool.leadPct, null, "a page with no visits has no conversion rate — not 0%");
