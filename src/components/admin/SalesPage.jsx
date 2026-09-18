@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PAGE_SLUGS } from "../../../lib/home-services.js";
 import {
   LEAD_STAGES, LEAD_STAGE_LABELS, LEAD_STAGE_HELP, PICKABLE_STAGES, HISTORICAL_STAGES,
   getFloorBoard, upsertLead, claimLead, releaseLead, addLeadActivity, logActivity,
@@ -118,6 +119,33 @@ import { peopleOptions, personLabel } from "../../lib/people.js";
 /* "The sheet" rather than "Lists", because that is what it now is: CJ's
  * spreadsheet, column for column, one row per person. */
 const VIEWS = [["day", "My Day"], ["lists", "The sheet"], ["pipeline", "Pipeline"], ["firms", "Firms"]];
+
+/* ── LANDING-PAGE LEADS ──────────────────────────────────────────────────────
+ * Somebody who typed their own website into the free scan and watched their own
+ * score come back. They asked for us; nobody on the floor cold-called them. That
+ * is the difference between this tab and every other one, and it is why reps are
+ * told to work it first.
+ *
+ * api/hs-lead.js is the only thing that writes this pair: source "inbound" and a
+ * vertical that is the page slug itself ("lawn-care", "home-management", …).
+ * PAGE_SLUGS is imported rather than retyped, because a fourth copy of that list
+ * is how the restaurants page went missing from the console for a day.
+ * The reserved tab id is LP_TAB, which no imported list can collide with — list
+ * ids are uuids. */
+const LP_TAB = "lp:landing-pages";
+
+/* Built from hs_lead_sources — the table the landing pages actually write a row
+ * into — because admin_leads.source is only set when hs-lead CREATES the lead.
+ * Somebody already in the CRM who then runs the free scan keeps their old source
+ * ("sheet", "platform", …) forever, and reading that column alone made the tab
+ * miss them. The source/vertical pair stays as a fallback for the window before
+ * the console is redeployed, when board.hsSources comes back empty. */
+const landingPageIds = (board) => new Set(
+  (board?.hsSources ?? []).map((r) => r?.lead_id).filter(Boolean),
+);
+const looksInbound = (l) =>
+  String(l?.source ?? "") === "inbound" && PAGE_SLUGS.includes(String(l?.vertical ?? ""));
+const makeFromLandingPage = (ids) => (l) => (l && ids.has(l.id)) || looksInbound(l);
 
 /* THE REP'S TWO PAGES ARE THIS PAGE WITH A LOCK ON IT — Ryder, Aug 26 2026.
  *
@@ -1292,6 +1320,10 @@ export default function SalesPage({ member, mode = null }) {
    * own — and the only way two numbers on one screen cannot drift is if there
    * is one place that decides what a filtered set holds. `skipList` is the one
    * filter a caller may leave out: the tabs' own. Aug 26 2026 */
+  /* Which leads came off a landing page. Rebuilt only when the board is re-read,
+   * and handed to the sheet so the tab and the filter can never disagree. */
+  const fromLandingPage = useMemo(() => makeFromLandingPage(landingPageIds(board)), [board]);
+
   const filterLeads = useCallback((source, { skipList = false, skipAvailability = false, skipWatch = false } = {}) => {
     let list = source;
     /* THE AVAILABILITY SWITCH IS A FILTER LIKE ANY OTHER, and it lives here with
@@ -1313,7 +1345,8 @@ export default function SalesPage({ member, mode = null }) {
         userId: listWatch === "stuck" ? null : member.user_id, now,
       }));
     }
-    if (!skipList && listFilter !== "all") list = list.filter((l) => l.list_id === listFilter);
+    if (!skipList && listFilter === LP_TAB) list = list.filter(fromLandingPage);
+    else if (!skipList && listFilter !== "all") list = list.filter((l) => l.list_id === listFilter);
     if (stageFilter === "open") list = list.filter((l) => isOpenStage(l.stage));
     else if (stageFilter === "closed") list = list.filter((l) => !isOpenStage(l.stage));
     else if (stageFilter !== "all") list = list.filter((l) => l.stage === stageFilter);
@@ -1349,7 +1382,7 @@ export default function SalesPage({ member, mode = null }) {
       });
     }
     return list;
-  }, [lock, availability, member, listFilter, stageFilter, ownerFilter, tileFilter, listWatch, now, q, companyById]);
+  }, [lock, availability, member, listFilter, stageFilter, ownerFilter, tileFilter, listWatch, now, q, companyById, fromLandingPage]);
 
   /* ---- the filtered set every view draws from ---- */
   const rows = useMemo(() => filterLeads(scopeLeads), [filterLeads, scopeLeads]);
@@ -1949,7 +1982,7 @@ export default function SalesPage({ member, mode = null }) {
           companyById={companyById} listById={listById}
           onOpen={openLeadById} member={member}
           onPatch={patchLead} onAssign={assignLead} onRunScore={runScore}
-          listFilter={listFilter} onListFilter={handList}
+          listFilter={listFilter} onListFilter={handList} fromLandingPage={fromLandingPage}
           /* THE LIST TABS COUNT FROM THIS, not from the whole board. A rep
               reading "All lists 1,847" above 300 rows is the same lie as a tile
               whose number does not match its list. On a locked page it is
@@ -2464,7 +2497,7 @@ function ListHealth({ rows, now, scoreOf, badge }) {
 
 function ListsView({
   rows, board, now, teamName, companyById, listById, onOpen, member,
-  listFilter, onListFilter, onClear, onPatch, onAssign, onRunScore,
+  listFilter, onListFilter, onClear, onPatch, onAssign, onRunScore, fromLandingPage,
   /* The firms somebody else is already inside, or null on a page that does not
    * want the marker. Worked out in SalesPage from the WHOLE board — see the memo
    * there for why it can never be computed from `rows`. */
@@ -2579,6 +2612,29 @@ function ListsView({
               where everybody is not what this tab means. */}
           {allTabLabel} <span>{tabScope.length}</span>
         </button>
+        {/* The hot tab. It sits second, right after "everybody", because these
+            are the only people on the sheet who came to us. Hidden entirely when
+            there are none, so a floor with no landing-page traffic is not given
+            a tab that always reads 0. */}
+        {(() => {
+          const lp = tabScope.filter(fromLandingPage).length;
+          /* Hidden when there are none — a floor with no landing-page traffic
+             should not carry a tab that always reads 0. But NEVER hidden while
+             it is the tab you are standing on: `listFilter` is remembered
+             across reloads, so vanishing here left the sheet empty, filtered by
+             a control that was no longer on the screen. */
+          if (!lp && listFilter !== LP_TAB) return null;
+          return (
+            <button
+              type="button" role="tab" aria-selected={listFilter === LP_TAB}
+              className={listFilter === LP_TAB ? "active adm-sh-hot" : "adm-sh-hot"}
+              onClick={() => onListFilter(LP_TAB)}
+              title="People who ran the free scan on our landing pages and left their email. They came to us."
+            >
+              Landing pages <span>{lp}</span>
+            </button>
+          );
+        })()}
         {board.lists.map((l) => {
           const n = tabScope.filter((x) => x.list_id === l.id).length;
           return (

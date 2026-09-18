@@ -3282,9 +3282,16 @@ export function touchCountsByLead(activityRows) {
 export const ACTIVITY_WINDOW_DAYS = 90;
 
 export async function getSalesBoard() {
-  const [leads, companies, lists, team, activity, proposals, sources] = await Promise.all([
+  const [leads, companies, lists, team, activity, proposals, sources, hsSources] = await Promise.all([
     listLeads(), listCompanies(), listLeadLists(), listTeam(),
     listAllLeadActivity(ACTIVITY_WINDOW_DAYS), listProposals(), listLeadSources(),
+    /* WHICH LEADS CAME OFF A LANDING PAGE, read from the table that actually
+     * records it. The sheet's "Landing pages" tab used to work this out from
+     * admin_leads.source === "inbound", which api/hs-lead.js only writes when it
+     * CREATES the lead. Anybody already in the CRM — a CSV import, a scrape, a
+     * manual row — who then ran the free scan kept their old source and never
+     * appeared in the tab, which is exactly the lead a rep most wants. */
+    listHsLeadSources(),
   ]);
   return {
     leads: leads.rows,
@@ -3294,6 +3301,7 @@ export async function getSalesBoard() {
     activity: activity.rows,
     proposals: proposals.rows,
     sources: sources.rows,
+    hsSources: hsSources.rows,
     touchCounts: touchCountsByLead(activity.rows),
     sample: Boolean(leads.sample || companies.sample),
     /* Errors are carried, not swallowed. A page that renders an empty pipeline
@@ -3306,7 +3314,7 @@ export async function getSalesBoard() {
      * Aug 27 2026. */
     errors: [
       leads.error, companies.error, lists.error, activity.error,
-      proposals.error, team.error, sources.error,
+      proposals.error, team.error, sources.error, hsSources.error,
     ].filter(Boolean),
     /* WHICH READS FAILED, BY NAME, so a caller can pass `null` and mean it.
      * Every reader in this file turns a failure into `{ rows: [], error }`, which

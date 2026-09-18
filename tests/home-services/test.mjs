@@ -39,8 +39,14 @@ const MIG = src("supabase/migrations/0035_home_services_pages.sql");
 const MIG_CODE = MIG.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
 /* 0036 re-states both page_slug constraints with the restaurants page added.
  * The page list is read from the NEWEST migration that states it. */
-const MIG36 = src("supabase/migrations/0037_electrical_page_and_scan_events.sql");   // newest statement of both lists
+const MIG36 = src("supabase/migrations/0037_electrical_page_and_scan_events.sql");   // newest statement of the EVENT list
 const MIG36_CODE = MIG36.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+/* 0038 re-states both page_slug constraints with the home-management page added.
+ * It does NOT touch the event list, so events are still read from 0037 above.
+ * When the next migration states either list, point the matching constant here
+ * at it — that is the whole job of these two lines. */
+const MIG38 = src("supabase/migrations/0038_home_management_page_and_plan.sql");     // newest statement of the PAGE list
+const MIG38_CODE = MIG38.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
 const slugLists = (code) => [...code.matchAll(/page_slug\s+in\s*\(([^)]*)\)/g)]
   .map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
 
@@ -77,20 +83,20 @@ test("0037's event list is a superset of 0035's — no event was silently droppe
   for (const e of valuesOf("event")) assert.ok(now.includes(e), `0037 dropped ${e}`);
 });
 
-test("PAGE_SLUGS matches the newest page_slug constraint (0037) on hs_page_events", () => {
-  const lists = slugLists(MIG36_CODE);
-  assert.ok(lists.length >= 1, "0037 states no page_slug list");
+test("PAGE_SLUGS matches the newest page_slug constraint (0038) on hs_page_events", () => {
+  const lists = slugLists(MIG38_CODE);
+  assert.ok(lists.length >= 1, "0038 states no page_slug list");
   assert.deepEqual([...lists[0]].sort(), [...PAGE_SLUGS].sort());
 });
 
-test("0037 is a superset of 0035 — no page was silently dropped", () => {
-  const old = valuesOf("page_slug");
-  const now = slugLists(MIG36_CODE)[0];
-  for (const s of old) assert.ok(now.includes(s), `0037 dropped ${s}`);
+test("0038 is a superset of 0035 and 0037 — no page was silently dropped", () => {
+  const now = slugLists(MIG38_CODE)[0];
+  for (const s of valuesOf("page_slug")) assert.ok(now.includes(s), `0038 dropped ${s}`);
+  for (const s of slugLists(MIG36_CODE)[0]) assert.ok(now.includes(s), `0038 dropped ${s}`);
 });
 
-test("hs_lead_sources allows the same pages as hs_page_events — the two constraints agree (0037)", () => {
-  const all = slugLists(MIG36_CODE).map((l) => [...l].sort().join("|"));
+test("hs_lead_sources allows the same pages as hs_page_events — the two constraints agree (0038)", () => {
+  const all = slugLists(MIG38_CODE).map((l) => [...l].sort().join("|"));
   assert.equal(all.length, 2, "expected the slug list to appear on both tables");
   assert.equal(all[0], all[1]);
 });

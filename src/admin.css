@@ -4711,3 +4711,19 @@ select.adm-mtg-in { padding-right: 4px; }
 }
 .adm-hs-funnel-bar span { display: block; height: 100%; background: var(--accent-deep); border-radius: 99px; }
 .adm-hs-funnel-drop { margin-top: 5px; font-size: 12px; color: var(--ink-dim); }
+
+/* ── 17 Sep 2026 — the landing-page tab on the sheet ─────────────────────────
+ * These leads ran our free scan and left an email, so they are the only people
+ * on the sheet who came to us. The tab is marked so a rep's eye lands on it
+ * before the imported lists, and it is only rendered when the count is above 0. */
+.adm-sh-tabs button.adm-sh-hot { color: var(--accent-deep); }
+.adm-sh-tabs button.adm-sh-hot::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-deep);
+  flex: 0 0 auto;
+}
+.adm-sh-tabs button.adm-sh-hot:hover { background: var(--accent-soft); color: var(--accent-deep); }
+.adm-sh-tabs button.adm-sh-hot.active span { background: var(--accent-soft); color: var(--accent-deep); }

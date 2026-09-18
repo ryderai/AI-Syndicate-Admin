@@ -120,6 +120,10 @@ export default async function handler(req, res) {
     term: rawUtm.utm_term ?? rawUtm.term ?? "",
   };
   const reachedCheckout = b.reached_checkout === true;
+  /* Which plan they picked at the checkout — yearly (2 months free, the default)
+   * or monthly. Anything else is ignored rather than refused: a lead is never
+   * lost over a field Sales only uses for context. */
+  const plan = (b.plan === "year" || b.plan === "month") ? b.plan : null;
   const paid = b.paid === true;
   const zip = clean(b.zip, 20);
   const bestTime = clean(b.best_time, 120);
@@ -207,7 +211,7 @@ export default async function handler(req, res) {
 
     /* ---- bookkeeping. Logged and swallowed — see rule 4. ---- */
     await recordSource(admin, {
-      leadId, pageSlug, sessionId, utm, reachedCheckout, paid, nowIso,
+      leadId, pageSlug, sessionId, utm, reachedCheckout, paid, plan, nowIso,
     }).catch((err) => console.error("[hs-lead] source row failed", err?.message || err));
 
     await linkEvents(admin, leadId, sessionId)
@@ -255,7 +259,7 @@ async function findByEmail(admin, email) {
  * false to true here: somebody who paid on Tuesday and comes back on Friday
  * without paying has still paid, and a plain upsert would quietly un-pay them.
  * The page they FIRST came from is kept for the same reason. */
-async function recordSource(admin, { leadId, pageSlug, sessionId, utm, reachedCheckout, paid, nowIso }) {
+async function recordSource(admin, { leadId, pageSlug, sessionId, utm, reachedCheckout, paid, plan, nowIso }) {
   const { data: prior } = await admin
     .from("hs_lead_sources")
     .select("*")
@@ -289,6 +293,9 @@ async function recordSource(admin, { leadId, pageSlug, sessionId, utm, reachedCh
     utm_term: prior?.utm_term || clean(utm.term, 120),
     reached_checkout: Boolean(prior?.reached_checkout) || reachedCheckout,
     paid: Boolean(prior?.paid) || paid,
+    /* The latest choice wins — somebody who switches from yearly to monthly
+     * before pressing the button meant the second one. */
+    plan: plan || prior?.plan || null,
   }, { onConflict: "lead_id" });
   if (error) throw new Error(error.message);
 }
