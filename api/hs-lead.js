@@ -59,8 +59,15 @@ import {
   isPageSlug, normaliseEmail, digitsOnly, hostFromWebsite, clean, captureNote,
 } from "../lib/home-services.js";
 
-/* Six form fills a minute from one visit is already somebody testing. */
-const PER_SESSION_LIMIT = 6;
+/* One ordinary visitor now costs four posts, not one: the capture when they
+ * press Scan (17 Sep), the same lead again carrying the score, then the contact
+ * step and the last button at the checkout. Each of those may be retried three
+ * times on a 5xx. Six was the old limit from when a visit posted once, and it
+ * sat exactly on what a normal converting visit spends — a single retry tipped
+ * a real person into a 429 and their lead was refused. Twelve leaves room for
+ * the whole path plus retries and is still far below anything a person does by
+ * hand. */
+const PER_SESSION_LIMIT = 12;
 const WINDOW_MS = 60_000;
 
 /** Fields a form fill may fill in, in the order they are read. `vertical`,
@@ -151,7 +158,25 @@ export default async function handler(req, res) {
   const nowIso = new Date().toISOString();
 
   try {
-    const existing = email ? await findByEmail(admin, email) : null;
+    /* ONE VISIT MAKES ONE LEAD.
+     *
+     * Since 17 Sep the page saves the lead the moment Scan is pressed and posts
+     * again when the score lands, and a failed post is retried three times. That
+     * is two-to-four posts for one person, and the email lookup below is the only
+     * thing stopping them becoming several leads. On 18 Sep it did not stop them:
+     * a scan run while this API was mid-redeploy produced TWO identical leads,
+     * because the retry's read happened before the first insert had committed.
+     * A lookup cannot fix that — the row it needs to find does not exist yet.
+     *
+     * So the session is asked second. hs_lead_sources already holds one row per
+     * lead with the session that produced it, so "has this visit already made a
+     * lead?" is a single read, and it is true the moment the first insert lands
+     * no matter what the email lookup saw. The session id is the page's own
+     * random per-visit id — it is not a secret, but it also cannot be used to
+     * reach a lead it did not create, and the email guard below means a shared
+     * session can never merge two different people. */
+    let existing = email ? await findByEmail(admin, email) : null;
+    if (!existing) existing = await findBySession(admin, sessionId, email);
 
     let leadId = null;
     let created = false;
@@ -251,6 +276,43 @@ async function findByEmail(admin, email) {
     return null;
   }
   return (data || []).find((r) => String(r.email || "").trim().toLowerCase() === email) || null;
+}
+
+/** The lead this VISIT already made, or null.
+ *
+ * Guarded two ways: the session must already own a lead, and that lead's email
+ * must either be blank or be the one coming in. Without the email check, one
+ * visitor who scanned their own site and then a client's under two addresses
+ * would have the second fold into the first, which is a worse bug than the
+ * duplicate it prevents. */
+async function findBySession(admin, sessionId, email) {
+  if (!sessionId) return null;
+  const { data, error } = await admin
+    .from("hs_lead_sources")
+    .select("lead_id")
+    .eq("session_id", sessionId)
+    .limit(1);
+  if (error) {
+    console.error("[hs-lead] session dedupe read failed", error.message);
+    return null;
+  }
+  const leadId = data?.[0]?.lead_id;
+  if (!leadId) return null;
+
+  const { data: rows, error: e2 } = await admin
+    .from("admin_leads")
+    .select("id, name, company, domain, email, phone, city, state, notes, created_at")
+    .eq("id", leadId)
+    .limit(1);
+  if (e2) {
+    console.error("[hs-lead] session dedupe lead read failed", e2.message);
+    return null;
+  }
+  const lead = rows?.[0];
+  if (!lead) return null;
+  const onLead = String(lead.email || "").trim().toLowerCase();
+  if (onLead && email && onLead !== email) return null;   // two people, one session
+  return lead;
 }
 
 /** The hs_lead_sources row, created or merged.

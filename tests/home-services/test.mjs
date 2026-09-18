@@ -613,6 +613,49 @@ test("the page never hands a day string to new Date()", () => {
   assert.equal(/new Date\(\s*(from|to|range)/.test(page), false);
 });
 
+/* ================================================================
+ * ONE VISIT MAKES ONE LEAD  (18 Sep 2026)
+ *
+ * A live scan on 18 Sep produced two identical leads from one visitor. The
+ * page posts the lead when Scan is pressed and again when the score lands, and
+ * retries a failed post three times; the email lookup that was supposed to
+ * collapse those cannot see a row that has not committed yet. These pin the
+ * session fallback that closes it, and the guard that stops it over-collapsing.
+ * ================================================================ */
+
+test("hs-lead asks the session before it inserts a second lead", () => {
+  const code = src("api/hs-lead.js").replace(/\/\*[\s\S]*?\*\//g, " ");
+  assert.match(code, /findBySession\s*\(/, "no session fallback");
+  // the email lookup must still come FIRST — it is the cross-visit path
+  const byEmail = code.indexOf("findByEmail(admin");
+  const bySession = code.indexOf("findBySession(admin");
+  assert.ok(byEmail > -1 && bySession > byEmail, "the session must be asked second, not instead");
+});
+
+test("the session fallback reads hs_lead_sources, which is one row per lead", () => {
+  const code = src("api/hs-lead.js");
+  const fn = code.slice(code.indexOf("async function findBySession"));
+  assert.match(fn, /from\("hs_lead_sources"\)/);
+  assert.match(fn, /eq\("session_id", sessionId\)/);
+});
+
+test("a shared session can NEVER merge two different people", () => {
+  const code = src("api/hs-lead.js");
+  const fn = code.slice(code.indexOf("async function findBySession"));
+  // an existing lead with a DIFFERENT email must be refused
+  assert.match(fn, /onLead && email && onLead !== email/, "no email guard on the session fallback");
+  assert.match(fn, /return null/);
+});
+
+test("the rate limit leaves room for a whole converting visit plus retries", () => {
+  const code = src("api/hs-lead.js").replace(/\/\*[\s\S]*?\*\//g, " ");
+  const m = /PER_SESSION_LIMIT\s*=\s*(\d+)/.exec(code);
+  assert.ok(m, "no PER_SESSION_LIMIT");
+  // capture + score + checkout contact + checkout submit = 4, and any of them
+  // may be retried. Anything at or below 6 refuses a real person's lead.
+  assert.ok(Number(m[1]) >= 8, `PER_SESSION_LIMIT is ${m[1]}, too low for the post-17-Sep flow`);
+});
+
 console.log(results.join("\n"));
 console.log(`\n  ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
