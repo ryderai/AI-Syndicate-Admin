@@ -9,6 +9,11 @@ const SECTION_TITLES = {
   "ai-cost": { kicker: "Command", title: "AI Cost · what every AI call cost us" },
   "sales-stats": { kicker: "Sales", title: "Stats · how the team is doing" },
   clients: { kicker: "Command", title: "Clients · everyone we work with and everyone who pays" },
+  /* 14 Sep gave Home Services a header; 18 Sep gave it a child. Without an
+   * entry the fallback capitalises the page id, and the header read
+   * "Home-services-leads" — a hyphenated slug on screen. */
+  "home-services": { kicker: "Command", title: "Home Services · which landing page is worth spending on" },
+  "home-services-leads": { kicker: "Command", title: "Leads · who the landing pages brought in" },
   sales: { kicker: "Sales", title: "Sales · the pipeline" },
   /* THE REP'S OWN PAGES — Aug 27 2026. `leads` and `mine` are gone as page ids
    * (AdminDashboard turns both into `floor`), and The Floor and Gmail arrived.

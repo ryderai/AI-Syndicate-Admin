@@ -321,7 +321,7 @@ async function findBySession(admin, sessionId, email) {
  * false to true here: somebody who paid on Tuesday and comes back on Friday
  * without paying has still paid, and a plain upsert would quietly un-pay them.
  * The page they FIRST came from is kept for the same reason. */
-async function recordSource(admin, { leadId, pageSlug, sessionId, utm, reachedCheckout, paid, plan, nowIso }) {
+async function recordSource(admin, { leadId, pageSlug, sessionId, utm, reachedCheckout, paid, plan, nowIso, score = null, website = null }) {
   const { data: prior } = await admin
     .from("hs_lead_sources")
     .select("*")
@@ -358,6 +358,17 @@ async function recordSource(admin, { leadId, pageSlug, sessionId, utm, reachedCh
     /* The latest choice wins — somebody who switches from yearly to monthly
      * before pressing the button meant the second one. */
     plan: plan || prior?.plan || null,
+    /* THE SCORE IS WRITTEN ONCE AND NEVER OVERWRITTEN BY A BLANK.
+     * A visitor posts up to four times and only ONE of those posts carries a
+     * score — the one that fires when the scan finishes. The checkout posts
+     * that come after it carry none. `score ?? prior` would be right; writing
+     * `score` on its own would wipe the number the moment they opened the
+     * checkout, which is precisely the lead this list exists to surface. */
+    geo_score: (score === null || score === undefined) ? (prior?.geo_score ?? null) : score,
+    scored_at: (score === null || score === undefined)
+      ? (prior?.scored_at ?? null)
+      : (prior?.scored_at || nowIso),
+    scanned_domain: prior?.scanned_domain || website || null,
   }, { onConflict: "lead_id" });
   if (error) throw new Error(error.message);
 }

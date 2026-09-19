@@ -12,6 +12,7 @@ import Finance from "./admin/Finance.jsx";
 import Invoices from "./admin/Invoices.jsx";
 import AiCost from "./admin/AiCost.jsx";
 import HomeServices from "./admin/HomeServices.jsx";
+import HomeServicesLeads from "./admin/HomeServicesLeads.jsx";
 import ClientsPage from "./admin/Clients.jsx";
 import SalesPage from "./admin/SalesPage.jsx";
 import SalesStats from "./admin/SalesStats.jsx";
@@ -142,6 +143,9 @@ export default function AdminDashboard({ go }) {
        * from two tables that are the same for everybody who can open the page,
        * and the role gate is `pageIdsForRole` above, not a prop. */
       case "home-services": return <HomeServices />;
+      /* The child page. Same gate as its parent — pageIdsForRole lists both —
+       * and it takes no props for the same reason. */
+      case "home-services-leads": return <HomeServicesLeads />;
       /* The query comes through: `?id=` is which client is open, and the
        * Google sign-in bounces back through `?connect=`. Dropping it would
        * swallow both. */

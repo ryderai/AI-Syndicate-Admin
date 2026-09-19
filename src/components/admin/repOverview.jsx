@@ -9,6 +9,10 @@ import { Tile, MiniBar, money } from "./salesParts.jsx";
  * somebody changed one of them, and the thing they drift on is what a rep is
  * allowed to be told about. So repBrief.jsx keeps it and this page borrows it. */
 import { RepAskBox } from "./repBrief.jsx";
+/* The landing-page call list. Its own read, because getFloorBoard knows
+ * nothing about hs_lead_sources — and the same two pure functions the Home
+ * Services → Leads page uses, so the two screens cannot disagree. */
+import HotLandingLeads from "./hsHotLeads.jsx";
 
 /* A SALES REP'S OVERVIEW — their landing page.
  *
@@ -244,6 +248,14 @@ export default function RepOverview({ member }) {
         * to ask is usually the one the numbers underneath just put in their
         * head. */}
       <RepAskBox userId={userId} sample={board.sample} />
+
+      {/* ---------------- THE CALL LIST ----------------
+        * Above the numbers, under the box. A rep's page opens with "how am I
+        * doing"; this is the one thing on it that is "and here is something to
+        * do about it". It is NOT gated on knowsWho below — these leads belong
+        * to nobody, so they are the same list whoever is signed in, and a rep
+        * whose account id we could not read can still work them. */}
+      <HotLandingLeads />
 
       {/* ---------------- THE REFUSAL ----------------
         * NO SIGNED-IN ID, NO NUMBERS AT ALL. The "mine" filter is `owner_id ===

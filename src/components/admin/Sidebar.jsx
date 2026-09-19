@@ -72,7 +72,11 @@ const SECTIONS = [
      * inside the money screen; this page belongs to nothing above it, and
      * hanging it off Clients would say it is about the clients we already have
      * when it is about the ones we do not. */
-    ["home-services", "Home Services"],
+    /* …and since 18 Sep it carries ONE child, Leads. The parent answers "which
+     * page is worth spending on"; the child answers "who do I ring". Two
+     * different jobs on two different days, which is the same reason Finance
+     * carries Invoices. */
+    ["home-services", "Home Services", [["home-services-leads", "Leads"]]],
   ]},
   /* WORK AND OPERATIONS SIT TOGETHER — Ryder, 2 Sep 2026: "make work and
    * operations right next to each other, they both do a very similar task and

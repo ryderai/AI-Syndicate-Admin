@@ -25,6 +25,30 @@ export function Pct({ value, digits = 1, why = "Nothing to work this out from ye
   if (value === null || value === undefined || Number.isNaN(value)) {
     return <span className="adm-hs-blank" title={why}>—</span>;
   }
+  /* A SHARE OF THE VISITS CANNOT BE MORE THAN ALL OF THEM.
+   *
+   * 18 Sep 2026: the live Home management row printed "Lead 300.0%" and
+   * "Scan start 200.0%". Both were arithmetically correct — three leads over
+   * one unique visit — and both were nonsense as a conversion rate. The cause
+   * is on the other side of the fraction: some of those sessions' `view` events
+   * never reached us, and (until the one-visit-one-lead fix is deployed) one
+   * scan could make more than one lead.
+   *
+   * So the number is not printed as a rate. It is not hidden either — a page
+   * that quietly drops a figure teaches nobody anything — it is marked, with
+   * the two counts and the reason on hover. Fixing the denominator is a
+   * separate job; printing a believable-looking 300% while it is broken is the
+   * thing that gets quoted in a meeting. */
+  if (value > 100) {
+    return (
+      <span
+        className="adm-hs-blank"
+        title="More of them left details than we counted arriving, so this cannot be a share of the visits. Either some visits were never recorded, or one visit produced more than one lead. The counts either side of it are in the Leads and Visits columns."
+      >
+        over 100%
+      </span>
+    );
+  }
   return <span>{pct(value, digits)}</span>;
 }
 

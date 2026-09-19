@@ -604,7 +604,11 @@ test("the two new badges exist and say MEASURED and DERIVED", () => {
 });
 
 test("the page is wired into the sidebar and the router", () => {
-  assert.match(src("src/components/admin/Sidebar.jsx"), /\["home-services", "Home Services"\]/);
+  /* 18 Sep: the entry gained a third element, its children. Matched loosely on
+   * purpose — pinning the exact array text made this test fail the first time
+   * anybody added a child, which is a test breaking on a change it should not
+   * have an opinion about. */
+  assert.match(src("src/components/admin/Sidebar.jsx"), /\["home-services", "Home Services"/);
   assert.match(src("src/components/AdminDashboard.jsx"), /case "home-services": return <HomeServices \/>/);
 });
 
@@ -654,6 +658,202 @@ test("the rate limit leaves room for a whole converting visit plus retries", () 
   // capture + score + checkout contact + checkout submit = 4, and any of them
   // may be retried. Anything at or below 6 refuses a real person's lead.
   assert.ok(Number(m[1]) >= 8, `PER_SESSION_LIMIT is ${m[1]}, too low for the post-17-Sep flow`);
+});
+
+/* ==================================================================
+ * THE LEADS PAGE AND THE REPS' CALL LIST — 18 Sep 2026
+ * ================================================================== */
+
+const HSL = await import("../../lib/home-services.js");
+const MIG39 = src("supabase/migrations/0039_hs_lead_score_and_site.sql");
+const MIG39_CODE = MIG39.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+
+/* A fixed clock. Every day count below is measured from this instant, so none
+ * of these tests changes its answer at midnight. */
+const NOW = Date.parse("2026-09-18T17:00:00Z");
+const daysAgo = (n) => new Date(NOW - n * 86400000).toISOString();
+
+const FIXTURE_SOURCES = [
+  { lead_id: "a", page_slug: "lawn-care", geo_score: 38, reached_checkout: false, paid: false, converted_at: daysAgo(1), session_id: "s1" },
+  { lead_id: "b", page_slug: "restaurants", geo_score: 91, reached_checkout: true, paid: false, converted_at: daysAgo(2), plan: "year" },
+  { lead_id: "c", page_slug: "painting", geo_score: 20, reached_checkout: false, paid: false, converted_at: daysAgo(79) },
+  { lead_id: "d", page_slug: "electrical", geo_score: null, reached_checkout: false, paid: false, converted_at: daysAgo(0) },
+  { lead_id: "e", page_slug: "painting", geo_score: 44, reached_checkout: true, paid: true, converted_at: daysAgo(1) },
+  { lead_id: "f", page_slug: "lawn-care", geo_score: 12, reached_checkout: false, paid: false, converted_at: daysAgo(3) },
+];
+const FIXTURE_LEADS = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id, email: `${id}@x.com`, name: id.toUpperCase() }));
+const FIXTURE_ROWS = () => HSL.hsLeadRows({ sources: FIXTURE_SOURCES, leads: FIXTURE_LEADS, events: [{ session_id: "s1" }, { session_id: "s1" }], nowMs: NOW });
+
+test("a lead with no score is null, never zero", () => {
+  const d = FIXTURE_ROWS().find((r) => r.leadId === "d");
+  assert.equal(d.score, null);
+  assert.notEqual(d.score, 0);
+  assert.equal(d.stage, "captured");
+});
+
+test("somebody who paid is never on the call list", () => {
+  const e = FIXTURE_ROWS().find((r) => r.leadId === "e");
+  assert.equal(e.stage, "paid");
+  assert.equal(e.hot, false);
+  assert.equal(e.hotReason, null);
+});
+
+test("a bad score that is months old has gone cold", () => {
+  const c = FIXTURE_ROWS().find((r) => r.leadId === "c");
+  assert.equal(c.score, 20);           // the worst score in the fixture
+  assert.equal(c.daysOld, 79);
+  assert.equal(c.hot, false, "79 days is past the freshness window and must not be hot");
+});
+
+test("an unscored lead is not hot — nobody measured them", () => {
+  assert.equal(FIXTURE_ROWS().find((r) => r.leadId === "d").hot, false);
+});
+
+test("a high score is still hot if they opened the checkout", () => {
+  const b = FIXTURE_ROWS().find((r) => r.leadId === "b");
+  assert.equal(b.score, 91);
+  assert.equal(b.hot, true);
+  assert.match(b.hotReason, /checkout/i);
+});
+
+test("the call list is ordered checkout first, then worst score", () => {
+  assert.deepEqual(HSL.hsHotLeads(FIXTURE_ROWS()).map((r) => r.leadId), ["b", "f", "a"]);
+});
+
+test("no email means nothing to reach them with, so not hot", () => {
+  const rows = HSL.hsLeadRows({
+    sources: [FIXTURE_SOURCES[0]],
+    leads: [{ id: "a", name: "A" }],          // no email
+    nowMs: NOW,
+  });
+  assert.equal(rows[0].hot, false);
+});
+
+test("a lead whose person cannot be read is still counted, and marked", () => {
+  const rows = HSL.hsLeadRows({ sources: FIXTURE_SOURCES, leads: [], nowMs: NOW });
+  assert.equal(rows.length, FIXTURE_SOURCES.length, "a row must never vanish from a count");
+  assert.equal(rows[0].readable, false);
+  assert.equal(HSL.hsLeadTotals(rows).unreadable, FIXTURE_SOURCES.length);
+});
+
+test("the totals are counts of rows that exist and they add up", () => {
+  const t = HSL.hsLeadTotals(FIXTURE_ROWS());
+  assert.equal(t.total, 6);
+  assert.equal(t.paid + t.checkout + t.scored + t.captured, t.total);
+  assert.equal(t.hot, 3);
+});
+
+test("isHotLead takes no clock — the day count is worked out once, in hsLeadRows", () => {
+  /* A second clock inside the test is how one column says 14 days and the next
+   * says 15. If anybody adds a `nowMs` parameter back, this fails. */
+  const lib = src("lib/home-services.js");
+  assert.match(lib, /export function isHotLead\(row = \{\}\) \{/, "isHotLead must take the row and nothing else");
+  assert.match(lib, /export function hotReason\(row = \{\}\) \{/);
+  assert.match(lib, /export function hsHotLeads\(rows = \[\]\) \{/);
+  assert.match(lib, /export function hsLeadTotals\(rows = \[\]\) \{/);
+});
+
+test("the freshness window and the weak-score line are exported, so a screen can print them", () => {
+  assert.equal(typeof HSL.HS_FRESH_DAYS, "number");
+  assert.equal(typeof HSL.HS_WEAK_SCORE, "number");
+  const page = src("src/components/admin/HomeServicesLeads.jsx");
+  assert.match(page, /HS_FRESH_DAYS/);
+  assert.match(page, /HS_WEAK_SCORE/);
+});
+
+test("0039 gives the score a real column, bounded 0-100, and backfills nothing", () => {
+  assert.match(MIG39_CODE, /add column if not exists geo_score int/);
+  assert.match(MIG39_CODE, /geo_score >= 0 and geo_score <= 100/);
+  assert.match(MIG39_CODE, /add column if not exists scanned_domain text/);
+  assert.match(MIG39_CODE, /add column if not exists scored_at timestamptz/);
+  assert.ok(!/update public\.hs_lead_sources set/i.test(MIG39_CODE), "0039 must not invent a score for an old row");
+});
+
+test("the capture endpoint never wipes a score with a later blank post", () => {
+  /* The scan posts the score; the two checkout posts that follow carry none.
+   * Writing `score` straight would erase it exactly for the lead this whole
+   * feature exists to surface. */
+  const api = src("api/hs-lead.js");
+  assert.match(api, /geo_score: \(score === null \|\| score === undefined\) \? \(prior\?\.geo_score/);
+});
+
+test("both screens use the SAME two functions — not a copy of the rule", () => {
+  const leadsPage = src("src/components/admin/HomeServicesLeads.jsx");
+  const repBlock = src("src/components/admin/hsHotLeads.jsx");
+  for (const [name, file] of [["Leads page", leadsPage], ["rep block", repBlock]]) {
+    assert.match(file, /hsLeadRows/, `${name} must build its rows with hsLeadRows`);
+    assert.match(file, /hsHotLeads/, `${name} must pick the hot ones with hsHotLeads`);
+    assert.ok(!/reached_checkout|geo_score <=/.test(file), `${name} must not re-implement the hot rule`);
+  }
+});
+
+test("the Leads page is wired into the sidebar and the router", () => {
+  assert.match(src("src/components/admin/Sidebar.jsx"), /\[\["home-services-leads", "Leads"\]\]/);
+  assert.match(src("src/components/AdminDashboard.jsx"), /case "home-services-leads": return <HomeServicesLeads \/>;/);
+});
+
+test("the rep's page carries the block, and it is not gated on knowing who they are", () => {
+  const rep = src("src/components/admin/repOverview.jsx");
+  assert.match(rep, /<HotLandingLeads \/>/);
+  /* It sits above the knowsWho branch. These leads belong to nobody, so a rep
+   * whose account id could not be read can still work them. */
+  assert.ok(rep.indexOf("<HotLandingLeads />") < rep.indexOf("!stats.knowsWho"),
+    "the call list must come before the no-id refusal, not inside it");
+});
+
+test("neither screen assigns a task to a named person", () => {
+  /* Comments out first. A comment saying whose ask this was is a record of why
+   * the file exists; a name in the MARKUP is a task handed to a person, which
+   * is the thing these screens must never do. */
+  for (const f of ["src/components/admin/HomeServicesLeads.jsx", "src/components/admin/hsHotLeads.jsx"]) {
+    const code = src(f).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/[^\n]*/gm, " ");
+    assert.ok(!/\b(CJ|Andrew|Ryder|Julia)\b/.test(code), `${f} names a person on screen`);
+    assert.ok(!/needs to (call|ring|do)/i.test(code), `${f} assigns somebody a task`);
+  }
+});
+
+
+/* ---- two defects found on the LIVE dashboard, 18 Sep 2026 ---- */
+
+test("the last checkout step is not called Paid while nothing is charged", () => {
+  const step = FUNNEL_STEPS.find((x) => x.event === "checkout_paid");
+  assert.notEqual(step.label, "Paid",
+    "the live page showed this step as Paid:1 beside a Purchases tile of 0");
+  assert.match(step.label, /button/i);
+  /* And the page really does fire it on a button that charges nothing, which is
+   * why the label has to say so. */
+  const parts = src("src/components/admin/homeServicesParts.jsx");
+  assert.match(parts, /over 100%/);
+});
+
+test("a share of the visits can never print as more than 100%", () => {
+  /* Home management, live, 18 Sep: 3 leads over 1 unique visit printed
+   * "Lead 300.0%". Arithmetically right, nonsense as a rate. */
+  const parts = src("src/components/admin/homeServicesParts.jsx");
+  assert.match(parts, /if \(value > 100\)/, "Pct must refuse to draw a rate above 100%");
+  assert.ok(parts.indexOf("if (value > 100)") < parts.indexOf("return <span>{pct(value, digits)}</span>;"),
+    "the guard has to come before the normal render, or it never runs");
+});
+
+test("rate() itself is untouched — the guard is at the point of PRINTING", () => {
+  /* The arithmetic is not wrong and must not be doctored. 3 leads over 1 visit
+   * really is 300; what is wrong is calling it a conversion rate on a screen.
+   * Capping it in rate() would hide the same defect from every other caller. */
+  assert.equal(rate(3, 1), 300);
+});
+
+test("a lead on its fourteenth day is still hot — the screens say \"or less\"", () => {
+  /* The screens used to say "under 14 days" while the code dropped only
+     daysOld > 14. One day, but a rule nobody can restate from the screen is a
+     rule nobody can argue with. Both now say "or less". */
+  const at14 = { stage: "scored", email: "a@x.com", score: 30, daysOld: HSL.HS_FRESH_DAYS };
+  const at15 = { ...at14, daysOld: HSL.HS_FRESH_DAYS + 1 };
+  assert.equal(HSL.isHotLead(at14), true);
+  assert.equal(HSL.isHotLead(at15), false);
+  for (const f of ["src/components/admin/HomeServicesLeads.jsx", "src/components/admin/hsHotLeads.jsx"]) {
+    assert.ok(!/under \{?HS_FRESH_DAYS|less than \$\{HS_FRESH_DAYS\}/.test(src(f)),
+      `${f} still says "under"/"less than" for a rule that means "or less"`);
+  }
 });
 
 console.log(results.join("\n"));

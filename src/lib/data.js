@@ -338,6 +338,35 @@ const previewStore = {
     { id: "l6", name: "Dana Whitfield", company: "Harborline Realty Group", company_id: "co1", list_id: "li1", title: "Internet Sales Director", seniority: "Director", department: "Sales", linkedin_url: null, domain: "harborline-sample.com", email: "dana@sample.com", phone: "(555) 310-5461", city: "Los Angeles", state: "California", vertical: "realtor", source: "sheet", stage: "contacted", owner_id: "preview-rep", score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(9), last_activity_at: daysAgo(2), claimed_at: daysAgo(8), first_contact_at: daysAgo(7), claim_contacted_at: daysAgo(7), last_touch_at: daysAgo(2), cadence_started_at: daysAgo(8), cadence_paused: false, email_opened_at: daysAgo(6), texts_sent: 0, last_text_at: null, imported_owner_name: "Hunter Grant" , first_email_at: daysAgo(7), first_reply_at: daysAgo(2), bounced_at: null },
     { id: "l7", name: "Elena Ruiz", company: "Bright Coast Medspa", company_id: "co3", list_id: "li3", title: "Marketing Director", seniority: "Director", department: "Marketing", linkedin_url: null, domain: "brightcoast-sample.com", email: "elena@sample.com", phone: "(555) 201-8891", city: "Destin", state: "FL", vertical: "medspa", source: "sheet", stage: "skip_90", owner_id: null, score: null, notes: null, next_step: null, became_customer: false, created_at: daysAgo(4), last_activity_at: null, claimed_at: null, first_contact_at: null, claim_contacted_at: null, last_touch_at: null, cadence_started_at: null, cadence_paused: false, email_opened_at: null, texts_sent: 0, last_text_at: null, imported_owner_name: null },
   ],
+  /* HOME SERVICES — sample rows for the landing pages, 18 Sep 2026.
+   *
+   * Added when the Leads page and the reps' call list shipped. Without them
+   * both screens are permanently empty in preview, and the preview is what CJ
+   * looks at before he hands a rep their login — a new block that is always
+   * blank reads as broken rather than as "nobody has scanned this week".
+   *
+   * They hang off the sample LEADS above, by id, so the preview join is the
+   * real join. Scores are deliberately spread either side of HS_WEAK_SCORE and
+   * one is null, so the null-is-not-zero rule is visible on the screen and not
+   * only in the tests.
+   */
+  hsLeadSources: [
+    { lead_id: "l1", page_slug: "lawn-care", session_id: "sess-1", first_seen_at: daysAgo(2), converted_at: daysAgo(2), utm_source: "google", utm_medium: "cpc", utm_campaign: "lawn-vestavia", utm_content: null, utm_term: null, reached_checkout: true, paid: false, plan: "year", geo_score: 41, scored_at: daysAgo(2), scanned_domain: "brightcoast-sample.com" },
+    { lead_id: "l3", page_slug: "restaurants", session_id: "sess-2", first_seen_at: daysAgo(1), converted_at: daysAgo(1), utm_source: "meta", utm_medium: "paid_social", utm_campaign: "restaurants-al", utm_content: null, utm_term: null, reached_checkout: false, paid: false, plan: null, geo_score: 28, scored_at: daysAgo(1), scanned_domain: "harborline-sample.com" },
+    { lead_id: "l5", page_slug: "painting", session_id: "sess-3", first_seen_at: daysAgo(5), converted_at: daysAgo(5), utm_source: "google", utm_medium: "cpc", utm_campaign: "painting-vestavia", utm_content: null, utm_term: null, reached_checkout: false, paid: false, plan: null, geo_score: null, scored_at: null, scanned_domain: null },
+    { lead_id: "l7", page_slug: "home-management", session_id: "sess-4", first_seen_at: daysAgo(6), converted_at: daysAgo(6), utm_source: null, utm_medium: null, utm_campaign: null, utm_content: null, utm_term: null, reached_checkout: false, paid: false, plan: null, geo_score: 88, scored_at: daysAgo(6), scanned_domain: "elenaruiz-sample.com" },
+    { lead_id: "l4", page_slug: "lawn-care", session_id: "sess-5", first_seen_at: daysAgo(40), converted_at: daysAgo(40), utm_source: "google", utm_medium: "cpc", utm_campaign: "lawn-vestavia", utm_content: null, utm_term: null, reached_checkout: true, paid: true, plan: "year", geo_score: 35, scored_at: daysAgo(40), scanned_domain: "olsonlaw-sample.com" },
+  ],
+  hsEvents: [
+    { id: "he1", page_slug: "lawn-care", event: "view", session_id: "sess-1", lead_id: null, cta: null, path: "/home-services/lawn-care/", referrer: null, utm_source: "google", utm_medium: "cpc", utm_campaign: "lawn-vestavia", utm_content: null, utm_term: null, device: "mobile", created_at: daysAgo(2) },
+    { id: "he2", page_slug: "lawn-care", event: "scan_start", session_id: "sess-1", lead_id: "l1", cta: null, path: null, referrer: null, utm_source: "google", utm_medium: "cpc", utm_campaign: "lawn-vestavia", utm_content: null, utm_term: null, device: "mobile", created_at: daysAgo(2) },
+    { id: "he3", page_slug: "lawn-care", event: "scan_complete", session_id: "sess-1", lead_id: "l1", cta: null, path: null, referrer: null, utm_source: "google", utm_medium: "cpc", utm_campaign: "lawn-vestavia", utm_content: null, utm_term: null, device: "mobile", created_at: daysAgo(2) },
+    { id: "he4", page_slug: "lawn-care", event: "checkout_open", session_id: "sess-1", lead_id: "l1", cta: "scan-buy", path: null, referrer: null, utm_source: "google", utm_medium: "cpc", utm_campaign: "lawn-vestavia", utm_content: null, utm_term: null, device: "mobile", created_at: daysAgo(2) },
+    { id: "he5", page_slug: "restaurants", event: "view", session_id: "sess-2", lead_id: null, cta: null, path: "/restaurants/", referrer: null, utm_source: "meta", utm_medium: "paid_social", utm_campaign: "restaurants-al", utm_content: null, utm_term: null, device: "desktop", created_at: daysAgo(1) },
+    { id: "he6", page_slug: "restaurants", event: "scan_complete", session_id: "sess-2", lead_id: "l3", cta: null, path: null, referrer: null, utm_source: "meta", utm_medium: "paid_social", utm_campaign: "restaurants-al", utm_content: null, utm_term: null, device: "desktop", created_at: daysAgo(1) },
+    { id: "he7", page_slug: "painting", event: "view", session_id: "sess-3", lead_id: null, cta: null, path: "/home-services/painting/", referrer: null, utm_source: "google", utm_medium: "cpc", utm_campaign: "painting-vestavia", utm_content: null, utm_term: null, device: "desktop", created_at: daysAgo(5) },
+    { id: "he8", page_slug: "home-management", event: "view", session_id: "sess-4", lead_id: null, cta: null, path: "/home-management/", referrer: null, utm_source: null, utm_medium: null, utm_campaign: null, utm_content: null, utm_term: null, device: "tablet", created_at: daysAgo(6) },
+  ],
   notes: [
     { id: "n1", author_id: "preview-user", title: "Michelle domain cutover", body: "Registrar is GoDaddy. Nameservers stay, just the A record.\nAsk CJ for the go-ahead before the swap — she has an open house Saturday.", pinned: true, link_type: null, link_id: null, created_at: daysAgo(2), updated_at: daysAgo(1) },
     { id: "n2", author_id: "preview-user", title: "Things that keep biting me", body: "Vercel Root Directory = the 404 cause, every time.\nCheck the MEASURED timestamp before quoting any score.", pinned: false, link_type: null, link_id: null, created_at: daysAgo(9), updated_at: daysAgo(9) },
@@ -5604,6 +5633,26 @@ export async function deleteMeeting(id) {
  * `sample: true` makes the page say it has nothing to measure, which is true.
  * --------------------------------------------------------------------- */
 
+/** Preview rows cut to the same window the live read uses.
+ *
+ * The date pickers on these screens are real in preview too, and a fixture list
+ * that ignores them would show five leads under a heading that says "last 7
+ * days" — which teaches somebody checking the screen that the filter does not
+ * work. `toMs` is EXCLUSIVE, the same as the live reads. Newest first, matching
+ * the order PostgREST is asked for.
+ */
+function previewInWindow(rows = [], field = "created_at", fromMs, toMs) {
+  return [...(rows || [])]
+    .filter((r) => {
+      const t = Date.parse(r?.[field]);
+      if (!Number.isFinite(t)) return false;
+      if (typeof fromMs === "number" && t < fromMs) return false;
+      if (typeof toMs === "number" && t >= toMs) return false;
+      return true;
+    })
+    .sort((a, b) => String(b?.[field] || "").localeCompare(String(a?.[field] || "")));
+}
+
 /** How many event rows one read will fetch before it says it stopped. */
 export const HS_EVENT_FETCH_CAP = 50000;
 
@@ -5611,7 +5660,7 @@ export const HS_EVENT_FETCH_CAP = 50000;
  * and must be worked out from the team's calendar by the caller — see
  * teamDayStartMs in lib/home-services.js. `toMs` is EXCLUSIVE. */
 export async function listHsEvents({ fromMs, toMs } = {}) {
-  if (!live()) return { rows: [], sample: true };
+  if (!live()) return { rows: previewInWindow(previewStore.hsEvents, "created_at", fromMs, toMs), sample: true };
   const supabase = getSupabase();
   return fetchPaged(
     () => {
@@ -5628,7 +5677,7 @@ export async function listHsEvents({ fromMs, toMs } = {}) {
  * Ordered on `converted_at`, which is this table's own clock — it has no
  * `created_at` column. */
 export async function listHsLeadSources({ fromMs, toMs } = {}) {
-  if (!live()) return { rows: [], sample: true };
+  if (!live()) return { rows: previewInWindow(previewStore.hsLeadSources, "converted_at", fromMs, toMs), sample: true };
   const supabase = getSupabase();
   return fetchPaged(
     () => {
@@ -5641,6 +5690,33 @@ export async function listHsLeadSources({ fromMs, toMs } = {}) {
      * the order() on `id` failed and the page showed "No leads yet" forever. */
     { order: "converted_at", ascending: false, max: HS_EVENT_FETCH_CAP, idColumn: "lead_id" },
   );
+}
+
+/** EVERY lead the landing pages produced in a window, with the person attached.
+ *
+ * The Home Services page reads the newest 25 for its "Recent leads" strip. This
+ * one is for the Leads page and the reps' hot list, which need all of them —
+ * so it does the same two reads and then fetches the lead row for every source,
+ * not for a slice. The join itself is pure and lives in lib/home-services.js
+ * (hsLeadRows), so the rep's screen and this page cannot disagree.
+ *
+ * `events` is read only when `withEvents` is set. It is by far the biggest of
+ * the three tables and the Leads page uses it for one column. */
+export async function listHsLeads({ fromMs, toMs, withEvents = false } = {}) {
+  const sources = await listHsLeadSources({ fromMs, toMs });
+  const ids = (sources.rows || []).map((r) => r.lead_id).filter(Boolean);
+  const leads = await listLeadsByIds(ids);
+  const events = withEvents ? await listHsEvents({ fromMs, toMs }) : { rows: [] };
+  return {
+    sources: sources.rows || [],
+    leads: leads.rows || [],
+    events: events.rows || [],
+    sample: Boolean(sources.sample || leads.sample),
+    /* Errors are carried, not thrown. A page that cannot read admin_leads can
+     * still show which pages produced leads and how many — and it says so. */
+    errors: [sources.error, leads.error, events.error].filter(Boolean),
+    truncated: [sources.truncated, events.truncated].filter(Boolean),
+  };
 }
 
 /** The lead rows behind a handful of ids, so the Recent leads table can print
@@ -5657,7 +5733,7 @@ export async function listLeadsByIds(ids = []) {
   for (let i = 0; i < wanted.length; i += 100) {
     const { data, error } = await supabase
       .from("admin_leads")
-      .select("id, name, company, email, phone, city, state, vertical, stage, owner_id, created_at")
+      .select("id, name, company, domain, email, phone, city, state, vertical, stage, owner_id, created_at")
       .in("id", wanted.slice(i, i + 100));
     if (error) return { rows, error: error.message, sample: false };
     rows.push(...(data || []));
