@@ -5740,3 +5740,70 @@ export async function listLeadsByIds(ids = []) {
   }
   return { rows, sample: false };
 }
+
+/* ==================================================================
+ * AI REVENUE CALCULATOR — 24 Sep 2026
+ *
+ * calc_runs (migration 0040): one row per calculation on
+ * www.aisyndicate.com/ai-revenue-calculator/ and its trade pages, written by
+ * api/calc.js. Read here for the Calculator page. Guarded by
+ * tests/calculator/columns.mjs from this marker down.
+ * ================================================================== */
+
+/** Sample rows for a build with no database keys. Marked sample by the read,
+ * and the page's badge says so — they are never shown as real. */
+const CALC_PREVIEW = [
+  { id: "c1", run_key: "prev-1", page_path: "/ai-revenue-calculator/roofers/", industry: "roofing", leads_per_month: 55, close_rate: 28, client_value: 14000, ai_share: 30, ai_score: 34, score_measured: true, scanned_domain: "sample-roofing.com", target_score: 80, yearly_revenue: 2400000, margin: 25, edited: true, added_revenue: 480000, added_revenue_year_one: 360000, added_profit: 120000, lifetime_revenue: 576000, extra_leads_year: 128, extra_clients_year: 36, capped: false, warnings: 0, plan_key: "launch", lead_id: null, utm_source: "google", device: "desktop", created_at: new Date(Date.now() - 2 * 864e5).toISOString() },
+  { id: "c2", run_key: "prev-2", page_path: "/ai-revenue-calculator/law-firms/", industry: "law", leads_per_month: 30, close_rate: 25, client_value: 12000, ai_share: 35, ai_score: 52, score_measured: false, target_score: 80, margin: 40, edited: true, added_revenue: 150000, added_revenue_year_one: 112500, added_profit: 60000, lifetime_revenue: 180000, extra_leads_year: 50, extra_clients_year: 12.5, capped: false, warnings: 0, plan_key: "managed", lead_id: "l4", referrer_host: "chatgpt.com", device: "mobile", created_at: new Date(Date.now() - 1 * 864e5).toISOString() },
+  { id: "c3", run_key: "prev-3", page_path: "/ai-revenue-calculator/", industry: "other", leads_per_month: 30, close_rate: 25, client_value: 5000, ai_share: 30, ai_score: 40, score_measured: false, target_score: 80, margin: 30, edited: false, added_revenue: 78010, added_revenue_year_one: 58507, added_profit: 23403, lifetime_revenue: 156019, extra_leads_year: 62, extra_clients_year: 15.6, capped: false, warnings: 0, plan_key: "managed", lead_id: null, device: "desktop", created_at: new Date(Date.now() - 3 * 36e5).toISOString() },
+];
+
+/** Every calculation between two instants, newest first. `toMs` exclusive. */
+export async function listCalcRuns({ fromMs, toMs } = {}) {
+  if (!live()) return { rows: previewInWindow(CALC_PREVIEW, "created_at", fromMs, toMs), sample: true };
+  const supabase = getSupabase();
+  return fetchPaged(
+    () => {
+      let q = supabase.from("calc_runs").select("*");
+      if (typeof fromMs === "number") q = q.gte("created_at", new Date(fromMs).toISOString());
+      if (typeof toMs === "number") q = q.lt("created_at", new Date(toMs).toISOString());
+      return q;
+    },
+    { order: "created_at", ascending: false, max: 50000 },
+  );
+}
+
+/** Leads whose notes carry a calculator line (api/calc.js writes one on every
+ * calculator lead), active in the window. The safety net for "never hidden":
+ * a lead whose run row failed to link still shows on the Calculator page. */
+export async function listCalcNoteLeads({ fromMs, toMs } = {}) {
+  if (!live()) return { rows: [], sample: true };
+  const supabase = getSupabase();
+  let q = supabase.from("admin_leads")
+    .select("id, name, company, domain, email, vertical, notes, created_at, last_activity_at")
+    .ilike("notes", "%AI Revenue Calculator%");
+  if (typeof fromMs === "number") q = q.gte("last_activity_at", new Date(fromMs).toISOString());
+  if (typeof toMs === "number") q = q.lt("last_activity_at", new Date(toMs).toISOString());
+  const { data, error } = await q.order("last_activity_at", { ascending: false }).limit(1000);
+  /* Narrowed in JS to the exact line api/calc.js writes, so a lead whose notes
+   * merely mention the calculator in passing is not counted as one. */
+  const rows = (data || []).filter((l) => /AI Revenue Calculator \(\/ai-revenue-calculator\//.test(String(l.notes || "")));
+  return { rows, error: error ? error.message : null, sample: false };
+}
+
+/** The runs plus the person on every run that became a lead, plus any
+ * calculator lead the runs do not point at. */
+export async function listCalcRunsWithLeads({ fromMs, toMs } = {}) {
+  const runs = await listCalcRuns({ fromMs, toMs });
+  const ids = (runs.rows || []).map((r) => r.lead_id).filter(Boolean);
+  const leads = await listLeadsByIds(ids);
+  const noted = await listCalcNoteLeads({ fromMs, toMs });
+  return {
+    runs: runs.rows || [],
+    leads: leads.rows || [],
+    notedLeads: noted.rows || [],
+    sample: Boolean(runs.sample),
+    errors: [runs.error, leads.error, noted.error].filter(Boolean),
+    truncated: Boolean(runs.truncated),
+  };
+}

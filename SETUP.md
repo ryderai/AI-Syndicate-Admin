@@ -1470,3 +1470,18 @@ Check `HS_ALLOWED_ORIGINS` first. An address that is not on that list is turned 
 and the landing page will not show an error when that happens — it is a tracking beacon, and a
 beacon that shouts at a visitor is worse than one that goes quiet. The console showing nothing is
 the symptom. That setting is the usual cause.
+
+## Migration 0040 — the AI Revenue Calculator (24 Sep 2026)
+
+What it does: adds `calc_runs`, one row per calculation on www.aisyndicate.com/ai-revenue-calculator/ and its trade pages, and turns on the **Command → AI Calculator** page. Calculator leads also land in `admin_leads`, on the Sales page.
+
+1. Open supabase.com and sign in.
+2. Open the admin console's project.
+3. Click **SQL Editor** in the left menu, then **New query**.
+4. Open `supabase/migrations/0040_revenue_calculator.sql` in Cursor, select all, copy.
+5. Paste it into the SQL Editor and click **Run**. It should say "Success. No rows returned".
+6. Check it: run `select count(*) from public.calc_runs;` — it should answer `0`.
+
+No new Vercel setting. The calculator posts through the same door as the Home Services pages, so `HS_ALLOWED_ORIGINS` must already list `https://www.aisyndicate.com` (it does if the Home Services pages' leads arrive).
+
+Undo: `drop table public.calc_runs;` (calculator leads stay in `admin_leads`).

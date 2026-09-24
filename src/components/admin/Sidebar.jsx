@@ -16,6 +16,7 @@ const Icon = {
    * about trades, and every other Command icon is a shape rather than a letter.
    * An item with no entry here renders an empty square that reads as a page
    * that failed to load, which is the note already written above `sales-stats`. */
+  "calculator": <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M8 7h8" /><path d="M8 11h2M12 11h2M16 11h0M8 15h2M12 15h2M8 18h2M12 18h4" /></svg>,
   "home-services": <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.8V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.8" /><path d="M9.5 17.5 15 12" /><path d="M14 11l2-2a2.2 2.2 0 1 1 3 3l-2 2z" /></svg>,
   invoices: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16l3-2 2 2 2-2 2 2 3-2V8z" /><line x1="8" y1="9" x2="14" y2="9" /><line x1="8" y1="13" x2="12" y2="13" /></svg>,
   /* A person, not a dollar sign. The page stopped being "everyone who pays"
@@ -77,6 +78,10 @@ const SECTIONS = [
      * different jobs on two different days, which is the same reason Finance
      * carries Invoices. */
     ["home-services", "Home Services", [["home-services-leads", "Leads"]]],
+    /* AI REVENUE CALCULATOR — 24 Sep 2026. Next to Home Services because it
+     * is the same kind of page: a public tool on the website and what it
+     * brought in. */
+    ["calculator", "AI Calculator"],
   ]},
   /* WORK AND OPERATIONS SIT TOGETHER — Ryder, 2 Sep 2026: "make work and
    * operations right next to each other, they both do a very similar task and

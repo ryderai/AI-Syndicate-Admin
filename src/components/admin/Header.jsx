@@ -13,6 +13,7 @@ const SECTION_TITLES = {
    * entry the fallback capitalises the page id, and the header read
    * "Home-services-leads" — a hyphenated slug on screen. */
   "home-services": { kicker: "Command", title: "Home Services · which landing page is worth spending on" },
+  calculator: { kicker: "Command", title: "AI Revenue Calculator · who used it and what it showed them" },
   "home-services-leads": { kicker: "Command", title: "Leads · who the landing pages brought in" },
   sales: { kicker: "Sales", title: "Sales · the pipeline" },
   /* THE REP'S OWN PAGES — Aug 27 2026. `leads` and `mine` are gone as page ids

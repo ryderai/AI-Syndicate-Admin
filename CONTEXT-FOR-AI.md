@@ -7316,3 +7316,18 @@ pins both facts so they cannot be quietly "fixed" wrong.
 **Known gaps, stated rather than hidden:** no timeline row (above); no `zip` column (above); the
 rate limit is per process; and nothing on this page has ever been driven against real data, because
 no real data can exist until step 3 is done.
+
+## §62. THE AI REVENUE CALCULATOR — its leads and its numbers — Thu 24 Sep 2026 (append-only section)
+
+Nothing above this line was changed.
+
+**What.** The public calculator on www.aisyndicate.com (`ai-syndicate-live/public/ai-revenue-calculator/`) now posts here. Ryder: "a new leads table for the calculator just so the leads are visible and never hidden … and save the numbers of businesses so we can see what the average someone would increase."
+
+- **Table `calc_runs`** (migration 0040): one row per calculation, upserted on the page's `run_key`, no person in it. Inputs, what the page showed, `edited` (moved off the starting guesses), `score_measured`, source, device, and `lead_id` once they leave an email. Members read, admins delete, no browser write path (same wall as 0035).
+- **Endpoint `api/calc.js`**, public, behind `lib/hs-http.js`. `kind: "run"` upserts and answers 204 always. `kind: "lead"` saves the run, makes/dedupes an `admin_leads` row (source `inbound`, stage `new`, vertical = business type, notes = the numbers in words via `leadNote`), links the run. Run beacons are sent as text/plain so they need no preflight and work as keepalive posts.
+- **Page `Command → AI Calculator`** (`src/components/admin/Calculator.jsx`): tiles, the lead list with their numbers, by business type, by page and source, every calculation, and how it's counted. **Averages use edited rows only** — a row on the starting guesses is our own defaults echoed back.
+- **Shared logic** `lib/calculator.js` (`cleanRun`, `leadNote`, `summarise`), tested in `tests/calculator/` (12 logic + 6 column-guard checks).
+
+**Why the website posts the lead here first.** The platform's own `/api/lead` refuses some people (free-scan limit, blocked addresses) and writes to a table this console cannot read. The calculator page now saves to `/api/calc` first, then calls `/api/lead` for the score email; if this console saved them, the report opens even when `/api/lead` refuses.
+
+**Not yet:** migration 0040 run, this console deployed, the site's `calc.js` change deployed. Until all three, the site silently falls back to the old path.
