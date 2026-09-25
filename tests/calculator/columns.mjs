@@ -80,6 +80,7 @@ ok("calc_runs requires run_key, page_path and industry on an insert",
 
 const FILES = [
   { rel: "api/calc.js" },
+  { rel: "lib/lead-consent.js" },   // 25 Sep 2026: the consent ledger (0045)
   { rel: "src/lib/data.js", from: "AI REVENUE CALCULATOR — 24 Sep 2026" },
 ];
 

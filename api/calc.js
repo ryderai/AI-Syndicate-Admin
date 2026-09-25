@@ -27,6 +27,7 @@ import { getAdminSupabase, isServerConfigured } from "../lib/supabase-server.js"
 import { applyCors, readCappedJson, allowHit } from "../lib/hs-http.js";
 import { normaliseEmail, hostFromWebsite, clean, digitsOnly } from "../lib/home-services.js";
 import { cleanRun, leadNote, CALC_VERTICAL } from "../lib/calculator.js";
+import { cleanConsent, consentNote, recordConsent } from "../lib/lead-consent.js";
 
 const RUN_LIMIT = 60;    // per session per minute — the page debounces to ~1 every 3s while typing
 const LEAD_LIMIT = 6;
@@ -87,7 +88,9 @@ export default async function handler(req, res) {
   const phone = phoneDigits && phoneDigits.length >= 10 && phoneDigits.length <= 15 ? phoneDigits : null;
   if (!email) return res.status(400).json({ ok: false, error: "Please add a real email address." });
   const domain = hostFromWebsite(b.website) || row.scanned_domain || null;
-  const note = leadNote(row, nowIso);
+  /* 25 Sep 2026: proof of consent (lib/lead-consent.js, migration 0045). */
+  const consent = cleanConsent(b.consent);
+  const note = leadNote(row, nowIso) + (consent ? `\n${consentNote(consent, row.page_path, nowIso)}` : "");
 
   try {
     const existing = await findByEmail(admin, email);
@@ -130,6 +133,8 @@ export default async function handler(req, res) {
       leadId = data.id;
       created = true;
     }
+
+    if (consent) await recordConsent(admin, req, leadId, consent, { source: "calc", pagePath: row.page_path });
 
     /* Link the numbers to the person. Logged and swallowed: the lead is saved,
      * and its note already carries the numbers. */

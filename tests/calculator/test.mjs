@@ -121,6 +121,54 @@ test("api/calc.js writes the optional phone on insert and fills it only when bla
   const ins = src.slice(src.indexOf('.from("admin_leads").insert({'), src.indexOf('}).select("id")'));
   assert.match(ins, /\bphone,/);
 });
+
+/* ---- PROOF OF CONSENT (25 Sep 2026, lib/lead-consent.js + 0045) ---- */
+const { CONSENT_TEXTS, cleanConsent, consentNote, recordConsent } = await import("../../lib/lead-consent.js");
+const POPUP = CONSENT_TEXTS["2026-09-24"];
+test("consent: a known version is stored with OUR wording, and a match is recorded", () => {
+  const c = cleanConsent({ version: "2026-09-24", text: POPUP, at: "2026-09-25T15:00:00.000Z" });
+  assert.equal(c.text, POPUP); assert.equal(c.textMatches, true); assert.equal(c.capturedAt, "2026-09-25T15:00:00.000Z");
+});
+test("consent: forged wording is not stored as the person's words, and is flagged", () => {
+  const c = cleanConsent({ version: "2026-09-24", text: "I agree to everything forever", at: "x" });
+  assert.equal(c.text, POPUP); assert.equal(c.textMatches, false); assert.equal(c.capturedAt, null);
+  assert.match(consentNote(c, "the lawn-care landing page", "2026-09-25T00:00:00Z"), /wording differed/);
+});
+test("consent: an unknown or missing version is not consent", () => {
+  assert.equal(cleanConsent({ version: "1999-01-01", text: POPUP }), null);
+  assert.equal(cleanConsent(null), null); assert.equal(cleanConsent("yes"), null);
+});
+test("consent: curly quotes and spacing from the page still count as the same wording", () => {
+  const curly = POPUP.replace('"Show my number"', "\u201cShow my number\u201d").replace("services.", "services.  ");
+  assert.equal(cleanConsent({ version: "2026-09-24", text: curly }).textMatches, true);
+});
+test("consent: the popup ships exactly the wording the console keeps (skipped where the landing-page folder is not beside this repo)", () => {
+  let lp = null;
+  try { lp = readFileSync(new URL("../../../Home-Services-LP/assets/calc-popup.js", import.meta.url), "utf8"); } catch { return; }
+  assert.ok(lp.includes(POPUP), "calc-popup.js CONSENT text differs from CONSENT_TEXTS['2026-09-24']");
+});
+{ /* async, so run directly: the test() helper above is synchronous */
+  const name = "consent: the row lands with the IP and browser, and a failed insert never throws";
+  try {
+    let row = null;
+    const admin = { from: () => ({ insert: (r) => { row = r; return Promise.resolve({ error: null }); } }) };
+    const req = { headers: { "x-forwarded-for": "203.0.113.9, 10.0.0.1", "user-agent": "UA/1" } };
+    const c = cleanConsent({ version: "2026-09-24", text: POPUP });
+    assert.equal(await recordConsent(admin, req, "lead-1", c, { source: "hs-lead", pageSlug: "lawn-care" }), true);
+    assert.equal(row.ip, "203.0.113.9"); assert.equal(row.user_agent, "UA/1"); assert.deepEqual(row.channels, ["call", "text", "email"]);
+    assert.equal(row.consent_text, POPUP); assert.equal(row.lead_id, "lead-1"); assert.equal(row.source, "hs-lead");
+    const bad = { from: () => ({ insert: () => Promise.resolve({ error: { message: "expected in this test: no table" } }) }) };
+    assert.equal(await recordConsent(bad, req, "lead-1", c, { source: "calc" }), false);
+    passed += 1; out.push(`  ok   ${name}`);
+  } catch (e) { failed += 1; out.push(`  FAIL ${name}\n       ${e.message}`); }
+}
+test("consent: both endpoints clean it and record it after the lead exists", () => {
+  for (const f of ["api/hs-lead.js", "api/calc.js"]) {
+    const src = readFileSync(new URL(`../../${f}`, import.meta.url), "utf8");
+    assert.match(src, /cleanConsent\(b\.consent\)/, f);
+    assert.ok(src.indexOf("recordConsent(admin, req, leadId") > src.indexOf("leadId = "), f + " records before the lead id exists");
+  }
+});
 console.log(out.join("\n"));
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

@@ -58,6 +58,7 @@ import { applyCors, readCappedJson, allowHit } from "../lib/hs-http.js";
 import {
   isPageSlug, normaliseEmail, digitsOnly, hostFromWebsite, clean, captureNote,
 } from "../lib/home-services.js";
+import { cleanConsent, consentNote, recordConsent } from "../lib/lead-consent.js";
 
 /* One ordinary visitor now costs four posts, not one: the capture when they
  * press Scan (17 Sep), the same lead again carrying the score, then the contact
@@ -152,7 +153,12 @@ export default async function handler(req, res) {
     state: clean(b.state, 120),
   };
 
-  const note = captureNote({ pageSlug, kind, reachedCheckout, paid, zip, bestTime, score });
+  /* 25 Sep 2026: the consent the page showed (lib/lead-consent.js, migration 0045).
+   * Only a version we actually shipped counts; the line goes on the lead so a rep
+   * sees it, and a row goes in admin_lead_consents as the proof. */
+  const consent = cleanConsent(b.consent);
+  const note = captureNote({ pageSlug, kind, reachedCheckout, paid, zip, bestTime, score })
+    + (consent ? `\n${consentNote(consent, `the ${pageSlug} landing page`)}` : "");
 
   const admin = getAdminSupabase();
   const nowIso = new Date().toISOString();
@@ -235,6 +241,7 @@ export default async function handler(req, res) {
     }
 
     /* ---- bookkeeping. Logged and swallowed — see rule 4. ---- */
+    if (consent) await recordConsent(admin, req, leadId, consent, { source: "hs-lead", pageSlug, pagePath: clean(b.path, 200) || null });
     await recordSource(admin, {
       leadId, pageSlug, sessionId, utm, reachedCheckout, paid, plan, nowIso,
     }).catch((err) => console.error("[hs-lead] source row failed", err?.message || err));
