@@ -7442,3 +7442,8 @@ spent on clearly... i dont want to read code, i want to read english." Commit `d
   (batches of 12); `src/components/dash/AiAccess.jsx` onGenerateAllFixes runs up to 1,000 pages, also runs
   automatically after an audit, and on an error it `continue`s to the next batch instead of stopping.
   Not fixed yet — platform repo change.
+
+**§64 correction (same day, code re-read):** the automatic run after an audit is capped at 5 pages
+(`AUTO_PREFILL_CAP`) and STOPS on an error. Only the "Generate gold-standard fixes" button runs up to 1,000
+pages and skips past errors (`toast.warn(...); continue;`). So Troy's volume came from the button, not the
+auto-run. "Verify" re-runs the audit scorer on the patched page (lib/page-fix-verify.js).
