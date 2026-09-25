@@ -7,8 +7,9 @@ import { timeAgo } from "./shared.jsx";
 import {
   RangePicker, Tabs, Stat, SimpleTable, Card, Loading, pctText, C_PLATFORM,
 } from "./moneyParts.jsx";
-import { aiCostView, jobLabel, NO_ACCOUNT, CONSOLE } from "../../../lib/ai-cost-view.js";
-import { monthRange, previousRange, rangeLabel, monthName, addDays } from "../../../lib/money-range.js";
+import { aiCostView, explain as explain2, NO_ACCOUNT, CONSOLE } from "../../../lib/ai-cost-view.js";
+import { jobInfo, serviceName } from "../../../lib/ai-job-names.js";
+import { monthRange, previousRange, rangeLabel, monthName } from "../../../lib/money-range.js";
 import { teamDate } from "../../../lib/brain-context.js";
 
 /* ==================================================================
@@ -41,10 +42,12 @@ import { teamDate } from "../../../lib/brain-context.js";
  * server still sends cost_micros.
  * ================================================================== */
 
+/* Plain English, 25 Sep 2026 (Ryder: "i dont want to read code, i want to
+ * read english"). */
 const VIEWS = [
-  { id: "accounts", label: "By account" },
-  { id: "jobs", label: "By job" },
-  { id: "services", label: "By AI service" },
+  { id: "accounts", label: "Who used it" },
+  { id: "jobs", label: "What it was used for" },
+  { id: "services", label: "Which AI" },
   { id: "time", label: "Over time" },
 ];
 
@@ -109,7 +112,7 @@ export default function AiCost({ member }) {
   }
 
   const stateLine = state === "live" && data
-    ? `Read ${timeAgo(Date.parse(data.readAt))} · ${n(data.rowCount)} calls${data.via === "scan" ? " · slow mode until migration 0041 runs" : ""}${data.cached ? " · kept for a minute" : ""}`
+    ? `Read ${timeAgo(Date.parse(data.readAt))} · ${n(data.rowCount)} log rows${data.via === "scan" ? " · slow mode until migration 0041 runs" : ""}${data.cached ? " · kept for a minute" : ""}`
     : state === "stale" ? "Showing your last numbers — reading fresh ones…"
       : state === "reloading" ? "Reading…"
         : state === "error" ? `Could not read: ${err}`
@@ -121,7 +124,7 @@ export default function AiCost({ member }) {
   return (
     <div className="mny-page">
       <div className="mny-head">
-        <div className="mny-sub">How many AI tokens we used, and which account or job used them. Owners only.</div>
+        <div className="mny-sub">How much AI work we used, who used it, and what for. Owners only.</div>
         <div className="mny-head-right">
           <span className="mny-muted mny-state">{stateLine}</span>
           <button type="button" className="btn" onClick={() => { setToday(teamDate(Date.now())); load(range, true); }}>Refresh</button>
@@ -137,77 +140,75 @@ export default function AiCost({ member }) {
           <div className="mny-hero">
             <Stat
               big
-              label="Tokens used"
+              label="AI work used (tokens)"
               value={tok(v.total.tokens)}
               change={change(v.total.tokens, pv?.total.tokens)}
               changeGoodWhenUp={false}
-              sub={`${tok(v.total.tokensIn)} in · ${tok(v.total.tokensOut)} out · ${n(v.total.calls)} calls`}
+              sub={`${n(v.total.calls)} requests to an AI · a token is about ¾ of a word`}
             />
             <Stat
               big
-              label="Tied to an account"
+              label="Used by a named account"
               value={pctText(v.accountShare)}
-              sub={`${tok(v.accountTokens)} tokens across ${v.workspaceCount} account${v.workspaceCount === 1 ? "" : "s"}`}
+              sub={`${tok(v.accountTokens)} tokens across ${v.workspaceCount} account${v.workspaceCount === 1 ? "" : "s"} · the rest is public tools and our own scheduled jobs`}
             />
             <Stat
               big
-              label="Credits used"
+              label="Credits charged"
               value={v.creditsTotal ? n(v.creditsTotal) : "0"}
-              sub={data.creditsVia === "none" ? "the credit ledger could not be read" : "plan tokens charged to platform accounts"}
+              sub={data.creditsVia === "none" ? "the credit ledger could not be read" : "credits the platform recorded against accounts for this work"}
             />
           </div>
 
+          {v.outliers.map((a) => (
+            <Outlier key={a.key} a={a} onOpen={() => { setViewId("accounts"); setOpenKey(a.key); }} />
+          ))}
+
           <div className="mny-note-line">
-            {v.total.cacheRead > 0 && <><strong>{tok(v.total.cacheRead)}</strong> more tokens were read back from a cache (re-used, not new work — not in the total). </>}
-            {v.total.tokenlessCalls > 0 && <><strong>{n(v.total.tokenlessCalls)}</strong> calls went to services that do not use tokens (search APIs, image tools) — counted as calls.</>}
+            {v.total.tokenlessCalls > 0 && <><strong>{n(v.total.tokenlessCalls)}</strong> requests went to search tools that don&apos;t use tokens (like Google search results) — they are counted as requests only. </>}
+            {v.total.cacheRead > 0 && <><strong>{tok(v.total.cacheRead)}</strong> tokens were re-used from memory (cache) and are not in the total.</>}
           </div>
-          {v.unnamed.after.calls > 0 && (
-            <div className="mny-alert">
-              <strong>{n(v.unnamed.after.calls)} calls since 23 Sep carry no job name</strong> ({tok(v.unnamed.after.tokens)} tokens).
-              The platform names every call since then, so these point at something that bypasses its meter.
-            </div>
-          )}
 
           <Tabs value={viewId} onChange={setViewId} options={VIEWS} label="How to group AI use" />
 
           {viewId === "accounts" && (
             <Card
-              title={`Accounts · ${rangeLabel(range)}`}
-              note={'An account is a platform workspace (its own name, domain and owner). "No account" is the platform\'s public tools (free scan, lead capture) and our own scheduled jobs. Click an account to see its jobs and AI services.'}
+              title={`Who used it · ${rangeLabel(range)}`}
+              note={'Each account is a workspace on our platform — a customer\'s, or one of ours. "No account" is the platform\'s free public tools (like the free scan on our website) and our own scheduled jobs. Click any row to see exactly what it was used for.'}
             >
               <AccountTable v={v} openKey={openKey} setOpenKey={setOpenKey} share={share} />
             </Card>
           )}
 
           {viewId === "jobs" && (
-            <Card title={`Jobs · ${rangeLabel(range)}`} note="The job is the name the platform gives the work (brand.scan), or the tool or endpoint that made the call.">
+            <Card title={`What it was used for · ${rangeLabel(range)}`} note="Every job the AI did in this period, biggest first. Hover a name to see what it does.">
               <SimpleTable
                 columns={[
-                  { key: "job", label: "Job", render: (r) => <span title={r.job || ""}>{jobLabel(r.job)}</span>, sortValue: (r) => r.job || "" },
+                  { key: "job", label: "What the AI was doing", render: (r) => <JobName job={r.job} />, sortValue: (r) => jobInfo(r.job).name },
                   { key: "accountCount", label: "Accounts", num: true },
-                  { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
+                  { key: "calls", label: "Requests", num: true, render: (r) => n(r.calls) },
+                  { key: "failed", label: "Failed", num: true, render: (r) => (r.failed ? <span className="mny-bad">{n(r.failed)}</span> : "—") },
                   { key: "tokens", label: "Tokens", num: true, render: (r) => (r.tokens ? tok(r.tokens) : "—") },
                   { key: "share", label: "Share", num: true, render: (r) => share(r.tokens), sortValue: (r) => r.tokens },
                 ]}
                 rows={v.jobs.map((j) => ({ ...j, key: j.job || "none" }))}
-                total={{ job: "Total", calls: n(v.total.calls), tokens: tok(v.total.tokens) }}
+                total={{ job: "Total", calls: n(v.total.calls), failed: v.total.failed ? n(v.total.failed) : "—", tokens: tok(v.total.tokens) }}
               />
             </Card>
           )}
 
           {viewId === "services" && (
-            <Card title={`AI services · ${rangeLabel(range)}`}>
+            <Card title={`Which AI · ${rangeLabel(range)}`} note="Which AI company and model did the work. Search tools show requests only — they don't use tokens.">
               <SimpleTable
                 columns={[
-                  { key: "provider", label: "Service" },
-                  { key: "model", label: "Model", render: (r) => r.model || "—" },
-                  { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
-                  { key: "tokensIn", label: "Tokens in", num: true, render: (r) => (r.tokens ? tok(r.tokensIn) : "—") },
-                  { key: "tokensOut", label: "Tokens out", num: true, render: (r) => (r.tokens ? tok(r.tokensOut) : "—") },
-                  { key: "tokens", label: "Total", num: true, render: (r) => (r.tokens ? tok(r.tokens) : <span className="mny-muted">no tokens</span>) },
+                  { key: "name", label: "AI", render: (r) => serviceName(r.provider, r.model), sortValue: (r) => serviceName(r.provider, r.model) },
+                  { key: "calls", label: "Requests", num: true, render: (r) => n(r.calls) },
+                  { key: "failed", label: "Failed", num: true, render: (r) => (r.failed ? <span className="mny-bad">{n(r.failed)}</span> : "—") },
+                  { key: "tokens", label: "Tokens", num: true, render: (r) => (r.tokens ? tok(r.tokens) : <span className="mny-muted">no tokens</span>) },
+                  { key: "share", label: "Share", num: true, render: (r) => share(r.tokens), sortValue: (r) => r.tokens },
                 ]}
-                rows={v.services.map((s) => ({ ...s, key: `${s.provider}|${s.model}` }))}
-                total={{ provider: "Total", calls: n(v.total.calls), tokensIn: tok(v.total.tokensIn), tokensOut: tok(v.total.tokensOut), tokens: tok(v.total.tokens) }}
+                rows={v.services.map((x) => ({ ...x, key: `${x.provider}|${x.model}` }))}
+                total={{ name: "Total", calls: n(v.total.calls), tokens: tok(v.total.tokens) }}
               />
             </Card>
           )}
@@ -221,10 +222,10 @@ export default function AiCost({ member }) {
               <SimpleTable
                 columns={[
                   { key: "label", label: tv.bucket === "day" ? "Day" : "Month", sortValue: (r) => r.key },
-                  { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
-                  { key: "tagged", label: "Accounts", num: true, render: (r) => tok(r.tagged) },
+                  { key: "calls", label: "Requests", num: true, render: (r) => n(r.calls) },
+                  { key: "tagged", label: "Named accounts", num: true, render: (r) => tok(r.tagged) },
                   { key: "none", label: "No account", num: true, render: (r) => tok(r.none) },
-                  { key: "total", label: "Total tokens", num: true, render: (r) => tok(r.total) },
+                  { key: "total", label: "All tokens", num: true, render: (r) => tok(r.total) },
                 ]}
                 rows={tv.series.map((b) => ({ ...b, total: b.tagged + b.none, label: tv.bucket === "day" ? b.key : monthName(b.key, { long: true }) })).reverse()}
                 max={62}
@@ -233,13 +234,72 @@ export default function AiCost({ member }) {
           )}
 
           <div className="mny-foot">
-            Token counts are the ones each AI company's own reply carried, counted by us at the moment of the call. "Tokens"
-            here = tokens in (including cache writes) + tokens out. Dollar cost is switched off for now. Days follow Chicago time.
-            {v.unnamed.before.calls > 0 && ` ${n(v.unnamed.before.calls)} calls from before ${addDays(data.taggingSince, 0)} carry no job name — the platform started naming every call that day.`}
+            Token counts come from each AI company&apos;s own reply, counted the moment the request was made. Dollar cost is
+            switched off for now. Days follow Chicago time.
+            {v.unnamed.before.calls > 0 && ` ${n(v.unnamed.before.calls)} requests from before ${shortDay(data.taggingSince)} are marked "not labelled" — the platform started naming every job that day.`}
             {data.truncated && " The period held more rows than one read allows — pick a shorter period for exact totals."}
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/* A job's plain-English name, with what it does on hover and the platform's
+ * own key underneath for anyone matching this to the code. */
+function JobName({ job }) {
+  const j = jobInfo(job);
+  return (
+    <span className="mny-job" title={j.what}>
+      <span className="mny-job-name">{j.name}</span>
+      {j.raw && <span className="mny-job-raw">{j.raw}</span>}
+    </span>
+  );
+}
+
+function shortDay(d) {
+  if (!d) return "";
+  const [, m, day] = d.split("-").map(Number);
+  return `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1]} ${day}`;
+}
+
+function daySpan(st) {
+  if (!st.firstDay) return "";
+  return st.firstDay === st.lastDay ? `on ${shortDay(st.firstDay)}` : `between ${shortDay(st.firstDay)} and ${shortDay(st.lastDay)}`;
+}
+
+/* The one paragraph that says what an account's AI went on. */
+function Story({ a }) {
+  const st = a.story;
+  const top = jobInfo(st.topJob);
+  const who = a.info.kind === "none" ? "Public tools and our own scheduled jobs" : `${a.info.name}'s account${a.info.domain ? ` (website: ${a.info.domain})` : ""}`;
+  return (
+    <p className="mny-story">
+      {who} used <strong>{tok(a.tokens)} tokens</strong> across <strong>{n(a.calls)} AI requests</strong> {daySpan(st)}
+      {a.share !== null && <> — <strong>{pctText(a.share)}</strong> of all AI use in this period</>}.
+      {st.topJob !== undefined && st.topJobShare !== null && (
+        <> <strong>{pctText(st.topJobShare)}</strong> of it was <strong>{top.name}</strong> ({n(st.topJobCalls)} requests). <span className="mny-muted">{top.what}</span></>
+      )}
+      {st.busiestDay && st.days.length > 1 && <> The busiest day was <strong>{shortDay(st.busiestDay)}</strong> ({tok(st.busiestDayTokens)} tokens).</>}
+      {a.failed > 0 && (
+        <> <span className={st.failedShare >= 0.2 ? "mny-bad" : ""}><strong>{n(a.failed)}</strong> requests failed ({pctText(st.failedShare)})</span>
+          {st.failedShare >= 0.2 ? " — a high failure rate, so something went wrong while this ran." : "."}</>
+      )}
+      {a.credits > 0 && <> The platform recorded <strong>{n(a.credits)} credits</strong> for this work.</>}
+    </p>
+  );
+}
+
+function Outlier({ a, onOpen }) {
+  const top = jobInfo(a.story.topJob);
+  return (
+    <div className="mny-alert mny-outlier">
+      <div>
+        <strong>{a.info.name} used {pctText(a.share)} of all AI this period</strong> — more than twice anyone else.
+        {" "}Mostly <strong>{top.name}</strong> {daySpan(a.story)}
+        {a.failed > 0 && <>, and {n(a.failed)} of the requests failed</>}.
+      </div>
+      <button type="button" className="btn" onClick={onOpen}>Show what it was spent on</button>
     </div>
   );
 }
@@ -258,25 +318,26 @@ function tok(x) {
 function AccountTable({ v, openKey, setOpenKey, share }) {
   const [all, setAll] = useState(false);
   const rows = all ? v.accounts : v.accounts.slice(0, 25);
-  if (!v.accounts.length) return <div className="mny-empty">No AI calls in this period.</div>;
+  if (!v.accounts.length) return <div className="mny-empty">No AI use in this period.</div>;
   return (
     <div className="mny-table-wrap">
       <table className="mny-table">
         <thead>
           <tr>
             <th>Account</th>
-            <th className="num">Credits used</th>
-            <th className="num">Calls</th>
-            <th className="num">Tokens in</th>
-            <th className="num">Tokens out</th>
-            <th className="num">Total tokens</th>
+            <th>Mostly used for</th>
+            <th className="num">Requests</th>
+            <th className="num">Failed</th>
+            <th className="num">Tokens</th>
             <th className="num">Share</th>
+            <th className="num">Credits charged</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((a) => {
             const open = openKey === a.key;
             const isNone = a.key === NO_ACCOUNT || a.key === CONSOLE;
+            const top = a.story.topJob !== null || a.jobs.length ? jobInfo(a.story.topJob) : null;
             return [
               <tr key={a.key} className="mny-row-click" onClick={() => setOpenKey(open ? null : a.key)}>
                 <td>
@@ -293,49 +354,47 @@ function AccountTable({ v, openKey, setOpenKey, share }) {
                     </span>
                   </button>
                 </td>
-                <td className="num">{a.credits ? n(a.credits) : "—"}</td>
+                <td title={top?.what}>{top ? top.name : "—"}{a.story.topJobShare !== null && a.jobs.length > 1 ? <span className="mny-muted"> · {pctText(a.story.topJobShare)}</span> : null}</td>
                 <td className="num">{n(a.calls)}</td>
-                <td className="num" title={n(a.tokensIn)}>{tok(a.tokensIn)}</td>
-                <td className="num" title={n(a.tokensOut)}>{tok(a.tokensOut)}</td>
-                <td className="num" title={n(a.tokens)}><strong>{tok(a.tokens)}</strong></td>
+                <td className="num">{a.failed ? <span className={a.story.failedShare >= 0.2 ? "mny-bad" : ""}>{n(a.failed)}</span> : "—"}</td>
+                <td className="num" title={`${n(a.tokens)} tokens`}><strong>{tok(a.tokens)}</strong></td>
                 <td className="num">{share(a.tokens)}</td>
+                <td className="num">{a.credits ? n(a.credits) : "—"}</td>
               </tr>,
               open && (
                 <tr key={`${a.key}-open`} className="mny-open-row">
                   <td colSpan={7}>
-                    <div className="mny-two">
-                      <div>
-                        <div className="mny-mini-head">Jobs</div>
-                        <SimpleTable
-                          max={15}
-                          columns={[
-                            { key: "job", label: "Job", render: (r) => jobLabel(r.job), sortValue: (r) => r.job || "" },
-                            { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
-                            { key: "tokens", label: "Tokens", num: true, render: (r) => (r.tokens ? tok(r.tokens) : "—") },
-                          ]}
-                          rows={a.jobs.map((j) => ({ ...j, key: j.job || "none" }))}
-                        />
-                      </div>
-                      <div>
-                        <div className="mny-mini-head">AI services</div>
-                        <SimpleTable
-                          max={15}
-                          columns={[
-                            { key: "provider", label: "Service", render: (r) => `${r.provider}${r.model ? ` · ${r.model}` : ""}` },
-                            { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
-                            { key: "tokens", label: "Tokens", num: true, render: (r) => (r.tokens ? tok(r.tokens) : "no tokens") },
-                          ]}
-                          rows={a.services.map((s) => ({ ...s, key: `${s.provider}|${s.model}` }))}
-                        />
-                      </div>
-                    </div>
+                    <Story a={a} />
+                    <div className="mny-mini-head">What it was spent on</div>
+                    <SimpleTable
+                      max={20}
+                      columns={[
+                        { key: "job", label: "What the AI was doing", render: (r) => <JobName job={r.job} />, sortValue: (r) => jobInfo(r.job).name },
+                        { key: "days", label: "When", render: (r) => daySpan(explain2(r)).replace(/^on |^between /, ""), sortValue: (r) => Object.keys(r.days || {}).sort()[0] || "" },
+                        { key: "calls", label: "Requests", num: true, render: (r) => n(r.calls) },
+                        { key: "failed", label: "Failed", num: true, render: (r) => (r.failed ? <span className="mny-bad">{n(r.failed)}</span> : "—") },
+                        { key: "tokens", label: "Tokens", num: true, render: (r) => (r.tokens ? tok(r.tokens) : "—") },
+                        { key: "share", label: "Of this account", num: true, render: (r) => (a.tokens ? pctText(r.tokens / a.tokens) : "—"), sortValue: (r) => r.tokens },
+                      ]}
+                      rows={a.jobs.map((j) => ({ ...j, key: j.job || "none" }))}
+                    />
+                    <div className="mny-mini-head">Which AI did the work</div>
+                    <SimpleTable
+                      max={10}
+                      columns={[
+                        { key: "name", label: "AI", render: (r) => serviceName(r.provider, r.model), sortValue: (r) => serviceName(r.provider, r.model) },
+                        { key: "calls", label: "Requests", num: true, render: (r) => n(r.calls) },
+                        { key: "failed", label: "Failed", num: true, render: (r) => (r.failed ? <span className="mny-bad">{n(r.failed)}</span> : "—") },
+                        { key: "tokens", label: "Tokens", num: true, render: (r) => (r.tokens ? tok(r.tokens) : "no tokens") },
+                      ]}
+                      rows={a.services.map((x) => ({ ...x, key: `${x.provider}|${x.model}` }))}
+                    />
                     {a.info.kind === "workspace" && (
                       <div className="mny-note">
-                        Workspace id <code>{a.info.workspaceId}</code>
-                        {a.info.plan ? ` · plan ${a.info.plan}` : ""}
+                        {a.info.plan ? `Plan: ${a.info.plan}` : "No plan on file"}
                         {a.info.subscriptionStatus ? ` · subscription ${a.info.subscriptionStatus}` : ""}
-                        {a.creditSpends ? ` · ${n(a.creditSpends)} credit charges` : ""}
-                        {a.cacheRead ? ` · ${tok(a.cacheRead)} tokens read from cache` : ""}
+                        {a.cacheRead ? ` · ${tok(a.cacheRead)} tokens re-used from memory (not counted above)` : ""}
+                        <span className="mny-job-raw"> · workspace id {a.info.workspaceId}</span>
                       </div>
                     )}
                   </td>
@@ -347,12 +406,12 @@ function AccountTable({ v, openKey, setOpenKey, share }) {
         <tfoot>
           <tr>
             <td>Total</td>
-            <td className="num">{v.creditsTotal ? n(v.creditsTotal) : "—"}</td>
+            <td />
             <td className="num">{n(v.total.calls)}</td>
-            <td className="num">{tok(v.total.tokensIn)}</td>
-            <td className="num">{tok(v.total.tokensOut)}</td>
+            <td className="num">{v.total.failed ? n(v.total.failed) : "—"}</td>
             <td className="num">{tok(v.total.tokens)}</td>
             <td className="num">100%</td>
+            <td className="num">{v.creditsTotal ? n(v.creditsTotal) : "—"}</td>
           </tr>
         </tfoot>
       </table>
@@ -401,9 +460,9 @@ function TokenBars({ series, bucket }) {
       </svg>
       <div className="mny-legend">
         <span><i style={{ background: C_PLATFORM }} />Tied to an account</span>
-        <span><i style={{ background: C_NONE }} />No account</span>
+        <span><i style={{ background: C_NONE }} />No account (public tools, scheduled jobs)</span>
         <span className="mny-readout">
-          {h ? <><strong>{lab(h.key)}</strong> · accounts {tok(h.tagged)} · no account {tok(h.none)} · {n(h.calls)} calls</> : "Point at a bar to read it."}
+          {h ? <><strong>{lab(h.key)}</strong> · accounts {tok(h.tagged)} · no account {tok(h.none)} · {n(h.calls)} requests</> : "Point at a bar to read it."}
         </span>
       </div>
     </div>

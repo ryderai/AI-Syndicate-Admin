@@ -266,5 +266,52 @@ test("the over-time chart counts tokens, and August stays out of September", () 
   assert.equal(tv.series.reduce((a, b) => a + b.tagged + b.none, 0), 5700);
 });
 
+/* Plain-English page, 25 Sep 2026 */
+const { jobInfo, serviceName } = await import("../../lib/ai-job-names.js");
+test("job keys read as English, with the raw key kept", () => {
+  const j = jobInfo("pagefix.generate");
+  assert.equal(j.name, "Write fixes for website pages");
+  assert.equal(j.raw, "pagefix.generate");
+  assert.ok(jobInfo(null).name.startsWith("Not labelled"));
+  assert.equal(jobInfo("/api/cron/daily-digest/").name.startsWith("Scheduled job:"), true);
+  assert.equal(jobInfo("brand.newThing").known, false, "unknown jobs still get words");
+  assert.ok(!/[._]/.test(jobInfo("brand.newThing").name));
+});
+test("AI services read as model + company", () => {
+  assert.equal(serviceName("anthropic", "claude-sonnet-4-6"), "Claude Sonnet 4.6 (Anthropic)");
+  assert.equal(serviceName("groq", "openai/gpt-oss-120b"), "GPT OSS 120b (Groq)");
+  assert.equal(serviceName("serpapi", null), "Google search results (SerpApi)");
+});
+const bigData = {
+  taggingSince: "2026-09-23",
+  workspaces: { t: { name: "Troy" }, r: { name: "Ryan" } },
+  rows: [
+    { day: "2026-09-22", workspace_id: "t", provider: "anthropic", model: "m", job: "pagefix.generate", status: "ok", calls: 100, input_tokens: 9000, output_tokens: 1000 },
+    { day: "2026-09-23", workspace_id: "t", provider: "anthropic", model: "m", job: "pagefix.generate", status: "error", calls: 60, input_tokens: 0, output_tokens: 0 },
+    { day: "2026-09-23", workspace_id: "t", provider: "anthropic", model: "m", job: "audit.domain", status: "ok", calls: 5, input_tokens: 500, output_tokens: 0 },
+    { day: "2026-09-10", workspace_id: "r", provider: "openai", model: "g", job: "social.post", status: "ok", calls: 4, input_tokens: 2000, output_tokens: 500 },
+  ],
+};
+const bv = aiCostView(bigData, SEP);
+test("each account says what it was spent on, when, and how much failed", () => {
+  const t = bv.accounts[0];
+  assert.equal(t.info.name, "Troy");
+  assert.equal(t.story.topJob, "pagefix.generate");
+  assert.equal(t.story.firstDay, "2026-09-22");
+  assert.equal(t.story.lastDay, "2026-09-23");
+  assert.equal(t.story.busiestDay, "2026-09-22");
+  assert.equal(t.failed, 60);
+  assert.equal(t.jobs[0].failed, 60);
+  assert.ok(Math.abs(t.story.failedShare - 60 / 165) < 1e-9);
+});
+test("one account using far more than the rest is flagged, others are not", () => {
+  assert.deepEqual(bv.outliers.map((a) => a.info.name), ["Troy"]);
+  const close = aiCostView({ ...bigData, rows: [
+    { day: "2026-09-10", workspace_id: "t", provider: "a", model: "m", job: "x", calls: 1, input_tokens: 1500 },
+    { day: "2026-09-10", workspace_id: "r", provider: "a", model: "m", job: "x", calls: 1, input_tokens: 1000 },
+  ] }, SEP);
+  assert.equal(close.outliers.length, 0, "1,500 vs 1,000 is not more than twice");
+});
+
 console.log(`\n${pass} passed, ${fail} failed (TZ=${process.env.TZ || "unset"})`);
 process.exit(fail ? 1 : 0);
