@@ -13,7 +13,7 @@ import {
 } from "./moneyParts.jsx";
 import { financeView, changeVs, DEPT_LABEL } from "../../../lib/money-view.js";
 import {
-  presetRange, previousRange, rangeLabel, addMonths, monthName,
+  previousRange, rangeLabel, addMonths, monthName, monthRange, monthsIn, rangeMonth,
 } from "../../../lib/money-range.js";
 import { teamDate } from "../../../lib/brain-context.js";
 
@@ -60,10 +60,15 @@ export default function Finance({ member }) {
   /* Stamped once per page open. A page left open past midnight keeps the day
    * it opened on until Refresh — which also re-stamps it. */
   const [today, setToday] = useState(() => teamDate(Date.now()));
-  const [preset, setPreset] = useState("this-month");
-  const [range, setRange] = useState(() => presetRange("this-month", today));
+  /* Opens on THIS MONTH, picked as a month (Ryder, 24 Sep 2026: "filter the
+   * finance page by month"). */
+  const [preset, setPreset] = useState(() => `m:${today.slice(0, 7)}`);
+  const [range, setRange] = useState(() => monthRange(today.slice(0, 7), today));
   const [side, setSide] = useState("all");
-  const [chartMode, setChartMode] = useState("period");
+  /* BY MONTH unless someone asks for days — Ryder, 24 Sep 2026: "we need this
+   * by month, i dont care about day unless someone clicks that they want to
+   * see by day." */
+  const [chartMode, setChartMode] = useState("month");
 
   const [summary, setSummary] = useState(null);
   const [summaryState, setSummaryState] = useState("loading"); // loading | stale | live | nokey | error
@@ -78,7 +83,7 @@ export default function Finance({ member }) {
   /* The AI window always covers the chosen period AND the 12 months the trend
    * chart draws, so switching between recent presets never waits on a read. */
   const wantAi = useMemo(() => {
-    const trendFrom = `${addMonths(range.to.slice(0, 7), -11)}-01`;
+    const trendFrom = `${addMonths(today.slice(0, 7), -11)}-01`;
     /* …and the period before it, or the "vs before" costs would count its AI
      * as $0 on long ranges. */
     const prevFrom = previousRange(range).from;
@@ -160,16 +165,22 @@ export default function Finance({ member }) {
     if (summary.earliest && pr.from < summary.earliest) return null;
     return financeView({ summary, ai, expenses: expenses.rows, range: pr, today });
   }, [summary, ai, expenses, range, today]);
+  /* THE MONTHLY CHART always runs to this month, so every month is on it and
+   * the months you picked are the ones drawn solid. Twelve months back, but
+   * never before the first payment — empty months before we had customers
+   * are not a trend. */
   const trend = useMemo(() => {
     if (!summary) return null;
-    const last = range.to.slice(0, 7);
-    /* Twelve months back, but never before the first payment — a row of
-     * empty months before we had customers is not a trend. */
-    let from = `${addMonths(last, -11)}-01`;
+    let from = `${addMonths(today.slice(0, 7), -11)}-01`;
     if (summary.earliest && summary.earliest.slice(0, 7) > from.slice(0, 7)) from = `${summary.earliest.slice(0, 7)}-01`;
-    const tr = { from, to: range.to };
-    return financeView({ summary, ai, expenses: expenses.rows, range: tr, bucket: "month", today });
+    if (range.from < from) from = `${range.from.slice(0, 7)}-01`;
+    return financeView({ summary, ai, expenses: expenses.rows, range: { from, to: today }, bucket: "month", today });
   }, [summary, ai, expenses, range, today]);
+  const picked = useMemo(() => new Set(monthsIn(range)), [range]);
+  /* Days only when someone asks for them. */
+  const daily = useMemo(() => (summary && chartMode === "day"
+    ? financeView({ summary, ai, expenses: expenses.rows, range, bucket: "day", today })
+    : null), [summary, ai, expenses, range, today, chartMode]);
 
   const pick = (s) => (s === "all" ? view?.all : view?.sides[s]);
   const pickBefore = (s) => (s === "all" ? before?.all : before?.sides[s]);
@@ -291,19 +302,24 @@ export default function Finance({ member }) {
 
           {/* ---------- over time ---------- */}
           <Card
-            title={chartMode === "period" ? `Money in vs out · ${rangeLabel(range)}` : `Month by month · ${trend ? rangeLabel({ from: trend.range.from, to: trend.range.to }) : ""}`}
-            right={<Tabs value={chartMode} onChange={setChartMode} label="Chart period" options={[{ id: "period", label: view.bucket === "day" ? "By day" : "By month" }, { id: "trend", label: "12 months" }]} />}
+            title={chartMode === "month" ? "Money in vs out, month by month" : `Money in vs out, day by day · ${rangeLabel(range)}`}
+            right={<Tabs value={chartMode} onChange={setChartMode} label="Chart period" options={[{ id: "month", label: "By month" }, { id: "day", label: "By day" }]} />}
+            note={chartMode === "month" ? "The months you picked above are solid; the rest are faded. Click a month in the table or at the top to switch to it." : null}
           >
-            {chartMode === "period"
-              ? <MoneyChart series={view.series} bucket={view.bucket} show={side} />
-              : trend && <MoneyChart series={trend.series} bucket={trend.bucket} show={side} />}
+            {chartMode === "month"
+              ? trend && <MoneyChart series={trend.series} bucket="month" show={side} highlight={picked} />
+              : daily && <MoneyChart series={daily.series} bucket="day" show={side} />}
+            {chartMode === "month" && trend && (
+              <div style={{ marginTop: 14 }}>
+                <MonthTable
+                  trend={trend}
+                  side={side}
+                  picked={picked}
+                  onPick={(ym) => { setRange(monthRange(ym, today)); setPreset(`m:${ym}`); }}
+                />
+              </div>
+            )}
           </Card>
-
-          {chartMode === "trend" && trend && (
-            <Card title="Month by month">
-              <MonthTable trend={trend} side={side} />
-            </Card>
-          )}
 
           {/* ---------- detail per side ---------- */}
           {side !== "agency" && <PlatformDetail view={view} />}
@@ -350,6 +366,8 @@ export default function Finance({ member }) {
 
           <div id="mny-costs">
             <ExpensesPanel
+              key={rangeMonth(range, today) || "range"}
+              initialMonth={rangeMonth(range, today) || "all"}
               member={member}
               rows={expenses.rows}
               sample={!isConfigured()}
@@ -504,7 +522,7 @@ function AgencyDetail({ view }) {
   );
 }
 
-function MonthTable({ trend, side }) {
+function MonthTable({ trend, side, picked, onPick }) {
   const rows = trend.series.map((b) => {
     const inP = b.platformIn, inA = b.agencyIn;
     const inn = side === "platform" ? inP : side === "agency" ? inA : inP + inA;
@@ -512,7 +530,12 @@ function MonthTable({ trend, side }) {
     return { key: b.key, month: monthName(b.key, { long: true }), inP, inA, inn, out, kept: inn - out };
   }).reverse();
   const cols = [
-    { key: "month", label: "Month", sortValue: (r) => r.key },
+    {
+      key: "month", label: "Month", sortValue: (r) => r.key,
+      render: (r) => (onPick
+        ? <button type="button" className={`mny-link${picked?.has(r.key) ? " mny-picked" : ""}`} onClick={() => onPick(r.key)}>{r.month}</button>
+        : r.month),
+    },
     ...(side !== "agency" ? [{ key: "inP", label: "Platform in", num: true, render: (r) => usd(r.inP) }] : []),
     ...(side !== "platform" ? [{ key: "inA", label: "Agency in", num: true, render: (r) => usd(r.inA) }] : []),
     { key: "out", label: side === "all" ? "Money out" : "Costs", num: true, render: (r) => usd(r.out) },

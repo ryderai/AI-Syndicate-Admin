@@ -4867,3 +4867,14 @@ select.adm-mtg-in { padding-right: 4px; }
 .mny-open-row > td { background: var(--bg-1); padding: 14px 16px; }
 .mny-mini-head { font: 700 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 4px; }
 .mny-note code { font-family: var(--mono); font-size: 11px; }
+/* Month picker — 24 Sep 2026 */
+.mny-months { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mny-month-row { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding: 2px; min-width: 0; }
+.mny-month-row .mny-chip { white-space: nowrap; flex-shrink: 0; }
+.mny-step { flex-shrink: 0; width: 34px; height: 34px; border-radius: 99px; border: 1px solid var(--rule-2); background: white; color: var(--ink); font: 700 16px var(--body); cursor: pointer; }
+.mny-step:disabled { opacity: .35; cursor: default; }
+.mny-range-more { gap: 4px; }
+.mny-link-chip { border: 0; background: none; padding: 4px 10px; border-radius: 99px; font: 600 12.5px var(--body); color: var(--ink-dim); cursor: pointer; }
+.mny-link-chip:hover { color: var(--ink); background: var(--bg-3); }
+.mny-link-chip.on { color: white; background: var(--ink); }
+.mny-picked { color: var(--ink); text-decoration: underline; }

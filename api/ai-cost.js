@@ -312,6 +312,11 @@ export default async function handler(req, res) {
       truncated = scan.truncated;
     }
     const credits = await readCredits(admin, fromIso, toIso);
+    /* The first day anything was metered — the month picker starts there
+     * instead of offering a row of empty months. One indexed row (ts desc
+     * index read backwards). */
+    const first = await admin.from("admin_usage_events").select("ts").order("ts", { ascending: true }).limit(1);
+    const earliest = first.data?.[0]?.ts ? teamDate(Date.parse(first.data[0].ts)) : null;
     const names = await readNames(admin, rows, credits.rows);
 
     const body = {
@@ -331,6 +336,7 @@ export default async function handler(req, res) {
        * it (platform commit b20d1134). A row with no job before this is an
        * old row, not a gap in today's tagging. */
       taggingSince: "2026-09-23",
+      earliest,
       ms: Date.now() - started,
       readAt: new Date().toISOString(),
     };

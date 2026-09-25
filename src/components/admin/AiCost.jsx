@@ -8,7 +8,7 @@ import {
   RangePicker, Tabs, Stat, SimpleTable, Card, Loading, pctText, C_PLATFORM,
 } from "./moneyParts.jsx";
 import { aiCostView, jobLabel, NO_ACCOUNT, CONSOLE } from "../../../lib/ai-cost-view.js";
-import { presetRange, previousRange, rangeLabel, monthName, addDays } from "../../../lib/money-range.js";
+import { monthRange, previousRange, rangeLabel, monthName, addDays } from "../../../lib/money-range.js";
 import { teamDate } from "../../../lib/brain-context.js";
 
 /* ==================================================================
@@ -54,8 +54,11 @@ function n(v) { return (v || 0).toLocaleString("en-US"); }
 
 export default function AiCost({ member }) {
   const [today, setToday] = useState(() => teamDate(Date.now()));
-  const [preset, setPreset] = useState("this-month");
-  const [range, setRange] = useState(() => presetRange("this-month", today));
+  const [preset, setPreset] = useState(() => `m:${today.slice(0, 7)}`);
+  const [range, setRange] = useState(() => monthRange(today.slice(0, 7), today));
+  /* Month bars unless someone asks for days (Ryder, 24 Sep 2026). */
+  const [timeMode, setTimeMode] = useState("month");
+  const [earliest, setEarliest] = useState(null);
   const [viewId, setViewId] = useState("accounts");
   const [data, setData] = useState(null);
   const [prevData, setPrevData] = useState(null);
@@ -77,7 +80,7 @@ export default function AiCost({ member }) {
       getAiCost(pr, { refresh }),
     ]);
     if (mine !== seq.current) return;
-    if (res.ok) { setData(res.data); setState("live"); setErr(null); }
+    if (res.ok) { setData(res.data); setState("live"); setErr(null); if (res.data.earliest) setEarliest(res.data.earliest); }
     else { setState("error"); setErr(res.error); toast.error("AI cost could not be read", res.error); }
     setPrevData(prev.ok ? prev.data : null);
   }, []);
@@ -97,6 +100,8 @@ export default function AiCost({ member }) {
   }), [range]);
 
   const v = useMemo(() => (data ? aiCostView(data, range) : null), [data, range]);
+  /* The over-time view: months of the picked period by default, days on request. */
+  const tv = useMemo(() => (data ? aiCostView(data, range, { bucket: timeMode }) : null), [data, range, timeMode]);
   const pv = useMemo(() => (prevData ? aiCostView(prevData, previousRange(range)) : null), [prevData, range]);
 
   if (member?.role !== "owner") {
@@ -123,7 +128,7 @@ export default function AiCost({ member }) {
         </div>
       </div>
 
-      <RangePicker range={range} preset={preset} today={today} onChange={(r, id) => { setRange(r); setPreset(id); setOpenKey(null); }} />
+      <RangePicker range={range} preset={preset} today={today} earliest={earliest} onChange={(r, id) => { setRange(r); setPreset(id); setOpenKey(null); }} />
 
       {!v ? (
         state === "error" ? <Card title="Could not read the usage log">{err}</Card> : <Loading what="Reading the usage log…" />
@@ -208,17 +213,20 @@ export default function AiCost({ member }) {
           )}
 
           {viewId === "time" && (
-            <Card title={v.bucket === "day" ? "Day by day" : "Month by month"}>
-              <TokenBars series={v.series} bucket={v.bucket} />
+            <Card
+              title={timeMode === "day" ? "Day by day" : "Month by month"}
+              right={<Tabs value={timeMode} onChange={setTimeMode} label="Group by" options={[{ id: "month", label: "By month" }, { id: "day", label: "By day" }]} />}
+            >
+              <TokenBars series={tv.series} bucket={tv.bucket} />
               <SimpleTable
                 columns={[
-                  { key: "label", label: v.bucket === "day" ? "Day" : "Month", sortValue: (r) => r.key },
+                  { key: "label", label: tv.bucket === "day" ? "Day" : "Month", sortValue: (r) => r.key },
                   { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
                   { key: "tagged", label: "Accounts", num: true, render: (r) => tok(r.tagged) },
                   { key: "none", label: "No account", num: true, render: (r) => tok(r.none) },
                   { key: "total", label: "Total tokens", num: true, render: (r) => tok(r.total) },
                 ]}
-                rows={v.series.map((b) => ({ ...b, total: b.tagged + b.none, label: v.bucket === "day" ? b.key : monthName(b.key, { long: true }) })).reverse()}
+                rows={tv.series.map((b) => ({ ...b, total: b.tagged + b.none, label: tv.bucket === "day" ? b.key : monthName(b.key, { long: true }) })).reverse()}
                 max={62}
               />
             </Card>

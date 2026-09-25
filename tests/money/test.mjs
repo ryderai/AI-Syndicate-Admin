@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import {
   presetRange, previousRange, rangeToInstants, monthsIn, daysIn, bucketFor, rangeLabel,
-  normalizeRange, teamMidnightUtcMs, dayCount,
+  normalizeRange, teamMidnightUtcMs, dayCount, monthRange, pickableMonths, rangeMonth,
 } from "../../lib/money-range.js";
 import { financeView, expenseInRange, aiDept, changeVs } from "../../lib/money-view.js";
 import { departmentFor } from "../../api/finance-summary.js";
@@ -67,6 +67,19 @@ test("a bad or future range cannot blank the page", () => {
   assert.deepEqual(normalizeRange({ from: "2026-09-30", to: "2026-09-10" }, TODAY), { from: "2026-09-10", to: TODAY });
   assert.deepEqual(normalizeRange({ from: "2026-12-01", to: "2026-12-05" }, TODAY), { from: TODAY, to: TODAY });
   assert.deepEqual(normalizeRange({ from: "2026-02-30", to: "2026-03-01" }, TODAY), { from: "2026-09-01", to: TODAY });
+});
+
+test("a month chip: this month runs to today, an older month is the whole month", () => {
+  assert.deepEqual(monthRange("2026-09", TODAY), { from: "2026-09-01", to: TODAY });
+  assert.deepEqual(monthRange("2026-06", TODAY), { from: "2026-06-01", to: "2026-06-30" });
+  assert.deepEqual(monthRange("2026-02", TODAY), { from: "2026-02-01", to: "2026-02-28" });
+  assert.equal(rangeMonth(monthRange("2026-06", TODAY), TODAY), "2026-06");
+  assert.equal(rangeMonth({ from: "2026-06-01", to: "2026-06-15" }, TODAY), null, "half a month is not a month chip");
+});
+test("the picker offers months from the first payment to now", () => {
+  assert.deepEqual(pickableMonths(TODAY, "2026-06-25"), ["2026-06", "2026-07", "2026-08", "2026-09"]);
+  assert.equal(pickableMonths(TODAY).length, 12, "no first date = the last 12");
+  assert.equal(pickableMonths(TODAY, "2020-01-01").length, 24, "never more than 24");
 });
 
 /* ---------------- which side ---------------- */

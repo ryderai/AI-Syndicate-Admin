@@ -66,11 +66,13 @@ function toForm(row) {
   };
 }
 
-export default function ExpensesPanel({ member, rows, sample, clients, onChanged }) {
+export default function ExpensesPanel({ member, rows, sample, clients, onChanged, initialMonth = null }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(BLANK);
   const [saving, setSaving] = useState(false);
-  const [month, setMonth] = useState(monthKey(new Date()));
+  /* Starts on the month picked at the top of Finance (24 Sep 2026), so the
+   * cost list and the numbers above it are about the same month. */
+  const [month, setMonth] = useState(initialMonth || monthKey(new Date()));
   const [confirmId, setConfirmId] = useState(null);
 
   const monthOptions = useMemo(

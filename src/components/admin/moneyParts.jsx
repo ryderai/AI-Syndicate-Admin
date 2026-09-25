@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
-import { PRESETS, presetRange, rangeLabel, normalizeRange, monthName } from "../../../lib/money-range.js";
+import {
+  PRESETS, presetRange, rangeLabel, normalizeRange, monthName, monthRange, pickableMonths, rangeMonth, addMonths,
+} from "../../../lib/money-range.js";
 
 /* Pieces the Finance and AI Cost pages share — 24 Sep 2026.
  *
@@ -44,10 +46,23 @@ export function pctText(f, digits = 0) {
 /* The date range: presets in one row, "Custom" opens two date boxes.   */
 /* ------------------------------------------------------------------ */
 
+/* THE PERIOD PICKER — months first. Ryder, 24 Sep 2026: "i want to filter
+ * the finance page by month to, so i can click back three months to like may
+ * or june." One chip per month (oldest on the left, this month on the right,
+ * ‹ › to step one month), then the longer periods and Custom underneath. */
 export function RangePicker({ range, preset, onChange, today, earliest }) {
   const [custom, setCustom] = useState(false);
   const [from, setFrom] = useState(range.from);
   const [to, setTo] = useState(range.to);
+  const months = pickableMonths(today, earliest);
+  const current = rangeMonth(range, today);
+  const pickMonth = (ym) => { setCustom(false); onChange(monthRange(ym, today), `m:${ym}`); };
+  const step = (n) => {
+    const base = current || range.to.slice(0, 7);
+    const next = addMonths(base, n);
+    if (next < months[0] || next > months[months.length - 1]) return;
+    pickMonth(next);
+  };
   const pick = (id) => {
     setCustom(false);
     onChange(presetRange(id, today, { earliest }), id);
@@ -57,24 +72,41 @@ export function RangePicker({ range, preset, onChange, today, earliest }) {
     setFrom(r.from); setTo(r.to);
     onChange(r, "custom");
   };
+  const first = months[0];
+  const last = months[months.length - 1];
   return (
     <div className="mny-range">
-      <div className="mny-range-row" role="group" aria-label="Time period">
+      <div className="mny-months" role="group" aria-label="Pick a month">
+        <button type="button" className="mny-step" aria-label="Previous month" onClick={() => step(-1)} disabled={current === first}>‹</button>
+        <div className="mny-month-row">
+          {months.map((ym) => (
+            <button
+              key={ym}
+              type="button"
+              className={`mny-chip${current === ym ? " on" : ""}`}
+              aria-pressed={current === ym}
+              onClick={() => pickMonth(ym)}
+            >{ym === today.slice(0, 7) ? `${monthName(ym)} · so far` : monthName(ym)}</button>
+          ))}
+        </div>
+        <button type="button" className="mny-step" aria-label="Next month" onClick={() => step(1)} disabled={current === last || !current}>›</button>
+      </div>
+      <div className="mny-range-row mny-range-more" role="group" aria-label="Longer periods">
         {PRESETS.map((p) => (
           <button
             key={p.id}
             type="button"
-            className={`mny-chip${preset === p.id ? " on" : ""}`}
+            className={`mny-link-chip${preset === p.id ? " on" : ""}`}
             aria-pressed={preset === p.id}
             onClick={() => pick(p.id)}
           >{p.label}</button>
         ))}
         <button
           type="button"
-          className={`mny-chip${preset === "custom" || custom ? " on" : ""}`}
+          className={`mny-link-chip${preset === "custom" || custom ? " on" : ""}`}
           aria-pressed={preset === "custom"}
           onClick={() => { setCustom((c) => !c); setFrom(range.from); setTo(range.to); }}
-        >Custom…</button>
+        >Custom dates…</button>
       </div>
       {custom && (
         <div className="mny-custom">
@@ -147,7 +179,7 @@ function bucketLabel(key, bucket) {
   return `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1]} ${d}`;
 }
 
-export function MoneyChart({ series, bucket, show = "all", height = 240 }) {
+export function MoneyChart({ series, bucket, show = "all", height = 240, highlight = null }) {
   const [hover, setHover] = useState(null);
   const n = series.length;
   const width = 900;
@@ -190,7 +222,7 @@ export function MoneyChart({ series, bucket, show = "all", height = 240 }) {
           const yA = y(aIn);
           const yP = y(aIn + pIn);
           return (
-            <g key={b.key} opacity={hover === null || hover === i ? 1 : 0.45}>
+            <g key={b.key} opacity={hover !== null ? (hover === i ? 1 : 0.45) : (highlight && !highlight.has(b.key) ? 0.35 : 1)}>
               {aIn > 0 && <rect x={x1} y={yA} width={barW} height={Math.max(0, y(0) - yA)} fill={C_AGENCY} rx="2" />}
               {pIn > 0 && <rect x={x1} y={yP} width={barW} height={Math.max(0, yA - yP - (aIn > 0 ? gap : 0))} fill={C_PLATFORM} rx="2" />}
               {outOf(b) > 0 && <rect x={x2} y={y(outOf(b))} width={barW} height={Math.max(0, y(0) - y(outOf(b)))} fill={C_OUT} rx="2" />}
