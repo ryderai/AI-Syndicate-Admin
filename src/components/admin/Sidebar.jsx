@@ -64,7 +64,6 @@ const SECTIONS = [
    * a job you sit down and do rather than something you glance at. */
   { group: "Command", roles: ["owner", "admin"], items: [
     ["overview", "Overview"],
-    ["finance", "Finance", [["invoices", "Invoices"], ["ai-cost", "AI Cost"]]],
     ["clients", "Clients"],
     /* HOME SERVICES — 14 Sep 2026. Under Command, next to Clients, because it
      * answers a Command question: which of the six landing pages is worth
@@ -82,6 +81,19 @@ const SECTIONS = [
      * is the same kind of page: a public tool on the website and what it
      * brought in. */
     ["calculator", "AI Calculator"],
+  ]},
+  /* MONEY IS OWNERS ONLY — Ryder, 24 Sep 2026: "gate the finances page …
+   * only to owner. and so only me andrew and cj should be owners and have
+   * access. julia and cameron cannot see this."
+   *
+   * Finance used to sit inside Command, which admins can open. It is its own
+   * group now so the role list on the GROUP is the gate — pageIdsForRole below
+   * builds every allowed page id from these lists, so an admin who pastes
+   * #/dashboard/finance lands on their own landing page instead. The server
+   * says no as well: the money endpoints call requireMember(req, ["owner"]),
+   * and migration 0041 makes the money tables owner-only in the database. */
+  { group: "Money", roles: ["owner"], items: [
+    ["finance", "Finance", [["invoices", "Invoices"], ["ai-cost", "AI Cost"]]],
   ]},
   /* WORK AND OPERATIONS SIT TOGETHER — Ryder, 2 Sep 2026: "make work and
    * operations right next to each other, they both do a very similar task and

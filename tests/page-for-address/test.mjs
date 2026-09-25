@@ -130,5 +130,14 @@ for (const [role, map] of Object.entries(SPLIT_FOR_ROLE)) {
   }
 }
 
+/* MONEY IS OWNERS ONLY — 24 Sep 2026. An admin (Julia) or a rep (Cameron)
+ * who pastes a money address lands on their own landing page, not the page. */
+for (const id of ["finance", "invoices", "ai-cost"]) {
+  ok(`owner can open ${id}`, OWNER.allowedIds.includes(id));
+  ok(`admin cannot open ${id}`, !ADMIN.allowedIds.includes(id));
+  ok(`rep cannot open ${id}`, !REP.allowedIds.includes(id));
+  ok(`admin pasting /dashboard/${id} lands elsewhere`, at(ADMIN, `/dashboard/${id}`).section !== id);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

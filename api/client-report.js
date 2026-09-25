@@ -77,6 +77,7 @@ export default async function handler(req, res) {
   const shape = String(body?.shape || "").trim().slice(0, MAX_SHAPE_CHARS);
 
   const admin = getAdminSupabase();
+  const isOwner = member.membership?.role === "owner";
 
   const { data: client, error: clientErr } = await admin
     .from("admin_clients").select("*").eq("id", clientId).maybeSingle();
@@ -97,7 +98,11 @@ export default async function handler(req, res) {
     admin.from("admin_tasks").select("*").eq("client_id", clientId).order("updated_at", { ascending: false }).limit(CAPS.tasks),
     admin.from("admin_weekly_log").select("*").eq("client_id", clientId).order("week_no", { ascending: false }).limit(CAPS.weekly),
     admin.from("admin_client_sites").select("*").eq("client_id", clientId).order("sort", { ascending: true }).limit(CAPS.sites),
-    admin.from("admin_invoices").select("id, number, status, issue_date, due_date, total_cents, amount_paid_cents, paid_at").eq("client_id", clientId).order("issue_date", { ascending: false }).limit(CAPS.invoices),
+    /* MONEY IS OWNERS ONLY — 24 Sep 2026. The service key skips row-level
+     * security, so this role check IS the lock for an admin's report. */
+    isOwner
+      ? admin.from("admin_invoices").select("id, number, status, issue_date, due_date, total_cents, amount_paid_cents, paid_at").eq("client_id", clientId).order("issue_date", { ascending: false }).limit(CAPS.invoices)
+      : Promise.resolve({ data: [], error: null }),
     admin.from("admin_notes").select("id, title, body, created_at, updated_at, link_type, link_id").eq("link_type", "client").eq("link_id", clientId).order("updated_at", { ascending: false }).limit(CAPS.notes),
     admin.from("admin_platform_accounts").select("id, active").eq("client_id", clientId).limit(CAPS.accounts),
     /* Note the columns: id and secret_set_at. Not the label, not the username.
@@ -207,6 +212,7 @@ export default async function handler(req, res) {
     sites: sites.data || [],
     reminders: [...reminders, ...(clientReminders || [])],
     invoices: invoices.data || [],
+    moneyHidden: !isOwner,
     tickets: clientTickets,
     notes: notes.data || [],
     platformAccounts: accounts.data || [],

@@ -85,7 +85,13 @@ export default async function handler(req, res) {
   /* ---- read everything ---- */
   let snap;
   try {
-    snap = await loadSystemContext(admin, { role, userId: member.membership?.user_id || null });
+    /* Stored console reports are read by every owner AND admin
+     * (admin_console_reports_read = admin_is_admin()), and money is owners
+     * only since 24 Sep 2026. So a report is always read with the ADMIN scope
+     * — everything but money — whoever presses the button. Owners have the
+     * Finance page for money. */
+    const scopeRole = role === "owner" ? "admin" : role;
+    snap = await loadSystemContext(admin, { role: scopeRole, userId: member.membership?.user_id || null });
   } catch (err) {
     return res.status(500).json({ error: `Could not read the console: ${err?.message || "unknown error"}` });
   }

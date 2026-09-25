@@ -1069,7 +1069,11 @@ test("the owner's Sales group is one entry that opens to Sales and Stats", () =>
   assert.ok(!owner.includes("floor"), "the Floor is a rep's page, not the owner's");
   assert.ok(!owner.includes("gmail"), "the owner has the shared Inbox, not a rep's own mailbox page");
   assert.ok(owner.includes("work"), "Work is still the owner's page");
-  assert.deepEqual(pageIdsFor("owner"), pageIdsFor("admin"), "admin and owner are still the same menu");
+  /* Since 24 Sep 2026 the ONLY difference is money: Finance, Invoices and AI
+   * Cost are owners only. Everything else is still the same menu. */
+  const MONEY = ["finance", "invoices", "ai-cost"];
+  assert.deepEqual(pageIdsFor("owner").filter((id) => !MONEY.includes(id)), pageIdsFor("admin"), "admin = owner minus money");
+  for (const id of MONEY) assert.ok(!pageIdsFor("admin").includes(id), `${id} is owners only`);
   const salesGroup = groupsFor("owner").filter((g) => g.group === "Sales");
   assert.equal(salesGroup.length, 1, "an owner must see exactly one Sales group");
   assert.deepEqual(salesGroup[0].items, [["sales", "Sales", [["sales-stats", "Stats"]]]]);

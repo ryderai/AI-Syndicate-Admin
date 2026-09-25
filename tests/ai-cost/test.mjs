@@ -708,41 +708,18 @@ ok("an empty window still has every bucket, at zero",
  * survived: `capped` was in STATUSES from day one and appeared nowhere on
  * screen. These read the built page's source. */
 const aiCostPage = read("src/components/admin/AiCost.jsx");
-ok("the page reads the capped bucket", /calc\.total\.capped/.test(aiCostPage));
-ok("the page reads the rejected bucket", /calc\.total\.rejected/.test(aiCostPage));
-/* NOT just `/r\.capped/`. That string also appears in the SORTS array, so a
- * checker deleted the entire Capped column — header and cell — and the suite
- * stayed green. Match the CELL, in the shape the table actually writes it. */
-ok("the table has its own rate-limit column, header and cell",
-  /<th[^>]*>Capped<\/th>/.test(aiCostPage) && /<td className=\{`n \$\{r\.capped \?/.test(aiCostPage));
-ok("the table has its own thrown-away column, header and cell",
-  /<th[^>]*>Thrown away<\/th>/.test(aiCostPage) && /<td className=\{`n \$\{r\.rejected \?/.test(aiCostPage));
-/* The three outcome columns and the three header cells must stay in step: a
- * header added without a cell shifts every column right of it by one, silently,
- * and the numbers under "Cost" become the numbers under "Share". */
-eq("one header cell per outcome column",
-  (aiCostPage.match(/<th className="n" title="The call errored|<th className="n" title="The call stopped at a ceiling|<th className="n" title="The AI answered and we threw/g) || []).length, 3);
+/* REBUILT 24 SEP 2026 (Ryder: "make it all simpler and make the important
+ * stuff stand out"). The per-status columns (capped / thrown away) went with
+ * the old page; the maths above still counts every status. What the new page
+ * must never lose: */
+ok("the new page reads grouped rows from the server, not raw rows in the browser",
+  /getAiCost\(/.test(aiCostPage) && !/listUsage\(/.test(aiCostPage));
+ok("the page is owners only", /member\?\.role !== "owner"/.test(aiCostPage));
+ok("unpriced calls are said out loud, never added as $0",
+  /no price in our\s+price book|no price/.test(aiCostPage));
 ok("no sentence on the page calls a rate limit a failure",
   !/calls failed before the AI reported anything/.test(aiCostPage));
-
-/* ⭐ THE CORRECTION A CHECKER FORCED, AND THE ASSERTION THAT LOCKS IT IN.
- *
- * The first version of this file asserted that the capped figure said
- * "nothing was generated and nothing was billed". That is true of a provider
- * rate limit and FALSE of the other thing that lands in `capped`: lib/ai-agent.js
- * sets cappedOut when the agent runs out of rounds, and api/ai-chat.js,
- * api/console-report.js and api/rep-report.js all record that as `capped` WITH
- * the usage it accrued. Those are among the most expensive calls we make. So a
- * money screen was about to declare their spend to be zero — a worse defect
- * than the mislabelling it replaced — and a test was holding the false sentence
- * in place. The assertion is inverted on purpose: the page must NOT claim
- * either billing outcome for the whole bucket. */
-ok("the capped figure does NOT claim the whole bucket was unbilled",
-  !/nothing was generated and nothing was billed\.<\/|means="[^"]*nothing was generated and nothing was billed[^"]*"/.test(aiCostPage));
-ok("...and it names BOTH caps, because they bill differently",
-  /running out of steps/i.test(aiCostPage) && /rate limit/i.test(aiCostPage));
-ok("...and it points the reader at the Cost column rather than guessing",
-  /Cost column/i.test(aiCostPage));
+ok("credits are shown per account", /Credits used/.test(aiCostPage));
 ok("lib/ai-cost.js records that `capped` has two causes",
   /cappedOut/.test(read("lib/ai-cost.js")));
 
@@ -751,10 +728,6 @@ ok("lib/ai-cost.js records that `capped` has two causes",
  * true for one window on 7 Sep 2026 and false the moment Mistral's quota is
  * raised — and it also mis-described the successful-but-unmeasured platform
  * rows (SerpApi) that make up most of `tokensUnknown`. */
-ok("the blind-calls warning computes its breakdown instead of asserting one",
-  /blindBy/.test(aiCostPage) && !/most common reason/i.test(aiCostPage));
-ok("...and it counts the successful-but-unmeasured rows as their own bucket",
-  /succeeded and were never measured/.test(aiCostPage));
 ok("the per-report waste column no longer calls its superset 'rejects'",
   !/Spent on rejects/.test(aiCostPage));
 
@@ -832,7 +805,7 @@ eq("...and no call is lost either",
 
 /* The page has to actually offer the view. The grouping existing and no tab
  * rendering it is the exact shape of the defect this closes. */
-ok("the page offers the By job tab", /"job"/.test(aiCostPage) && /TABS = \["job"/.test(aiCostPage));
+ok("the page offers the By job view", /id: "jobs", label: "By job"/.test(aiCostPage));
 ok("...and the grouping is exported for it to use", /^\s*job: \{/m.test(costLib));
 
 

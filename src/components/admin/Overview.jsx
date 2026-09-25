@@ -15,6 +15,7 @@ import {
  * a call. Their rule, one place. */
 import { salesQueue, isOpenStage } from "../../../lib/sales-rules.js";
 import { listInvoices } from "../../lib/finance.js";
+import { getAiCost } from "../../lib/moneyApi.js";
 import { invoiceOutstandingCents } from "../../../lib/finance-math.js";
 import { teamDate } from "../../../lib/brain-context.js";
 import { summarize, eventMonth, pricedCost } from "../../../lib/ai-cost.js";
@@ -46,6 +47,22 @@ import ConsoleReportsPanel, { useConsoleReports } from "./consoleReports.jsx";
  */
 
 /** Never lets a sentence read "1 things". */
+/* AI spend for this calendar month, from the grouped server read. Preview
+ * mode keeps the old sample rows. */
+async function aiMonthAsUsage() {
+  if (!isConfigured()) return listUsage(40);
+  const today = teamDate(Date.now());
+  const res = await getAiCost({ from: `${today.slice(0, 7)}-01`, to: today });
+  if (!res.ok) return { rows: [], error: res.error };
+  const month = { calls: 0, pricedCalls: 0, costMicros: 0 };
+  for (const g of res.data.rows || []) {
+    month.calls += g.calls || 0;
+    month.pricedCalls += g.priced_calls || 0;
+    month.costMicros += g.cost_micros || 0;
+  }
+  return { rows: [], month };
+}
+
 function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`;
 }
@@ -139,6 +156,10 @@ const NOTE_TONE = {
 
 export default function Overview({ member, setSection }) {
   const userId = member?.user_id || null;
+  /* MONEY IS OWNERS ONLY — 24 Sep 2026. An admin's Overview skips the three
+   * money reads entirely (Stripe, invoices, AI spend) and draws no money
+   * strip. Not fetched, so nothing to leak. */
+  const isOwner = member?.role === "owner";
   const go = typeof setSection === "function" ? setSection : () => {};
 
   const [data, setData] = useState(null);
@@ -185,9 +206,13 @@ export default function Overview({ member, setSection }) {
           // 90 days, the same window getSalesBoard() reads, so a cadence step
           // cannot be counted here and missed there.
           listAllLeadActivity(90),
-          listUsage(40),
+          /* AI spend this month, GROUPED on the server — not 40 days of raw
+           * rows in the browser (51,230 of them on 24 Sep 2026, which is most
+           * of why this page was slow). Shaped like listUsage's reply so the
+           * maths below did not have to change. */
+          isOwner ? aiMonthAsUsage() : Promise.resolve({ rows: [], skipped: true }),
           listActivity(8),
-          listInvoices(),
+          isOwner ? listInvoices() : Promise.resolve({ rows: [], skipped: true }),
         ]);
 
       /* Stripe is the only server call. It is skipped in preview mode, because
@@ -197,6 +222,8 @@ export default function Overview({ member, setSection }) {
       let stripe = stripeRef.current;
       if (!isConfigured()) {
         stripe = { state: "preview", data: null };
+      } else if (!isOwner) {
+        stripe = { state: "skipped", data: null };
       } else if (withStripe || stripe.state === "unread") {
         const res = await apiFetch("/api/stripe-metrics");
         if (res.ok && res.data?.configured) stripe = { state: "live", data: res.data, at: Date.now() };
@@ -215,7 +242,7 @@ export default function Overview({ member, setSection }) {
       if (seq !== loadSeq.current) return;
       setLoadError(err?.message || String(err));
     }
-  }, [userId]);
+  }, [userId, isOwner]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -367,10 +394,19 @@ export default function Overview({ member, setSection }) {
      * lib/ai-cost.js now — the same code Finance and the AI Cost page use, so
      * the three cannot disagree. NULL means nothing this month could be priced,
      * which is a different sentence from zero and is given one below. */
-    const aiThisMonth = summarize(usageRows.filter((r) => eventMonth(r) === thisMonth));
-    const aiPricedMicros = pricedCost(aiThisMonth);
-    const aiSpendMonth = aiPricedMicros === null ? null : aiPricedMicros / 1000000;
-    const aiUnpricedCalls = aiThisMonth.unpricedCalls;
+    /* Since 24 Sep 2026 the owner's figure comes pre-grouped from
+     * /api/ai-cost (usage.month). Raw rows are only the preview-mode path. */
+    let aiSpendMonth;
+    let aiUnpricedCalls;
+    if (usage.month) {
+      aiSpendMonth = usage.month.pricedCalls ? usage.month.costMicros / 1000000 : null;
+      aiUnpricedCalls = usage.month.calls - usage.month.pricedCalls;
+    } else {
+      const aiThisMonth = summarize(usageRows.filter((r) => eventMonth(r) === thisMonth));
+      const aiPricedMicros = pricedCost(aiThisMonth);
+      aiSpendMonth = aiPricedMicros === null ? null : aiPricedMicros / 1000000;
+      aiUnpricedCalls = aiThisMonth.unpricedCalls;
+    }
 
     // --- the one sentence at the top ---
     const bits = [];
@@ -418,7 +454,7 @@ export default function Overview({ member, setSection }) {
         aiUnpricedCalls,
         invoiceSample: Boolean(invoices.sample),
         usageSample: Boolean(usage.sample),
-        noUsageYet: usageRows.length === 0,
+        noUsageYet: usage.month ? usage.month.calls === 0 : usageRows.length === 0,
       },
       bits,
     };
@@ -810,7 +846,8 @@ export default function Overview({ member, setSection }) {
       )}
 
 
-      {/* ---------------- MONEY, ONE LINE ---------------- */}
+      {/* ---------------- MONEY, ONE LINE (owners only) ---------------- */}
+      {isOwner && (
       <div className="card" style={{ padding: "16px 20px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
@@ -867,6 +904,7 @@ export default function Overview({ member, setSection }) {
           </div>
         </div>
       </div>
+      )}
 
       {/* ---------------- WHAT CHANGED ---------------- */}
       <div className="card" style={{ padding: 0, overflow: "hidden" }}>

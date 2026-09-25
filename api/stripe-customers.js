@@ -68,6 +68,14 @@ export default async function handler(req, res) {
       }
     }
 
+    /* MONEY IS OWNERS ONLY — 24 Sep 2026. An admin still sees WHO pays for the
+     * platform (the Clients list needs the names), but not how much. */
+    if (member.membership.role !== "owner") {
+      for (const c of customers) {
+        c.delinquent = null;
+        if (c.subscription) { c.subscription.mrrCents = null; c.subscription.plan = null; }
+      }
+    }
     res.setHeader("Cache-Control", "private, no-store");
     return res.status(200).json({ configured: true, customers, fetchedAt: new Date().toISOString() });
   } catch (err) {

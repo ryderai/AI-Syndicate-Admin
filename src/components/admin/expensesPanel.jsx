@@ -31,7 +31,16 @@ const BLANK = {
   counts_toward_cac: false,
   notes: "",
   receipt_url: "",
+  department: "",
 };
+
+/* Which side of the business a cost is for — 24 Sep 2026. Blank = shared:
+ * it counts in the company total and on neither side alone. */
+const DEPARTMENTS = [
+  ["", "Both / shared (rent, tools both sides use)"],
+  ["platform", "Platform — the software"],
+  ["agency", "Agency — client implementation"],
+];
 
 const INTERVALS = [
   ["monthly", "Every month"],
@@ -53,6 +62,7 @@ function toForm(row) {
     counts_toward_cac: Boolean(row.counts_toward_cac),
     notes: row.notes || "",
     receipt_url: row.receipt_url || "",
+    department: row.department || "",
   };
 }
 
@@ -91,7 +101,7 @@ export default function ExpensesPanel({ member, rows, sample, clients, onChanged
     if (!form.incurred_on) { toast.error("When was it paid?", "Pick a date."); return; }
     if (form.ended_on && form.ended_on < form.incurred_on) { toast.error("Those dates are backwards", "The end date has to come after the start date."); return; }
     setSaving(true);
-    const res = await upsertExpense({
+    const payload = {
       ...(form.id ? { id: form.id } : {}),
       incurred_on: form.incurred_on,
       ended_on: form.ended_on || null,
@@ -104,7 +114,16 @@ export default function ExpensesPanel({ member, rows, sample, clients, onChanged
       counts_toward_cac: form.counts_toward_cac,
       notes: form.notes.trim() || null,
       receipt_url: form.receipt_url.trim() || null,
-    });
+      department: form.department || null,
+    };
+    let res = await upsertExpense(payload);
+    /* Until migration 0041 has run there is no department column. Save the
+     * cost anyway and say the side was not kept, rather than losing the cost. */
+    if (!res.ok && /department/i.test(res.error || "")) {
+      const { department: _dropped, ...rest } = payload;
+      res = await upsertExpense(rest);
+      if (res.ok) toast.warn("Saved without its side", "Run migration 0041 so costs can be marked Platform or Agency.");
+    }
     setSaving(false);
     if (!res.ok) { toast.error("Not saved", res.error); return; }
     setOpen(false);
@@ -148,7 +167,7 @@ export default function ExpensesPanel({ member, rows, sample, clients, onChanged
           <table className="adm-table">
             <thead>
               <tr>
-                <th>What</th><th>Category</th><th>How often</th><th>Started</th>
+                <th>What</th><th>Side</th><th>Category</th><th>How often</th><th>Started</th>
                 <th style={{ textAlign: "right" }}>Amount</th><th></th>
               </tr>
             </thead>
@@ -165,6 +184,7 @@ export default function ExpensesPanel({ member, rows, sample, clients, onChanged
                       </span>
                     )}
                   </td>
+                  <td>{r.department === "platform" ? "Platform" : r.department === "agency" ? "Agency" : "Shared"}</td>
                   <td>{r.category}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     {r.interval === "monthly" ? "Every month" : r.interval === "yearly" ? "Once a year" : "Once"}
@@ -231,6 +251,10 @@ export default function ExpensesPanel({ member, rows, sample, clients, onChanged
             <TextInput type="date" value={form.ended_on} onChange={(e) => set("ended_on", e.target.value)} disabled={form.interval === "one_time"} />
           </Field>
         </div>
+
+        <Field label="Which side is it for?" hint="Platform and Agency each get their own profit line. Shared costs count in the total only.">
+          <Select value={form.department} onChange={(e) => set("department", e.target.value)} options={DEPARTMENTS} />
+        </Field>
 
         <Field label="What it was for">
           <TextInput value={form.description} onChange={(e) => set("description", e.target.value)} placeholder="Claude API — scans, drafts, reports" />

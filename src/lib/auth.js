@@ -84,6 +84,8 @@ function initSharedAuth() {
   supabase.auth.onAuthStateChange((_event, session) => {
     clearTimeout(fallback);
     const u = session?.user ?? null;
+    /* A different person (or nobody) now: drop the last person's money. */
+    if ((sharedAuth.state.user?.id || null) !== (u?.id || null) && sharedAuth.state.user) clearMoneyStorage();
 
     /* THE SAME PERSON IS STILL THE SAME PERSON — 2 Sep 2026.
      *
@@ -179,7 +181,18 @@ export async function updatePassword(newPassword) {
   return { ok: true };
 }
 
+/* The money pages keep their last answer in this tab (src/lib/moneyApi.js).
+ * Signing out wipes it, so the next person on this tab — an admin, say — can
+ * never read an owner's figures out of storage. 24 Sep 2026. Inline rather
+ * than imported: moneyApi imports adminApi, which imports this file. */
+export function clearMoneyStorage() {
+  try {
+    for (const k of Object.keys(sessionStorage)) if (k.startsWith("ais-money-v1:")) sessionStorage.removeItem(k);
+  } catch { /* storage blocked — nothing stored either */ }
+}
+
 export async function signOut() {
+  clearMoneyStorage();
   const supabase = getSupabase();
   if (!supabase) return { ok: true };
   const { error } = await supabase.auth.signOut();

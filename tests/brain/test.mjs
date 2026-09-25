@@ -126,8 +126,11 @@ test("an unknown role falls back to the narrowest scope, not the widest", () => 
   assert.deepEqual(scopeFor(null), scopeFor("sales"));
 });
 
-test("owner and admin see the same things", () => {
-  assert.deepEqual(scopeFor("owner"), scopeFor("admin"));
+test("an admin sees everything an owner does EXCEPT money (24 Sep 2026)", () => {
+  assert.deepEqual(scopeFor("owner").filter((p) => p !== "money"), scopeFor("admin"));
+  assert.equal(canSee("owner", "money"), true);
+  assert.equal(canSee("admin", "money"), false);
+  assert.equal(canSee("sales", "money"), false);
 });
 
 test("canSee agrees with scopeFor", () => {

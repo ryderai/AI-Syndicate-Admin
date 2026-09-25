@@ -40,7 +40,8 @@ export default async function handler(req, res) {
     res.setHeader("Allow", "GET");
     return res.status(405).json({ error: "Method not allowed." });
   }
-  const member = await requireMember(req, ["owner", "admin"]);
+  /* OWNERS ONLY since 24 Sep 2026 (Ryder: only him, Andrew and CJ see money). */
+  const member = await requireMember(req, ["owner"]);
   if (!member) return res.status(401).json({ error: "Not authorized." });
   if (!isStripeConfigured()) return res.status(200).json({ configured: false });
 
