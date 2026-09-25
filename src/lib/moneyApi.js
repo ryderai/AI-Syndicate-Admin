@@ -52,3 +52,10 @@ export function getAiCost(range, opts = {}) {
   const q = `from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`;
   return cachedRead(`ai:${range.from}:${range.to}`, `/api/ai-cost?${q}`, opts);
 }
+
+/* One account's closer look (api/ai-account.js). Not kept in sessionStorage:
+ * it is read on demand, and the server keeps it for a minute. 25 Sep 2026. */
+export function getAiAccount(workspaceId, range, { refresh = false } = {}) {
+  const q = `workspace=${encodeURIComponent(workspaceId)}&from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}${refresh ? "&refresh=1" : ""}`;
+  return apiFetch(`/api/ai-account?${q}`);
+}

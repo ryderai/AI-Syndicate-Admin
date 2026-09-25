@@ -4908,3 +4908,5 @@ select.adm-mtg-in { padding-right: 4px; }
 .mny-pill-bad { background: #fee2e2; color: #b42318; }
 .mny-plain-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.6; }
 .mny-nowrap { white-space: nowrap; }
+.mny-closer { border: 1px solid var(--rule); background: var(--bg-1, #fff); border-radius: 12px; padding: 12px 16px 14px; margin: 6px 0 14px; }
+.mny-closer > .mny-mini-head:first-child { margin-top: 0; color: #4f46e5; }

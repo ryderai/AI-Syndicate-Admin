@@ -370,5 +370,51 @@ test("without a clock nothing is called still happening", () => {
   assert.equal(aiCostView(pd, SEP).problems.every((p) => !p.live), true);
 });
 
+/* Look closer, 25 Sep 2026 */
+const { sessionsOf, accountDetailView } = await import("../../lib/ai-account-view.js");
+const { cleanDetail } = await import("../../api/ai-account.js");
+const hrs = [
+  { hour: "2026-09-22T22", job: "pagefix.generate", calls: 100, ok: 90, failed: 10, sent: 9000, written: 1000 },
+  { hour: "2026-09-22T23", job: "pagefix.generate", calls: 200, ok: 100, failed: 100, sent: 18000, written: 2000 },
+  { hour: "2026-09-23T01", job: "audit.domain", calls: 50, ok: 50, failed: 0, sent: 500, written: 0 }, // one quiet hour: same session
+  { hour: "2026-09-23T08", job: "pagefix.generate", calls: 10, ok: 10, failed: 0, sent: 900, written: 100 }, // new session
+];
+test("busy hours join into work sessions; one quiet hour keeps a session going, more splits it", () => {
+  const ss = sessionsOf(hrs);
+  assert.equal(ss.length, 2);
+  assert.equal(ss[0].start, "2026-09-22T22");
+  assert.equal(ss[0].end, "2026-09-23T02");
+  assert.equal(ss[0].hours, 4);
+  assert.equal(ss[0].calls, 350);
+  assert.equal(ss[0].failed, 110);
+  assert.equal(ss[0].mainJob, "pagefix.generate");
+  assert.equal(ss[0].peakHour, "2026-09-22T23");
+  assert.equal(ss[1].start, "2026-09-23T08");
+});
+test("a session crossing midnight and the month edge keeps counting hours right", () => {
+  const ss = sessionsOf([{ hour: "2026-09-30T23", job: "x", calls: 1, ok: 1, failed: 0, sent: 1, written: 0 }, { hour: "2026-10-01T00", job: "x", calls: 1, ok: 1, failed: 0, sent: 1, written: 0 }]);
+  assert.equal(ss.length, 1);
+  assert.equal(ss[0].end, "2026-10-01T01");
+});
+test("websites, sent vs written, and credits by how they started", () => {
+  const dv2 = accountDetailView(cleanDetail({
+    hours: hrs.map((h) => ({ ...h, calls: String(h.calls) })),
+    sites: [{ domain: "acme.com", audits: "2", fixed_pages: "50" }, { domain: "b.com", audits: 1, fixed_pages: 0 }],
+    credits: [{ feature: "pageFixes.page", source: "manual", charges: "2", units: "13" }, { feature: "brand.probe", source: "cron", charges: 1, units: 1 }],
+  }));
+  assert.equal(dv2.total.calls, 360, "strings from Postgres become numbers");
+  assert.deepEqual(dv2.siteTotals, { sites: 2, audits: 3, fixedPages: 50, sitesWithFixes: 1 });
+  assert.equal(dv2.sentWritten[0].job, "pagefix.generate");
+  assert.equal(dv2.sentWritten[0].sent, 27900);
+  assert.equal(dv2.sentWritten[0].written, 3100);
+  assert.deepEqual(dv2.creditsBy, { manual: 13, scheduled: 1, other: 0 });
+  assert.ok(dv2.biggestShare > 0.9);
+});
+test("an empty account reads as empty, not broken", () => {
+  const e = accountDetailView(cleanDetail(null));
+  assert.equal(e.sessions.length, 0);
+  assert.equal(e.biggest, null);
+});
+
 console.log(`\n${pass} passed, ${fail} failed (TZ=${process.env.TZ || "unset"})`);
 process.exit(fail ? 1 : 0);

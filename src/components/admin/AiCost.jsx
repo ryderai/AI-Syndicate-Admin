@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useScreenContext } from "../../lib/screenContext.js";
 import { isConfigured } from "../../lib/supabase.js";
 import { toast } from "../../lib/toast.js";
-import { getAiCost } from "../../lib/moneyApi.js";
+import { getAiCost, getAiAccount } from "../../lib/moneyApi.js";
 import { timeAgo } from "./shared.jsx";
 import {
   RangePicker, Tabs, Stat, SimpleTable, Card, Loading, pctText, C_PLATFORM,
 } from "./moneyParts.jsx";
 import { aiCostView, explain as explain2, NO_ACCOUNT, CONSOLE } from "../../../lib/ai-cost-view.js";
 import { jobInfo, serviceName, OUTCOMES, outcomeOf, reasonLabel } from "../../../lib/ai-job-names.js";
+import { accountDetailView } from "../../../lib/ai-account-view.js";
 import { monthRange, previousRange, rangeLabel, monthName } from "../../../lib/money-range.js";
 import { teamDate } from "../../../lib/brain-context.js";
 
@@ -182,7 +183,7 @@ export default function AiCost({ member }) {
               title={`Who used it · ${rangeLabel(range)}`}
               note={'Each account is a workspace on our platform — a customer\'s, or one of ours. "No account" is the platform\'s free public tools (like the free scan on our website) and our own scheduled jobs. Click any row to see exactly what it was used for.'}
             >
-              <AccountTable v={v} openKey={openKey} setOpenKey={setOpenKey} share={share} />
+              <AccountTable v={v} openKey={openKey} setOpenKey={setOpenKey} share={share} range={range} />
             </Card>
           )}
 
@@ -292,7 +293,7 @@ function daySpan(st) {
 function Story({ a }) {
   const st = a.story;
   const top = jobInfo(st.topJob);
-  const who = a.info.kind === "none" ? "Public tools and our own scheduled jobs" : `${a.info.name}'s account${a.info.domain ? ` (website: ${a.info.domain})` : ""}`;
+  const who = a.info.kind === "none" ? "Public tools and our own scheduled jobs" : `${a.info.name}'s account${a.info.domain ? ` (set up for ${a.info.domain} — see "Look closer" for every website it worked on)` : ""}`;
   return (
     <p className="mny-story">
       {who} used <strong>{tok(a.tokens)} tokens</strong> across <strong>{n(a.calls)} AI requests</strong> {daySpan(st)}
@@ -337,7 +338,7 @@ function tok(x) {
   return Math.round(v).toLocaleString("en-US");
 }
 
-function AccountTable({ v, openKey, setOpenKey, share }) {
+function AccountTable({ v, openKey, setOpenKey, share, range }) {
   const [all, setAll] = useState(false);
   const rows = all ? v.accounts : v.accounts.slice(0, 25);
   if (!v.accounts.length) return <div className="mny-empty">No AI use in this period.</div>;
@@ -397,6 +398,7 @@ function AccountTable({ v, openKey, setOpenKey, share }) {
                         <OutcomeRows t={a} />
                       </div>
                     </div>
+                    {a.info.kind === "workspace" && a.info.workspaceId && <CloserLook a={a} range={range} />}
                     <div className="mny-mini-head">What it was spent on</div>
                     <SimpleTable
                       max={20}
@@ -704,6 +706,135 @@ function ProblemList({ v, detail }) {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/* ---- Look closer: one account's sessions and websites (25 Sep 2026) ----- */
+
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function hourLabel(h, withDay = true) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})$/.exec(h || "");
+  if (!m) return "";
+  const hr = +m[4];
+  const t = hr === 0 ? "midnight" : hr === 12 ? "noon" : hr < 12 ? `${hr} am` : `${hr - 12} pm`;
+  return withDay ? `${MON[+m[2] - 1]} ${+m[3]}, ${t}` : t;
+}
+function sessionWhen(s) {
+  const sameDay = s.start.slice(0, 10) === s.end.slice(0, 10);
+  return `${hourLabel(s.start)} → ${hourLabel(s.end, !sameDay)}`;
+}
+function lengthText(h) { return h < 24 ? `${h} hour${h === 1 ? "" : "s"}` : `${Math.round((h / 24) * 10) / 10} days`; }
+const DATE_CHI = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric" });
+
+function CloserLook({ a, range }) {
+  const [state, setState] = useState({ status: "loading" });
+  const [allSessions, setAllSessions] = useState(false);
+  const [allSites, setAllSites] = useState(false);
+  useEffect(() => {
+    let live = true;
+    getAiAccount(a.info.workspaceId, range).then((res) => {
+      if (!live) return;
+      if (res.ok) setState({ status: "ok", d: accountDetailView(res.data) });
+      else setState({ status: "error", error: res.error, needs: res.status === 501 });
+    });
+    return () => { live = false; };
+  }, [a.info.workspaceId, range]);
+
+  if (state.status === "loading") return <div className="mny-closer"><div className="mny-mini-head">Look closer</div><div className="mny-muted">Reading this account&apos;s hours and websites…</div></div>;
+  if (state.status === "error") {
+    return (
+      <div className="mny-closer">
+        <div className="mny-mini-head">Look closer</div>
+        <div className="mny-muted">{state.needs ? "Sessions and websites appear once database update 0044 is run." : `Could not read this account: ${state.error}`}</div>
+      </div>
+    );
+  }
+  const d = state.d;
+  const b = d.biggest;
+  const st = d.siteTotals;
+  const sessions = allSessions ? d.sessions : d.sessions.slice(0, 8);
+  const sites = allSites ? d.sites : d.sites.slice(0, 12);
+  return (
+    <div className="mny-closer">
+      <div className="mny-mini-head">Look closer</div>
+      <p className="mny-story">
+        {b ? (
+          <>
+            This account&apos;s AI use came in <strong>{n(d.sessions.length)} work session{d.sessions.length === 1 ? "" : "s"}</strong>.
+            {" "}The biggest ran <strong>{sessionWhen(b)}</strong> ({lengthText(b.hours)}): <strong>{n(b.calls)} requests</strong>, {tok(b.tokens)} tokens
+            {d.biggestShare !== null && d.sessions.length > 1 && <> — <strong>{pctText(d.biggestShare)}</strong> of this account&apos;s tokens</>}
+            , mostly <strong>{jobInfo(b.mainJob).name}</strong>.
+            {b.failed > 0 && <> <span className={b.failed / b.calls >= 0.2 ? "mny-bad" : ""}>{n(b.failed)} of its requests didn&apos;t work.</span></>}
+            {" "}Its busiest hour was {hourLabel(b.peakHour)} ({n(b.peakCalls)} requests).
+          </>
+        ) : "No AI requests in this period."}
+        {st.sites > 0 && (
+          <> In this period the account ran <strong>{n(st.audits)} website audit{st.audits === 1 ? "" : "s"}</strong> on <strong>{n(st.sites)} different website{st.sites === 1 ? "" : "s"}</strong>
+            {st.fixedPages > 0 ? <>, and fixes were written for <strong>{n(st.fixedPages)} pages</strong> on <strong>{n(st.sitesWithFixes)}</strong> of them</> : null}.</>
+        )}
+        {d.total.tokens > 0 && (
+          <> Of its tokens, <strong>{tok(d.total.sent)}</strong> were sent to the AI (the page text and instructions) and <strong>{tok(d.total.written)}</strong> were written back by the AI.</>
+        )}
+        {(d.creditsBy.manual > 0 || d.creditsBy.scheduled > 0) && (
+          <> Credits: <strong>{n(d.creditsBy.manual)}</strong> from things a person clicked{d.creditsBy.scheduled > 0 && <>, <strong>{n(d.creditsBy.scheduled)}</strong> from scheduled jobs</>}.</>
+        )}
+        {" "}<span className="mny-muted">The platform doesn&apos;t record which person clicked — this workspace belongs to {a.info.email || a.info.name}.</span>
+      </p>
+
+      {d.sessions.length > 0 && (
+        <>
+          <div className="mny-mini-head">Work sessions (biggest first)</div>
+          <SimpleTable
+            max={50}
+            columns={[
+              { key: "when", label: "When", render: (r) => <span className="mny-nowrap">{sessionWhen(r)}</span>, sortValue: (r) => r.start },
+              { key: "hours", label: "Length", num: true, render: (r) => lengthText(r.hours), sortValue: (r) => r.hours },
+              { key: "calls", label: "Requests", num: true, render: (r) => n(r.calls) },
+              { key: "failed", label: "Didn't work", num: true, render: (r) => (r.failed ? <span className={r.failed / r.calls >= 0.2 ? "mny-bad" : ""}>{n(r.failed)}</span> : "—") },
+              { key: "tokens", label: "Tokens", num: true, render: (r) => (r.tokens ? tok(r.tokens) : "—") },
+              { key: "job", label: "Mostly", render: (r) => <>{jobInfo(r.mainJob).name}{r.jobs.length > 1 && <span className="mny-muted"> +{r.jobs.length - 1} more</span>}</>, sortValue: (r) => jobInfo(r.mainJob).name },
+            ]}
+            rows={sessions.map((x) => ({ ...x, key: x.start }))}
+            initialSort={{ key: "tokens", dir: "desc" }}
+          />
+          {d.sessions.length > 8 && <button type="button" className="mny-more" onClick={() => setAllSessions((x) => !x)}>{allSessions ? "Show fewer" : `Show all ${d.sessions.length} sessions`}</button>}
+        </>
+      )}
+
+      {d.sites.length > 0 && (
+        <>
+          <div className="mny-mini-head">Websites it worked on</div>
+          <SimpleTable
+            max={1000}
+            columns={[
+              { key: "domain", label: "Website", render: (r) => <strong>{r.domain}</strong> },
+              { key: "audits", label: "Audits", num: true, render: (r) => n(r.audits) },
+              { key: "fixedPages", label: "Pages fixed", num: true, render: (r) => (r.fixedPages ? n(r.fixedPages) : "—") },
+              { key: "lastAt", label: "Last audit", render: (r) => (r.lastAt ? DATE_CHI.format(new Date(r.lastAt)) : "—"), sortValue: (r) => r.lastAt || "" },
+            ]}
+            rows={sites.map((x) => ({ ...x, key: x.domain }))}
+          />
+          {d.sites.length > 12 && <button type="button" className="mny-more" onClick={() => setAllSites((x) => !x)}>{allSites ? "Show fewer" : `Show all ${n(d.sites.length)} websites`}</button>}
+          <div className="mny-note">&quot;Pages fixed&quot; counts pages on that website that got fixes written in this period. The platform stores fixes by page, not by account, so a page another account fixed on the same website would count too.</div>
+        </>
+      )}
+
+      {d.sentWritten.length > 0 && d.total.tokens > 0 && (
+        <>
+          <div className="mny-mini-head">Tokens sent vs written, by job</div>
+          <SimpleTable
+            max={10}
+            columns={[
+              { key: "job", label: "What the AI was doing", render: (r) => jobInfo(r.job).name, sortValue: (r) => jobInfo(r.job).name },
+              { key: "sent", label: "Sent to the AI", num: true, render: (r) => (r.sent ? tok(r.sent) : "—") },
+              { key: "written", label: "Written by the AI", num: true, render: (r) => (r.written ? tok(r.written) : "—") },
+              { key: "ratio", label: "Sent for each 1 written", num: true, render: (r) => (r.written ? `${Math.round(r.sent / r.written)} : 1` : "—"), sortValue: (r) => (r.written ? r.sent / r.written : 0) },
+            ]}
+            rows={d.sentWritten.filter((r) => r.tokens > 0).map((x) => ({ ...x, key: x.job || "none" }))}
+          />
+        </>
+      )}
     </div>
   );
 }

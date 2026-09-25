@@ -51,6 +51,9 @@
     "api/ai-cost.js": {
       "maxDuration": 60
     },
+    "api/ai-account.js": {
+      "maxDuration": 30
+    },
     "api/finance-summary.js": {
       "maxDuration": 30
     },

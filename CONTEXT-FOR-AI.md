@@ -7479,3 +7479,27 @@ Full detail: WORK-LOG/2026-09-25--internal--why-44-percent-of-ai-requests-failed
 - Tests: tests/money 41 checks, tests/money/sql.sh 0043 checks (local Postgres) — all pass.
 - 0043 NOT run on the live database yet: running it from this session was blocked by the safety check, so
   Ryder runs it in the Supabase SQL editor.
+
+## §66. "LOOK CLOSER" ON EACH ACCOUNT · CORRECTION: TROY WAS NOT WORKING ON OUR OWN SITE — Fri 25 Sep 2026 (append-only)
+
+**Correction to §64 and to what Ryder was told earlier on 25 Sep.** Troy's workspace is SET UP for aisyndicate.com,
+but the work was on other people's websites. Measured by us (live read-only queries, 25 Sep):
+- public.audits for workspace e8cae2a5-…-00c2521bfc2c: 1,696 audits on 807 different domains, Aug 18 → Sep 23.
+  By day (Chicago): Aug 18 1, Aug 19 75, Aug 20 44, Aug 21 61, Aug 24 10, Aug 26 122, Aug 27 114, Sep 4 26,
+  Sep 22 270, Sep 23 973. Domains look like prospects (restaurants, law firms…) — our inference, not confirmed.
+- page_fixes_cache rows updated Sep 22 10 pm → Sep 24 1 am Chicago: 5,317; 5,213 of them on domains his workspace
+  audited, across 224 domains (up to ~50 pages each). The cache has no workspace column — matched by domain.
+- plan_token_ledger: pageFixes.page 597 charges / source "manual" (a person clicked), op_ref one per workspace.
+- admin_usage_events has NO user_id and NO entity_id on these rows — who clicked and which page are not recorded
+  there. meta.entry "/api/page-fixes/" = the normal button endpoint.
+
+### Build: "Look closer" inside each account (commit below)
+- Migration 0044 admin_ai_account_detail(workspace, from, to) → {hours (Chicago hour × job: calls/ok/failed/
+  sent/written), sites (audits per domain + pages fixed, from audits + page_fixes_cache), credits (feature ×
+  source)}. Owners only. api/ai-account.js (owner-only, 60 s cache, 501 needsMigration if 0044 missing).
+- lib/ai-account-view.js: work sessions (busy hours with at most one quiet hour between), biggest session,
+  sites summary, sent vs written per job, credits manual vs scheduled.
+- Page: opening a workspace account shows a "Look closer" box — summary paragraph, work sessions table,
+  websites it worked on (show all), tokens sent vs written.
+- Tests: tests/money 45, sql.sh 0044 checks. 0043 AND 0044 must be run by Ryder in the Supabase SQL editor
+  (this session's safety check refuses live-database changes).

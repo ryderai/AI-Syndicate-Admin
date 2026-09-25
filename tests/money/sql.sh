@@ -143,9 +143,41 @@ is "0043: cut-off answers counted with their tokens" "$(as $OWNER "select (e->>'
 $PSQL -f supabase/migrations/0043_ai_rollup_reasons_and_detail.sql >/dev/null 2>/tmp/mig.err && ok "0043 runs twice" || { bad "0043 re-run failed"; sed 's/^/       /' /tmp/mig.err; }
 
 echo ""
+echo "== 0044: one account looked at closely =="
+$PSQL <<'SQL' >/dev/null
+alter table public.plan_token_ledger add column if not exists source text;
+create table if not exists public.audits (id uuid primary key default gen_random_uuid(), workspace_id uuid, domain text, type text, result jsonb, created_at timestamptz default now());
+create table if not exists public.page_fixes_cache (cache_key text primary key, url text, codes text, payload jsonb, model text, created_at timestamptz default now(), updated_at timestamptz default now());
+insert into public.workspaces values ('bbbbbbbb-0000-0000-0000-000000000002','Troy','aisyndicate.com',null,null);
+insert into public.admin_usage_events (ts, source, provider, model, status, input_tokens, cache_write_tokens, output_tokens, workspace_id, platform_feature) values
+  ('2026-09-23T03:10:00Z','platform','anthropic','m','ok',100,10,20,'bbbbbbbb-0000-0000-0000-000000000002','pagefix.generate'),
+  ('2026-09-23T03:40:00Z','platform','anthropic','m','failed',0,0,0,'bbbbbbbb-0000-0000-0000-000000000002','pagefix.generate'),
+  ('2026-09-23T05:05:00Z','platform','serpapi',null,'ok',0,0,0,'bbbbbbbb-0000-0000-0000-000000000002','audit.domain');
+insert into public.audits (workspace_id, domain, created_at) values
+  ('bbbbbbbb-0000-0000-0000-000000000002','www.acme.com','2026-09-23T03:00:00Z'),
+  ('bbbbbbbb-0000-0000-0000-000000000002','acme.com','2026-09-23T04:00:00Z'),
+  ('bbbbbbbb-0000-0000-0000-000000000002','other.com','2026-09-23T04:30:00Z'),
+  ('aaaaaaaa-0000-0000-0000-000000000001','notmine.com','2026-09-23T04:30:00Z');
+insert into public.page_fixes_cache (cache_key, url, updated_at) values
+  ('k1','https://www.acme.com/about','2026-09-23T03:30:00Z'),
+  ('k2','https://acme.com/contact?x=1','2026-09-23T03:31:00Z'),
+  ('k3','https://acme.com/about','2026-08-01T00:00:00Z');
+insert into public.plan_token_ledger (workspace_id, delta, reason, feature, source, created_at) values
+  ('bbbbbbbb-0000-0000-0000-000000000002', -8, 'shadow_spend', 'pageFixes.page', 'manual', '2026-09-23T03:30:00Z'),
+  ('bbbbbbbb-0000-0000-0000-000000000002', -5, 'shadow_spend', 'pageFixes.page', 'manual', '2026-09-23T03:31:00Z');
+SQL
+$PSQL -f supabase/migrations/0044_ai_account_detail.sql >/dev/null 2>/tmp/mig.err && ok "0044 applies" || { bad "0044 did not apply"; sed 's/^/       /' /tmp/mig.err; }
+D="select public.admin_ai_account_detail('bbbbbbbb-0000-0000-0000-000000000002','2026-09-20T05:00:00Z','2026-09-25T05:00:00Z')"
+is "0044: hours are Chicago hours, split by job, worked vs didn't" "$(as $OWNER "select string_agg((h->>'hour')||':'||(h->>'job')||':'||(h->>'ok')||'/'||(h->>'failed')||':'||(h->>'sent')||'/'||(h->>'written'), ',') from jsonb_array_elements(($D)->'hours') h")" "2026-09-22T22:pagefix.generate:1/1:110/20,2026-09-23T00:audit.domain:1/0:0/0"
+is "0044: sites merge www, count audits, and count pages fixed in the window" "$(as $OWNER "select string_agg((s->>'domain')||'='||(s->>'audits')||'/'||(s->>'fixed_pages'), ',') from jsonb_array_elements(($D)->'sites') s")" "acme.com=2/2,other.com=1/0"
+is "0044: credits by feature and how they started" "$(as $OWNER "select string_agg((c->>'feature')||':'||(c->>'source')||':'||(c->>'charges')||'/'||(c->>'units'), ',') from jsonb_array_elements(($D)->'credits') c")" "pageFixes.page:manual:2/13"
+if as $ADMIN "$D" >/dev/null && [ ! -s /tmp/money-as.err ]; then bad "an ADMIN could read account detail"; else ok "an admin reading account detail is refused"; fi
+$PSQL -f supabase/migrations/0044_ai_account_detail.sql >/dev/null 2>/tmp/mig.err && ok "0044 runs twice" || bad "0044 re-run failed"
+
+echo ""
 echo "== credits =="
 C="select public.admin_credit_rollup('2026-09-01T05:00:00Z','2026-10-01T05:00:00Z')"
-is "credits: spend + shadow spend, refund apart" "$(as $OWNER "select (e->>'spent')||'/'||(e->>'refunded')||'/'||(e->>'spends') from jsonb_array_elements(($C)) e")" "40/5/2"
+is "credits: spend + shadow spend, refund apart" "$(as $OWNER "select (e->>'spent')||'/'||(e->>'refunded')||'/'||(e->>'spends') from jsonb_array_elements(($C)) e where e->>'workspace_id'='aaaaaaaa-0000-0000-0000-000000000001'")" "40/5/2"
 echo ""
 [ $fails -eq 0 ] && echo "  money SQL: all checks passed." || echo "  money SQL: $fails FAILED."
 exit $([ $fails -eq 0 ] && echo 0 || echo 1)
