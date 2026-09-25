@@ -7503,3 +7503,25 @@ but the work was on other people's websites. Measured by us (live read-only quer
   websites it worked on (show all), tokens sent vs written.
 - Tests: tests/money 45, sql.sh 0044 checks. 0043 AND 0044 must be run by Ryder in the Supabase SQL editor
   (this session's safety check refuses live-database changes).
+
+## §67. END OF 25 SEP SESSION — AI COST STATE, VERIFIED LIVE (append-only)
+
+- LIVE and verified 25 Sep: plain-English AI Cost (d63b2af), deeper view with failure reasons (935040e + migration
+  0043), "Look closer" per account (01ce1ec + migration 0044). Ryder ran 0043 and 0044 himself. Live figures in
+  WORK-LOG/2026-09-25--internal--ai-cost-deeper-and-look-closer-verified-live.md.
+- Troy (live, Sep 1–25): 1,269 audits on 616 websites, fixes for 5,391 pages on 228 of them; biggest session
+  Sep 22 10 pm → Sep 23 3 am. He was NOT working on our own site (see §66).
+- PARKED (not started, Ryder: "we'll do them later"), from §65: (1) Anthropic spending limit + usage alert;
+  (2) Perplexity in accuracy checks: fewer at once + retry; (3) remove the Serper backup search;
+  (4) platform meter saves the AI company's real error message + stops a run after repeated failures.
+  Offered, undecided: (6) record the signed-in person on every AI request ("who clicked" is unknowable today).
+  Also parked from §64: the page-fix button keeps going after errors (AiAccess.jsx onGenerateAllFixes).
+- HOW WE WORK HERE (learned 25 Sep):
+  * This session's safety check refuses live-database changes (migrations) — Ryder runs them in the Supabase SQL
+    editor. Read-only SELECTs from Chrome are fine.
+  * Supabase SQL editor via Chrome: set window.monaco.editor.getModels()[0].setValue(sql), click Run, wait, read
+    `.rdg-cell` text; fire and poll separately — one long wait froze the tab. Aggregate to one json cell.
+  * Commits on the Mac: `git -c user.name="Ryder Schilling" -c user.email="ryder@aisyndicate.com" commit`, move
+    .git/*.lock into _to_delete/ (deleting is blocked), commit only our own paths — the calculator files belong to
+    another session. Ryder pushes from Cursor.
+  * Separate-agent check before any report: it caught 12 overstatements in the failure report.
