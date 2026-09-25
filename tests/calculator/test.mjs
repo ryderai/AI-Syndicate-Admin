@@ -53,6 +53,15 @@ test("only our calculator pages are accepted as page_path; query strings are cut
   assert.equal(cleanPath("https://evil.com/ai-revenue-calculator/"), null);
   assert.equal(cleanPath("/ai-revenue-calculator/../admin/"), null);
 });
+test("the landing-page popup's pages are accepted too (24 Sep 2026), nothing else", () => {
+  assert.equal(cleanPath("/home-services/"), "/home-services/");
+  assert.equal(cleanPath("/home-services/lawn-care/?utm_source=fb"), "/home-services/lawn-care/");
+  assert.equal(cleanPath("/home-management/"), "/home-management/");
+  assert.equal(cleanPath("/home-services/checkout/"), null);
+  assert.equal(cleanPath("/restaurants/"), null);
+  assert.equal(cleanPath("/home-services/../admin/"), null);
+  assert.equal(cleanPath("/home-services/lawn-care/extra/"), null);
+});
 test("a score only counts as measured when a scanned site came with it", () => {
   assert.equal(cleanRun({ ...good(), score_measured: true }).row.score_measured, false);
   const r = cleanRun({ ...good(), score_measured: true, scanned_domain: "https://www.Roof.com/about" }).row;
@@ -104,6 +113,13 @@ test("blank values are not counted as $0 in medians", () => {
 });
 test("people counts distinct leads, not runs", () => {
   assert.equal(summarise([{ lead_id: "a" }, { lead_id: "a" }, { lead_id: "b" }, {}]).people, 2);
+});
+test("api/calc.js writes the optional phone on insert and fills it only when blank", () => {
+  const src = readFileSync(new URL("../../api/calc.js", import.meta.url), "utf8");
+  assert.match(src, /phoneDigits\.length >= 10/);
+  assert.match(src, /if \(isBlank\(existing\.phone\) && phone\) patch\.phone = phone;/);
+  const ins = src.slice(src.indexOf('.from("admin_leads").insert({'), src.indexOf('}).select("id")'));
+  assert.match(ins, /\bphone,/);
 });
 console.log(out.join("\n"));
 console.log(`\n${passed} passed, ${failed} failed`);

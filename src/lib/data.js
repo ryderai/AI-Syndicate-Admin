@@ -5780,7 +5780,7 @@ export async function listCalcNoteLeads({ fromMs, toMs } = {}) {
   if (!live()) return { rows: [], sample: true };
   const supabase = getSupabase();
   let q = supabase.from("admin_leads")
-    .select("id, name, company, domain, email, vertical, notes, created_at, last_activity_at")
+    .select("id, name, company, domain, email, phone, vertical, notes, created_at, last_activity_at")
     .ilike("notes", "%AI Revenue Calculator%");
   if (typeof fromMs === "number") q = q.gte("last_activity_at", new Date(fromMs).toISOString());
   if (typeof toMs === "number") q = q.lt("last_activity_at", new Date(toMs).toISOString());

@@ -36,7 +36,12 @@ const PRESETS = [
 const usd = (n) => (n === null || n === undefined || !Number.isFinite(Number(n)) ? "—" : `$${Math.round(Number(n)).toLocaleString("en-US")}`);
 const pct = (x) => (x === null || x === undefined || !Number.isFinite(Number(x)) ? "—" : `${Math.round(Number(x) * 100)}%`);
 const pageLabel = (p) => {
-  const slug = String(p || "").replace(/^\/ai-revenue-calculator\/?/, "").replace(/\/$/, "");
+  const path = String(p || "");
+  // 24 Sep 2026: the landing pages open the calculator in a popup
+  if (path === "/home-services/") return "landing page popup: home services";
+  if (path === "/home-management/") return "landing page popup: home management";
+  if (path.startsWith("/home-services/")) return "landing page popup: " + path.replace(/^\/home-services\//, "").replace(/\/$/, "").replace(/-/g, " ");
+  const slug = path.replace(/^\/ai-revenue-calculator\/?/, "").replace(/\/$/, "");
   return slug ? slug.replace(/-/g, " ") : "main page";
 };
 
@@ -87,7 +92,7 @@ export default function Calculator() {
         leadId: r.lead_id,
         readable: Boolean(l),
         who: l ? (l.name || l.email || "") : "",
-        name: l?.name, email: l?.email, domain: l?.domain || r.scanned_domain,
+        name: l?.name, email: l?.email, phone: l?.phone, domain: l?.domain || r.scanned_domain,
         industryLabel: CALC_INDUSTRY_LABELS[r.industry] || r.industry,
         page: pageLabel(r.page_path),
         added: Number(r.added_revenue),
@@ -103,7 +108,7 @@ export default function Calculator() {
       if (seen.has(l.id)) continue;
       seen.add(l.id);
       out.push({
-        leadId: l.id, readable: true, who: l.name || l.email || "", name: l.name, email: l.email, domain: l.domain,
+        leadId: l.id, readable: true, who: l.name || l.email || "", name: l.name, email: l.email, phone: l.phone, domain: l.domain,
         industryLabel: "see note", page: "numbers in the lead's note", added: NaN, uplift: null, score: null, measured: false,
         leads: NaN, value: NaN, when: l.last_activity_at || l.created_at,
       });
@@ -173,7 +178,7 @@ export default function Calculator() {
                           {r.readable ? (
                             <>
                               <strong>{r.name || r.email || "(no name)"}</strong>
-                              <div className="dim" style={{ fontSize: 12 }}>{r.email}{r.domain ? ` · ${r.domain}` : ""}</div>
+                              <div className="dim" style={{ fontSize: 12 }}>{r.email}{r.phone ? ` · ${r.phone}` : ""}{r.domain ? ` · ${r.domain}` : ""}</div>
                             </>
                           ) : <span className="adm-hs-blank" title="The lead row was deleted, or is not one you may see.">not readable</span>}
                         </td>

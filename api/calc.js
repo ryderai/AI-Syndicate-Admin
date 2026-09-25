@@ -25,7 +25,7 @@
 
 import { getAdminSupabase, isServerConfigured } from "../lib/supabase-server.js";
 import { applyCors, readCappedJson, allowHit } from "../lib/hs-http.js";
-import { normaliseEmail, hostFromWebsite, clean } from "../lib/home-services.js";
+import { normaliseEmail, hostFromWebsite, clean, digitsOnly } from "../lib/home-services.js";
 import { cleanRun, leadNote, CALC_VERTICAL } from "../lib/calculator.js";
 
 const RUN_LIMIT = 60;    // per session per minute — the page debounces to ~1 every 3s while typing
@@ -78,6 +78,13 @@ export default async function handler(req, res) {
   /* ---- the person ---- */
   const email = normaliseEmail(b.email);
   const name = clean(b.name, 160);
+  /* Julia, 24 Sep 2026: "is it possible to add a phone number field". The
+   * page requires it (Ryder: "dont make it optional"); this endpoint stays
+   * lenient so a page cached from before the change never loses a lead over
+   * it. Digits only, like every other phone in this console; fewer than
+   * 10 digits is not a number anybody can ring, so it is dropped, not stored. */
+  const phoneDigits = digitsOnly(b.phone);
+  const phone = phoneDigits && phoneDigits.length >= 10 && phoneDigits.length <= 15 ? phoneDigits : null;
   if (!email) return res.status(400).json({ ok: false, error: "Please add a real email address." });
   const domain = hostFromWebsite(b.website) || row.scanned_domain || null;
   const note = leadNote(row, nowIso);
@@ -92,6 +99,7 @@ export default async function handler(req, res) {
       const patch = { last_activity_at: nowIso };
       if (isBlank(existing.name) && name) patch.name = name;
       if (isBlank(existing.domain) && domain) patch.domain = domain;
+      if (isBlank(existing.phone) && phone) patch.phone = phone;
       const { error } = await admin.from("admin_leads").update(patch).eq("id", leadId);
       if (error) {
         console.error("[calc] lead update failed", error.message);
@@ -106,6 +114,7 @@ export default async function handler(req, res) {
         name,
         domain,
         email,
+        phone,
         /* Legal on the live check constraint since 0009/0030. */
         source: "inbound",
         stage: "new",
@@ -190,7 +199,7 @@ async function saveRun(admin, row, nowIso) {
 async function findByEmail(admin, email) {
   const { data, error } = await admin
     .from("admin_leads")
-    .select("id, name, domain, email, created_at")
+    .select("id, name, domain, email, phone, created_at")
     .ilike("email", email)
     .order("created_at", { ascending: true })
     .limit(50);
