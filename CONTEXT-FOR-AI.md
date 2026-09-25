@@ -7416,3 +7416,29 @@ The old Finance page (runway, projections, CAC/LTV) and old AI Cost page are in 
 ### Rollback
 Revert the three commits (or Vercel → Deployments → promote an older one). Julia back to Owner: Team page → Role.
 0041 policies: re-run the policy blocks of 0001/0007/0024/0032. 0042 is harmless to leave.
+
+## §64. AI COST READS IN PLAIN ENGLISH · WHY TROY'S ACCOUNT USED 43% — Fri 25 Sep 2026 (append-only section)
+
+Ryder: "our rep, troy, had the most usage... we need to look into that and be able to show what its being
+spent on clearly... i dont want to read code, i want to read english." Commit `d63b2af`.
+
+### What changed on the page
+- `lib/ai-job-names.js` (new): every job key → English name + one line on what it does
+  (`pagefix.generate` → "Write fixes for website pages"). Unknown keys still get words and `known:false`.
+  `serviceName(provider, model)` → "Claude Sonnet 4.6 (Anthropic)". Add new platform jobs to `JOBS` here.
+- `lib/ai-cost-view.js`: per-day counts on every total; `explain(t)` (first/last/busiest day, main job,
+  failed share); `row.story`, `row.share`; `outliers` = named account with ≥30% of all tokens AND ≥2× the next.
+- `AiCost.jsx`: tabs "Who used it / What it was used for / Which AI / Over time"; yellow alert for outliers
+  with "Show what it was spent on"; account rows show "Mostly used for" + Failed; opening a row gives a
+  one-paragraph story, "What it was spent on" (job, when, requests, failed, tokens) and "Which AI".
+- Tests: tests/money 35 checks.
+
+### Troy — measured by us from admin_usage_events, 24–25 Sep 2026
+- Workspace e8cae2a5-6d19-4cd9-8d64-00c2521bfc2c (Troy Weaver), website aisyndicate.com — our own site.
+- Sep 22 ~10 pm → Sep 23 6:38 pm Chicago: 14,362 "Write fixes for website pages" requests (~58M tokens),
+  2,712 website-audit requests. 6,587 fix requests failed (5,735 HTTP 401 + 852 HTTP 400 from the AI company).
+- Credits were shadow (recorded, not actually charged).
+- Why it got so big (platform code, ai-syndicate-live): `api/page-fixes.js` writes then re-checks every page
+  (batches of 12); `src/components/dash/AiAccess.jsx` onGenerateAllFixes runs up to 1,000 pages, also runs
+  automatically after an audit, and on an error it `continue`s to the next batch instead of stopping.
+  Not fixed yet — platform repo change.
