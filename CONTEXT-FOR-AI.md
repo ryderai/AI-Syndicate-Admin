@@ -7331,3 +7331,88 @@ Nothing above this line was changed.
 **Why the website posts the lead here first.** The platform's own `/api/lead` refuses some people (free-scan limit, blocked addresses) and writes to a table this console cannot read. The calculator page now saves to `/api/calc` first, then calls `/api/lead` for the score email; if this console saved them, the report opens even when `/api/lead` refuses.
 
 **Not yet:** migration 0040 run, this console deployed, the site's `calc.js` change deployed. Until all three, the site silently falls back to the old path.
+
+---
+
+## §63. MONEY IS OWNERS ONLY · FINANCE = PLATFORM vs AGENCY, BY MONTH · AI COST = TOKENS · BOTH LOAD IN ~1.5 s — Thu 24 Sep 2026 (append-only section)
+
+**State: LIVE.** Commits `9e9193b` → `579791e` → `1530e75`, all pushed and deployed. Migrations **0041** and **0042**
+both run in Supabase. Verified on ai-syndicate-admin.vercel.app on 24 Sep 2026 (numbers below).
+
+### What Ryder asked for (24 Sep 2026)
+1. Finance, Invoices, AI Cost for **owners only** — Ryder, Andrew, CJ. Julia and Cameron must not see money.
+2. Finance: remove projections and cash runway; split **Platform** (people who buy the software) from **Agency**
+   (implementation clients); filter **by month** (click back to June etc.) and custom dates; money in vs out right.
+3. AI Cost: every call tagged to an **account** (credits under that account) and a **job**; month + custom ranges;
+   simpler; then "make it all based off of **token usage** — no need for ai cost yet in dollars".
+4. "The loading for these pages is way too long."
+5. Charts **by month**; days only when someone clicks "By day".
+
+### Who is an owner (the data, not the code)
+`admin_users` on 24 Sep 2026: owners Ryder, Andrew, CJ. **Julia Craig changed Owner → Admin** (Team page).
+Cameron Hunter = sales. Proof run in the Supabase SQL editor as Julia's login (read-only, inside a transaction):
+admin, not owner, **0 rows** from every money table while those tables hold rows.
+
+### The four locks (every one is needed — a hidden button is not a lock)
+| Layer | Where | What it does |
+|---|---|---|
+| Menu + URL | `Sidebar.jsx` group **"Money"** `roles: ["owner"]` | `pageIdsForRole` builds allowed ids from it, so a pasted `#/dashboard/finance` lands elsewhere for an admin |
+| Server | `requireMember(req, ["owner"])` in `stripe-finance`, `stripe-metrics`, `finance-summary`, `ai-cost` | `stripe-customers` still serves admins (Clients list) but blanks mrr/plan/delinquent |
+| Database | migration **0041** | every money table owner-only: expenses, invoices, items, payments, finance settings, usage events, prices, bills, platform workspaces (+ the security_invoker views follow) |
+| AI + reports | `lib/brain-context.js` admin scope has no `"money"` | console reports always read with the admin scope (they are shared); client reports built by an admin say money was left out (`moneyHidden`) |
+Also: Overview shows owners the money strip only; the money pages' cache is sessionStorage and is wiped on sign-out
+and when the signed-in person changes (`clearMoneyStorage()` in `src/lib/auth.js`).
+
+### Why it was slow, and the fix
+Finance, AI Cost **and Overview** read `admin_usage_events` in the browser, 1,000 rows per request, one after
+another — 51,230 rows on 24 Sep, 20–30 s, past the old 50,000-row cap (totals silently short). Stripe itself took ~2 s.
+Now: `api/ai-cost.js` → SQL `admin_ai_cost_rollup(from, to)` groups in Postgres (day in Chicago × provider × model ×
+workspace × client × job × surface × status × source) and **returns ONE jsonb value**. Measured live: Finance
+~1.6 s (finance-summary 1.57 s, ai-cost 1.18 s), AI Cost 1.27 s; a 12-month read = **1,213 groups**.
+
+### ⭐ Traps that were real bugs first
+- **PostgREST caps every reply at 1,000 rows — set-returning RPCs too.** A `returns table` rollup would have been cut
+  at 1,000 of 1,213 groups with no error. Return one jsonb array. `.limit(20000)` still returns 1,000.
+- **`billable = false` is not spend** (lib/ai-cost.js always excluded it) — the rollup filters it; counted apart.
+- Stripe is pinned to `2025-04-30.basil`: **no `charge.invoice`, no `invoice.subscription`.** Charges find their
+  invoice through `invoice.payments` (expanded); the reply says `invoicesLinked:false` if that did not come back.
+- Month-to-date compares with the **same days last month** (Sep 1–24 vs Aug 1–24), not the 24 days before.
+- A request race: switching period fast let a slow reply paint over a new one — both pages keep a sequence ref.
+- In Chrome, ~50 parallel deep-offset PostgREST reads froze the tab's connection to Supabase for minutes. Use keyset
+  paging (`id=gt.<last>`), fire-and-poll; never `await` long work inside the javascript tool.
+- The Mac bridge cannot overwrite a file with `tar x` (it unlinks first) — extract to `$HOME`, then `cat > dest`.
+
+### Platform vs Agency (api/finance-summary.js)
+Subscription payment (`billing_reason subscription_*`, or "Subscription …" description) = **Platform**; one-off
+invoice ("Payment for Invoice", `manual`) or any other one-off = **Agency**. An owner flips a customer on the page
+(Every payment → Side) → `admin_finance_departments`. Paying = more than $0/month (5 of 7 active subs were $0).
+Shared costs (typed "both") count in the company total and on neither side. Owed = Stripe open invoices *right now*.
+
+### AI Cost = tokens (lib/ai-cost-view.js)
+tokens in = input + cache writes; out = output; headline = in + out; cache reads shown apart; search-API calls have
+no tokens and count as calls. Account = platform workspace (name/domain/owner email from the platform's own
+`workspaces` + `profiles` tables, same database) else client else console else "No account — public tools & our own
+jobs". Job = platform_feature → meta.feature_name → meta.entry → "console · feature" (the platform stamps
+feature_name/entry on every call since 23 Sep, commit b20d1134). Credits = `plan_token_ledger` spend + shadow_spend
+− refunds (`admin_credit_rollup`). Finance does **not** add metered AI dollars to money out (`aiDollars` switch in
+`financeView`, default false); a typed AI bill still counts.
+
+### Live numbers read 24 Sep 2026
+July picked: in $12,510 (4 payments — matches Stripe Jul 7 $8,500 + Jul 14 $1,000 + Jul 27 $3,010), out $364 card
+fees, kept $12,146. Months: Jun $2,500 · Jul $12,510 · Aug $20,451 · Sep (to 24th) $12,949. AI this month: 138M tokens
+(122M in / 16M out), 80% tied to 18 accounts, 148,699 credits, 51,362 calls; metering starts 2026-09-07.
+
+### Files
+`api/finance-summary.js` `api/ai-cost.js` · `lib/money-range.js` (periods, month chips, Chicago midnights)
+`lib/money-view.js` (Finance maths) `lib/ai-cost-view.js` (token maths) · `src/lib/moneyApi.js` (reads + tab cache)
+`src/components/admin/{Finance,AiCost,moneyParts}.jsx` · migrations `0041_money_owner_only_and_fast_rollups.sql`,
+`0042_ai_rollup_cache_write_tokens.sql` · tests `tests/money/` (31 checks × 4 timezones + real-Postgres `sql.sh`).
+The old Finance page (runway, projections, CAC/LTV) and old AI Cost page are in git history before `9e9193b`.
+
+### Still open
+- **Money out only counts Stripe card fees** until the real monthly costs are typed into the cost list.
+- 66 AI calls since 23 Sep carry no job name (all 0 tokens — tool/search calls).
+
+### Rollback
+Revert the three commits (or Vercel → Deployments → promote an older one). Julia back to Owner: Team page → Role.
+0041 policies: re-run the policy blocks of 0001/0007/0024/0032. 0042 is harmless to leave.
