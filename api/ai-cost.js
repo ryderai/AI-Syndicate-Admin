@@ -40,7 +40,7 @@ const cache = new Map();
 /* Rows are read in these columns only when the SQL rollup is missing. */
 /* Only the two meta keys the job label needs — `meta` itself carries a call
  * stack per row since 23 Sep, and pulling it whole made the scan slow. */
-const SCAN_COLS = "ts, provider, model, workspace_id, client_id, platform_feature, feature, surface, status, source, cost_micros, billable, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, feature_name:meta->>feature_name, entry:meta->>entry";
+const SCAN_COLS = "ts, provider, model, workspace_id, client_id, platform_feature, feature, surface, status, source, cost_micros, billable, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, feature_name:meta->>feature_name, entry:meta->>entry, latency_ms, http_status:meta->>http_status, wasted:meta->>wasted, error:meta->>error, reasoning_tokens:meta->>reasoning_tokens, web_search_requests:meta->>web_search_requests";
 const SCAN_PAGE = 1000;
 const SCAN_PARALLEL = 6;
 const SCAN_MAX_ROWS = 400_000;
@@ -62,8 +62,24 @@ export function jobOf(row) {
   return null;
 }
 
+/* WHY A REQUEST FAILED — 25 Sep 2026, same rule as migration 0043.
+ * 'ok' when it worked; else the AI company's answer code ('429'…); else
+ * 'timeout' (we stopped waiting); else the meter's own label; else 'unknown'. */
+export function reasonOf(e) {
+  const meta = e.meta && typeof e.meta === "object" ? e.meta : e;
+  if (e.status === "ok" || e.status === "legacy") return "ok";
+  const http = String(meta.http_status ?? "").trim();
+  if (http) return http;
+  const err = String(meta.error ?? "");
+  if (meta.wasted === "network_error" || /timeout|abort/i.test(err)) return "timeout";
+  const w = String(meta.wasted ?? "").trim();
+  return w || "unknown";
+}
+
+const whole = (v) => (/^[0-9]+$/.test(String(v ?? "")) ? Number(v) : 0);
+
 function keyOf(r) {
-  return [r.day, r.provider, r.model, r.workspace_id, r.client_id, r.job, r.surface, r.status, r.source].join("\u0001");
+  return [r.day, r.provider, r.model, r.workspace_id, r.client_id, r.job, r.surface, r.status, r.source, r.reason].join("\u0001");
 }
 
 /** Group raw rows exactly the way admin_ai_cost_rollup does. */
@@ -84,11 +100,12 @@ export function groupRows(rows) {
       surface: e.surface ?? null,
       status: e.status ?? null,
       source: e.source ?? null,
+      reason: reasonOf(e),
     };
     const k = keyOf(g);
     let cur = out.get(k);
     if (!cur) {
-      cur = { ...g, calls: 0, priced_calls: 0, cost_micros: 0, nonbillable_calls: 0, input_tokens: 0, output_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0, first_ts: e.ts, last_ts: e.ts };
+      cur = { ...g, calls: 0, priced_calls: 0, cost_micros: 0, nonbillable_calls: 0, input_tokens: 0, output_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0, wait_ms: 0, reasoning_tokens: 0, web_searches: 0, cut_off_calls: 0, cut_off_tokens: 0, first_ts: e.ts, last_ts: e.ts };
       out.set(k, cur);
     }
     cur.calls += 1;
@@ -104,6 +121,14 @@ export function groupRows(rows) {
     cur.output_tokens += n(e.output_tokens);
     cur.cache_write_tokens += n(e.cache_write_tokens);
     cur.cache_read_tokens += n(e.cache_read_tokens);
+    const meta = e.meta && typeof e.meta === "object" ? e.meta : e;
+    cur.wait_ms += n(e.latency_ms);
+    cur.reasoning_tokens += whole(meta.reasoning_tokens);
+    cur.web_searches += whole(meta.web_search_requests);
+    if (meta.wasted === "cut_off") {
+      cur.cut_off_calls += 1;
+      cur.cut_off_tokens += n(e.input_tokens) + n(e.cache_write_tokens) + n(e.output_tokens);
+    }
     if (e.ts < cur.first_ts) cur.first_ts = e.ts;
     if (e.ts > cur.last_ts) cur.last_ts = e.ts;
   }
@@ -117,6 +142,9 @@ function cleanRollupRow(r) {
     provider: r.provider, model: r.model,
     workspace_id: r.workspace_id, client_id: r.client_id,
     job: r.job, surface: r.surface, status: r.status, source: r.source,
+    reason: r.reason ?? (r.status === "ok" || r.status === "legacy" ? "ok" : "unknown"),
+    wait_ms: n(r.wait_ms), reasoning_tokens: n(r.reasoning_tokens), web_searches: n(r.web_searches),
+    cut_off_calls: n(r.cut_off_calls), cut_off_tokens: n(r.cut_off_tokens),
     calls: n(r.calls), priced_calls: n(r.priced_calls), cost_micros: n(r.cost_micros),
     nonbillable_calls: n(r.nonbillable_calls),
     input_tokens: n(r.input_tokens), output_tokens: n(r.output_tokens),
@@ -134,7 +162,7 @@ async function readViaSql(admin, fromIso, toIso) {
   const { data, error } = await admin.rpc("admin_ai_cost_rollup", { p_from: fromIso, p_to: toIso });
   if (error) return { ok: false, error };
   if (!Array.isArray(data) || (data.length && typeof data[0] !== "object")) return { ok: false, error: { message: "unexpected shape" } };
-  return { ok: true, rows: data.map(cleanRollupRow) };
+  return { ok: true, rows: data.map(cleanRollupRow), detail: data.length === 0 || "reason" in data[0] };
 }
 
 /* One day's rows, paged. A day is ~3,000 rows today, so three pages. Ordered
@@ -300,9 +328,13 @@ export default async function handler(req, res) {
     let rows;
     let rowCount = null;
     let truncated = false;
+    /* Failure reasons and wait times need migration 0043. Until it runs, the
+     * page says so instead of calling every failure "unknown". */
+    let detail = true;
     const sql = await readViaSql(admin, fromIso, toIso);
     if (sql.ok) {
       rows = sql.rows;
+      detail = sql.detail;
       rowCount = rows.reduce((s, r) => s + r.calls, 0);
     } else {
       via = "scan";
@@ -325,6 +357,7 @@ export default async function handler(req, res) {
       via,
       rowCount,
       truncated,
+      detail,
       rows,
       credits: credits.rows,
       creditsVia: credits.via,

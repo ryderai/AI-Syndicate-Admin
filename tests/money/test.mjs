@@ -313,5 +313,62 @@ test("one account using far more than the rest is flagged, others are not", () =
   assert.equal(close.outliers.length, 0, "1,500 vs 1,000 is not more than twice");
 });
 
+/* Deeper view, 25 Sep 2026 */
+const { outcomeOf, reasonLabel } = await import("../../lib/ai-job-names.js");
+const { reasonOf } = await import("../../api/ai-cost.js");
+test("failure codes land in plain groups", () => {
+  assert.equal(outcomeOf("ok"), "ok");
+  assert.equal(outcomeOf("429"), "busy");
+  assert.equal(outcomeOf("401"), "refused");
+  assert.equal(outcomeOf("403"), "refused");
+  assert.equal(outcomeOf("400"), "rejected");
+  assert.equal(outcomeOf("529"), "down");
+  assert.equal(outcomeOf("timeout"), "timeout");
+  assert.equal(outcomeOf(null), "unknown");
+  assert.equal(reasonLabel("401"), "Refused (key or access) · code 401, key not accepted");
+});
+test("the scan decides a reason exactly like migration 0043", () => {
+  assert.equal(reasonOf({ status: "ok", http_status: "200" }), "ok");
+  assert.equal(reasonOf({ status: "capped", http_status: "429" }), "429");
+  assert.equal(reasonOf({ status: "failed", error: "The operation was aborted due to timeout" }), "timeout");
+  assert.equal(reasonOf({ status: "failed", wasted: "http_error" }), "http_error");
+  assert.equal(reasonOf({ status: "failed" }), "unknown");
+  assert.equal(reasonOf({ status: "failed", meta: { http_status: "401" } }), "401");
+});
+const pd = {
+  workspaces: { t: { name: "Troy" } },
+  rows: [
+    { day: "2026-09-22", workspace_id: "t", provider: "anthropic", model: "m", job: "pagefix.generate", status: "ok", reason: "ok", calls: 10, input_tokens: 900, output_tokens: 100, wait_ms: 20000, web_searches: 3, reasoning_tokens: 50 },
+    { day: "2026-09-23", workspace_id: "t", provider: "anthropic", model: "m", job: "pagefix.generate", status: "failed", reason: "401", calls: 30, wait_ms: 3000, first_ts: "2026-09-23T05:09:00Z", last_ts: "2026-09-23T10:01:00Z" },
+    { day: "2026-09-24", workspace_id: null, provider: "mistral", model: "mm", job: "accuracy.run", status: "capped", reason: "429", calls: 5, first_ts: "2026-09-24T12:00:00Z", last_ts: "2026-09-25T09:00:00Z" },
+  ],
+};
+const dv = aiCostView(pd, SEP, { now: Date.parse("2026-09-25T12:00:00Z") });
+test("every request is sorted into how it went", () => {
+  assert.deepEqual(dv.outcomeList.map((o) => `${o.key}=${o.calls}`), ["ok=10", "busy=5", "refused=30"]);
+  assert.equal(dv.total.okCalls, 10);
+});
+test("problems carry first/last seen and whether they are still going", () => {
+  assert.equal(dv.problems.length, 2);
+  assert.equal(dv.problems[0].provider, "mistral", "still-happening sorts first");
+  assert.equal(dv.problems[0].live, true);
+  assert.equal(dv.problems[1].live, false, "last seen two days before 'now'");
+  assert.equal(dv.problems[1].calls, 30);
+  assert.equal(dv.problems[1].jobs[0].job, "pagefix.generate");
+});
+test("rows say share worked, tokens per working request, average wait", () => {
+  const t = dv.accounts.find((a) => a.info.name === "Troy");
+  assert.equal(t.detail.workedShare, 0.25);
+  assert.equal(t.detail.tokensPerRequest, 100);
+  assert.equal(t.detail.avgWaitSec, 23000 / 40 / 1000);
+  assert.equal(t.detail.topReason, "401");
+  assert.equal(t.webSearches, 3);
+  assert.equal(t.reasoning, 50);
+  assert.equal(t.jobs[0].detail.topReasonCalls, 30);
+});
+test("without a clock nothing is called still happening", () => {
+  assert.equal(aiCostView(pd, SEP).problems.every((p) => !p.live), true);
+});
+
 console.log(`\n${pass} passed, ${fail} failed (TZ=${process.env.TZ || "unset"})`);
 process.exit(fail ? 1 : 0);

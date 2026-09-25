@@ -124,6 +124,25 @@ $PSQL -c "insert into public.admin_usage_events (ts, source, provider, model, co
 is "1,500 groups come back whole — one jsonb value, not rows the API caps at 1,000" "$(as $OWNER "select jsonb_array_length(($R))")" "1503"
 
 echo ""
+echo "== 0043: why a request failed, wait time, extras =="
+$PSQL <<'SQL' >/dev/null
+insert into public.admin_usage_events (ts, source, provider, model, status, latency_ms, input_tokens, output_tokens, meta) values
+  ('2026-09-20T15:00:00Z','platform','mistral','mm','capped',100,0,0,'{"http_status":"429"}'),
+  ('2026-09-20T15:01:00Z','platform','mistral','mm','capped',120,0,0,'{"http_status":"429"}'),
+  ('2026-09-20T15:02:00Z','platform','mistral','mm','failed',30000,0,0,'{"error":"The operation was aborted due to timeout"}'),
+  ('2026-09-20T15:03:00Z','platform','mistral','mm','failed',50,0,0,'{"wasted":"http_error"}'),
+  ('2026-09-20T15:04:00Z','platform','mistral','mm','ok',2000,100,50,'{"reasoning_tokens":40,"web_search_requests":2}'),
+  ('2026-09-20T15:05:00Z','platform','mistral','mm','ok',3000,10,5,'{"wasted":"cut_off","reasoning_tokens":"x"}');
+SQL
+$PSQL -f supabase/migrations/0043_ai_rollup_reasons_and_detail.sql >/dev/null 2>/tmp/mig.err && ok "0043 applies on top of 0042" || { bad "0043 did not apply"; sed 's/^/       /' /tmp/mig.err; }
+R2="select public.admin_ai_cost_rollup('2026-09-20T05:00:00Z','2026-09-21T05:00:00Z')"
+is "0043: failures split by reason, working calls stay one group" "$(as $OWNER "select string_agg((e->>'reason')||'='||(e->>'calls'), ',' order by e->>'reason') from jsonb_array_elements(($R2)) e")" "429=2,http_error=1,ok=2,timeout=1"
+is "0043: wait time is summed" "$(as $OWNER "select sum((e->>'wait_ms')::bigint) from jsonb_array_elements(($R2)) e")" "35270"
+is "0043: thinking tokens and web searches (junk values ignored)" "$(as $OWNER "select (e->>'reasoning_tokens')||'/'||(e->>'web_searches') from jsonb_array_elements(($R2)) e where e->>'reason'='ok'")" "40/2"
+is "0043: cut-off answers counted with their tokens" "$(as $OWNER "select (e->>'cut_off_calls')||'/'||(e->>'cut_off_tokens') from jsonb_array_elements(($R2)) e where e->>'reason'='ok'")" "1/15"
+$PSQL -f supabase/migrations/0043_ai_rollup_reasons_and_detail.sql >/dev/null 2>/tmp/mig.err && ok "0043 runs twice" || { bad "0043 re-run failed"; sed 's/^/       /' /tmp/mig.err; }
+
+echo ""
 echo "== credits =="
 C="select public.admin_credit_rollup('2026-09-01T05:00:00Z','2026-10-01T05:00:00Z')"
 is "credits: spend + shadow spend, refund apart" "$(as $OWNER "select (e->>'spent')||'/'||(e->>'refunded')||'/'||(e->>'spends') from jsonb_array_elements(($C)) e")" "40/5/2"

@@ -7447,3 +7447,35 @@ spent on clearly... i dont want to read code, i want to read english." Commit `d
 (`AUTO_PREFILL_CAP`) and STOPS on an error. Only the "Generate gold-standard fixes" button runs up to 1,000
 pages and skips past errors (`toast.warn(...); continue;`). So Troy's volume came from the button, not the
 auto-run. "Verify" re-runs the audit scorer on the patched page (lib/page-fix-verify.js).
+
+## §65. AI FAILURES EXPLAINED · FIVE FIXES PARKED FOR LATER · AI COST GOES ONE LEVEL DEEPER — Fri 25 Sep 2026 (append-only section)
+
+### Why 44% of September's AI requests "failed" (measured by us, live queries 25 Sep)
+22,970 of 51,678 did not work: 12,961 "capped" (all HTTP 429) + 10,009 "failed". 0 tokens recorded on any.
+Five causes are OVER (20,480 = 89%): Mistral 429 Sep 7–23 (11,384); Claude 401 Sep 23 00:09–05:01 (6,056,
+likely the Sep 22 key swap before a redeploy — not confirmed); Claude 400 bursts to Sep 24 08:20 (965, reason
+not saved — fits a spending limit, not confirmed); SerpApi 429 Sep 18–19 (1,168); Groq 403 every call to
+Sep 23 (907; Meta AI moved off Groq, commit 639e0b91). Still going since Sep 24 09:30: ~8% (169/2,170) —
+Perplexity sonar in accuracy checks 0/405 answered; Serper backup 0/349 ever; audit search SerpApi 400.
+Full detail: WORK-LOG/2026-09-25--internal--why-44-percent-of-ai-requests-failed.md.
+
+### PARKED — Ryder, 25 Sep: "save those to context, we'll do them later" (not started)
+1. Anthropic account: check for a spending limit, turn on a usage alert. (Pick: do first.)
+2. Perplexity in accuracy checks: send fewer at once + retry (pick), or pay for higher limits.
+3. Serper backup search: remove it (pick) or fix its key/credits.
+4. Platform meter: save the AI company's real error message; stop a run after repeated failures.
+5. AI Cost page: split "too busy" from "broken" — DONE by the build below (outcome groups).
+
+### Build (commit below): Andrew 25 Sep "Let's see if we can go in even more detail"
+- Migration 0043: admin_ai_cost_rollup adds GROUP column `reason` ('ok' | AI company code | 'timeout' |
+  meta.wasted | 'unknown') and sums wait_ms (latency), reasoning_tokens, web_searches, cut_off_calls/tokens.
+  api/ai-cost.js reasonOf() mirrors it for the scan path; body.detail=false when 0043 is not run yet.
+- lib/ai-job-names.js OUTCOMES: Worked / Turned away (too busy, 429) / Refused (key or access, 401/403) /
+  Rejected (bad request, 400s) / AI company error (5xx) / Timed out / Failed (reason not saved).
+- Page: "How the N requests went" bar; new tab "What went wrong" (one row per AI company × reason, first/last
+  seen in Chicago time, jobs + accounts hit, "Still happening" if seen in the last 24 h); Worked %, Main
+  problem, Per request (tokens per working request), Avg wait columns; each account opens to a day-by-day
+  chart (worked vs didn't) and "How its requests went"; web searches, hidden thinking tokens, cut-off answers.
+- Tests: tests/money 41 checks, tests/money/sql.sh 0043 checks (local Postgres) — all pass.
+- 0043 NOT run on the live database yet: running it from this session was blocked by the safety check, so
+  Ryder runs it in the Supabase SQL editor.
