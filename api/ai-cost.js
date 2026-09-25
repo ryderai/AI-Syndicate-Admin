@@ -38,7 +38,9 @@ const CACHE_MS = 60_000;
 const cache = new Map();
 
 /* Rows are read in these columns only when the SQL rollup is missing. */
-const SCAN_COLS = "ts, provider, model, workspace_id, client_id, platform_feature, feature, surface, status, source, cost_micros, billable, input_tokens, output_tokens, cache_read_tokens, meta";
+/* Only the two meta keys the job label needs — `meta` itself carries a call
+ * stack per row since 23 Sep, and pulling it whole made the scan slow. */
+const SCAN_COLS = "ts, provider, model, workspace_id, client_id, platform_feature, feature, surface, status, source, cost_micros, billable, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, feature_name:meta->>feature_name, entry:meta->>entry";
 const SCAN_PAGE = 1000;
 const SCAN_PARALLEL = 6;
 const SCAN_MAX_ROWS = 400_000;
@@ -49,7 +51,7 @@ function n(v) {
 }
 
 export function jobOf(row) {
-  const meta = row.meta && typeof row.meta === "object" ? row.meta : {};
+  const meta = row.meta && typeof row.meta === "object" ? row.meta : { feature_name: row.feature_name, entry: row.entry };
   const pf = String(row.platform_feature || "").trim();
   if (pf) return pf;
   const fname = String(meta.feature_name || "").trim();
@@ -86,7 +88,7 @@ export function groupRows(rows) {
     const k = keyOf(g);
     let cur = out.get(k);
     if (!cur) {
-      cur = { ...g, calls: 0, priced_calls: 0, cost_micros: 0, nonbillable_calls: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, first_ts: e.ts, last_ts: e.ts };
+      cur = { ...g, calls: 0, priced_calls: 0, cost_micros: 0, nonbillable_calls: 0, input_tokens: 0, output_tokens: 0, cache_write_tokens: 0, cache_read_tokens: 0, first_ts: e.ts, last_ts: e.ts };
       out.set(k, cur);
     }
     cur.calls += 1;
@@ -100,6 +102,7 @@ export function groupRows(rows) {
     }
     cur.input_tokens += n(e.input_tokens);
     cur.output_tokens += n(e.output_tokens);
+    cur.cache_write_tokens += n(e.cache_write_tokens);
     cur.cache_read_tokens += n(e.cache_read_tokens);
     if (e.ts < cur.first_ts) cur.first_ts = e.ts;
     if (e.ts > cur.last_ts) cur.last_ts = e.ts;
@@ -117,6 +120,7 @@ function cleanRollupRow(r) {
     calls: n(r.calls), priced_calls: n(r.priced_calls), cost_micros: n(r.cost_micros),
     nonbillable_calls: n(r.nonbillable_calls),
     input_tokens: n(r.input_tokens), output_tokens: n(r.output_tokens),
+    cache_write_tokens: n(r.cache_write_tokens),
     cache_read_tokens: n(r.cache_read_tokens),
     first_ts: r.first_ts, last_ts: r.last_ts,
   };

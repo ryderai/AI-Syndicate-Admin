@@ -4,9 +4,9 @@ import { SourceBadge } from "./shared.jsx";
 const SECTION_TITLES = {
   work: { kicker: "Yours", title: "Work · what's on you right now" },
   overview: { kicker: "Command", title: "Overview · your day and the whole agency" },
-  finance: { kicker: "Command", title: "Finance · in, out, projected" },
-  invoices: { kicker: "Command", title: "Invoices · billed, paid, owed" },
-  "ai-cost": { kicker: "Command", title: "AI Cost · what every AI call cost us" },
+  finance: { kicker: "Money", title: "Finance · money in, out and kept" },
+  invoices: { kicker: "Money", title: "Invoices · billed, paid, owed" },
+  "ai-cost": { kicker: "Money", title: "AI Cost · tokens used, by account and job" },
   "sales-stats": { kicker: "Sales", title: "Stats · how the team is doing" },
   clients: { kicker: "Command", title: "Clients · everyone we work with and everyone who pays" },
   /* 14 Sep gave Home Services a header; 18 Sep gave it a child. Without an

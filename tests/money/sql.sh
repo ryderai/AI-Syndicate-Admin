@@ -112,6 +112,9 @@ SQL
 R="select public.admin_ai_cost_rollup('2026-09-01T05:00:00Z','2026-10-01T05:00:00Z')"
 is "Sep 1 23:30 Chicago lands on Sep 1" "$(as $OWNER "select (e->>'calls') from jsonb_array_elements(($R)) e where e->>'day'='2026-09-01'")" "2"
 is "an unpriced call is counted but not priced" "$(as $OWNER "select (e->>'priced_calls')||'/'||(e->>'cost_micros') from jsonb_array_elements(($R)) e where e->>'day'='2026-09-01'")" "1/1000"
+$PSQL -c "update public.admin_usage_events set input_tokens=100, output_tokens=20, cache_write_tokens=30 where cost_micros=1000" >/dev/null
+$PSQL -f supabase/migrations/0042_ai_rollup_cache_write_tokens.sql >/dev/null 2>/tmp/mig.err && ok "0042 applies on top of 0041" || { bad "0042 did not apply"; sed 's/^/       /' /tmp/mig.err; }
+is "0042: cache-write tokens are summed" "$(as $OWNER "select (e->>'cache_write_tokens')||'/'||(e->>'input_tokens')||'/'||(e->>'output_tokens') from jsonb_array_elements(($R)) e where e->>'day'='2026-09-01'")" "30/100/20"
 is "a non-billable call adds no spend" "$(as $OWNER "select sum((e->>'cost_micros')::bigint) from jsonb_array_elements(($R)) e where e->>'day'='2026-09-02'")" "500"
 is "...and is counted as non-billable" "$(as $OWNER "select sum((e->>'nonbillable_calls')::int) from jsonb_array_elements(($R)) e")" "1"
 is "the tool name is the job when there is no platform job" "$(as $OWNER "select e->>'job' from jsonb_array_elements(($R)) e where (e->>'cost_micros')::int=500")" "Leadcapture"

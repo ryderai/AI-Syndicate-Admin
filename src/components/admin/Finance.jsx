@@ -212,10 +212,9 @@ export default function Finance({ member }) {
   return (
     <div className="mny-page">
       <div className="mny-head">
-        <div>
-          <h1 className="mny-title">Finance</h1>
-          <div className="mny-sub">Money in, money out, and what we kept. Owners only.</div>
-        </div>
+        {/* The page title is drawn by Header.jsx; a second one here said
+            "Finance" twice (seen on the live page, 24 Sep 2026). */}
+        <div className="mny-sub">Money in, money out, and what we kept. Owners only.</div>
         <div className="mny-head-right">
           <span className="mny-muted mny-state">{stateLine}</span>
           <button type="button" className="btn" onClick={refreshAll} disabled={refreshing}>{refreshing ? "Refreshing…" : "Refresh"}</button>
@@ -269,16 +268,16 @@ export default function Finance({ member }) {
 
           {view.typedCount === 0 && expenses.loaded && !expenses.error && (
             <div className="mny-alert">
-              <strong>Money out is missing most of our costs.</strong> Only Stripe card fees and AI calls are
-              counted, because no other cost has been typed in yet — software, people, hosting, ads. Add them
+              <strong>Money out is missing most of our costs.</strong> Only Stripe card fees are counted, because
+              no other cost has been typed in yet — software, people, hosting, AI bills, ads. Add them
               in <a href="#mny-costs">the cost list</a> at the bottom (a monthly cost is typed once and counts
               every month).
             </div>
           )}
           {side !== "all" && view.sides.shared.out > 0 && (
             <div className="mny-note-line">
-              Not included above: <strong>{usd(view.sides.shared.out)}</strong> of shared costs (AI from public
-              tools and our own jobs, and costs marked "both") that belong to neither side. They are in the All view.
+              Not included above: <strong>{usd(view.sides.shared.out)}</strong> of shared costs (costs marked
+              "both") that belong to neither side. They are in the All view.
             </div>
           )}
 
@@ -294,7 +293,6 @@ export default function Finance({ member }) {
           <Card
             title={chartMode === "period" ? `Money in vs out · ${rangeLabel(range)}` : `Month by month · ${trend ? rangeLabel({ from: trend.range.from, to: trend.range.to }) : ""}`}
             right={<Tabs value={chartMode} onChange={setChartMode} label="Chart period" options={[{ id: "period", label: view.bucket === "day" ? "By day" : "By month" }, { id: "trend", label: "12 months" }]} />}
-            note={aiState === "error" ? "AI cost could not be read, so money out on this chart is missing AI." : null}
           >
             {chartMode === "period"
               ? <MoneyChart series={view.series} bucket={view.bucket} show={side} />
@@ -326,7 +324,12 @@ export default function Finance({ member }) {
                   }))}
               />
             </Card>
-            <Card title="Where the money went" note="AI is our own count at the moment of each call, not the AI company's bill.">
+            <Card
+              title="Where the money went"
+              note={aiState === "error" ? "AI token use could not be read just now — see the AI Cost page." : view.ai.tokensTotal > 0
+                ? `AI is counted in tokens, not dollars, for now: ${fmtTokens(side === "all" ? view.ai.tokensTotal : view.ai.tokens[side])} tokens used in this period (details on the AI Cost page). A real AI bill typed into the cost list counts here like any other cost.`
+                : null}
+            >
               <ShareList
                 color={C_OUT}
                 total={Math.max(1, cur.out)}
@@ -356,9 +359,8 @@ export default function Finance({ member }) {
           </div>
 
           <div className="mny-foot">
-            Money in and card fees are measured by Stripe. AI is metered by us per call
-            {view.ai.unpricedCalls ? ` (${view.ai.unpricedCalls.toLocaleString("en-US")} calls in this period ran on a service with no price yet and are not in the total)` : ""}.
-            Every other cost is typed in. Dates follow Chicago time.
+            Money in and card fees are measured by Stripe. Every other cost is typed in. AI use is shown in tokens on
+            the AI Cost page and is not in money out until a real bill is typed in. Dates follow Chicago time.
             {summary.truncated && " Stripe returned more than 2,000 rows of something — the oldest may be missing."}
             {summary.invoicesLinked === false && " Stripe did not link payments to invoices on this read, so each payment's side was taken from its description."}
           </div>
@@ -369,6 +371,14 @@ export default function Finance({ member }) {
 }
 
 /* ---------------------------------------------------------------- */
+
+function fmtTokens(x) {
+  const v = Number(x) || 0;
+  if (v >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e4) return `${Math.round(v / 1e3)}K`;
+  return v.toLocaleString("en-US");
+}
 
 function plural(n, word) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;

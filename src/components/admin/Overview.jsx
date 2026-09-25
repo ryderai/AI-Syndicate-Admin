@@ -54,13 +54,22 @@ async function aiMonthAsUsage() {
   const today = teamDate(Date.now());
   const res = await getAiCost({ from: `${today.slice(0, 7)}-01`, to: today });
   if (!res.ok) return { rows: [], error: res.error };
-  const month = { calls: 0, pricedCalls: 0, costMicros: 0 };
+  const month = { calls: 0, pricedCalls: 0, costMicros: 0, tokens: 0 };
   for (const g of res.data.rows || []) {
     month.calls += g.calls || 0;
     month.pricedCalls += g.priced_calls || 0;
     month.costMicros += g.cost_micros || 0;
+    month.tokens += (g.input_tokens || 0) + (g.cache_write_tokens || 0) + (g.output_tokens || 0);
   }
   return { rows: [], month };
+}
+
+function fmtTokens(x) {
+  const v = Number(x) || 0;
+  if (v >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e4) return `${Math.round(v / 1e3)}K`;
+  return v.toLocaleString("en-US");
 }
 
 function plural(n, one, many) {
@@ -398,14 +407,21 @@ export default function Overview({ member, setSection }) {
      * /api/ai-cost (usage.month). Raw rows are only the preview-mode path. */
     let aiSpendMonth;
     let aiUnpricedCalls;
+    let aiTokensMonth = null;
+    let aiCallsMonth = 0;
     if (usage.month) {
       aiSpendMonth = usage.month.pricedCalls ? usage.month.costMicros / 1000000 : null;
+      aiTokensMonth = usage.month.tokens;
+      aiCallsMonth = usage.month.calls;
       aiUnpricedCalls = usage.month.calls - usage.month.pricedCalls;
     } else {
       const aiThisMonth = summarize(usageRows.filter((r) => eventMonth(r) === thisMonth));
       const aiPricedMicros = pricedCost(aiThisMonth);
       aiSpendMonth = aiPricedMicros === null ? null : aiPricedMicros / 1000000;
       aiUnpricedCalls = aiThisMonth.unpricedCalls;
+      const monthRows = usageRows.filter((r) => eventMonth(r) === thisMonth);
+      aiTokensMonth = monthRows.reduce((t, r) => t + (Number(r.input_tokens) || 0) + (Number(r.cache_write_tokens) || 0) + (Number(r.output_tokens) || 0), 0);
+      aiCallsMonth = monthRows.length;
     }
 
     // --- the one sentence at the top ---
@@ -452,6 +468,8 @@ export default function Overview({ member, setSection }) {
         outstandingCents,
         aiSpendMonth,
         aiUnpricedCalls,
+        aiTokensMonth,
+        aiCallsMonth,
         invoiceSample: Boolean(invoices.sample),
         usageSample: Boolean(usage.sample),
         noUsageYet: usage.month ? usage.month.calls === 0 : usageRows.length === 0,
@@ -882,19 +900,18 @@ export default function Overview({ member, setSection }) {
             </div>
             <div>
               <div className="label" style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                AI spend this month <SourceBadge mode={view.broken.usage ? "error" : m.usageSample ? "sample" : m.noUsageYet ? "waiting" : "live"} />
+                AI tokens this month <SourceBadge mode={view.broken.usage ? "error" : m.usageSample ? "sample" : m.noUsageYet ? "waiting" : "live"} />
               </div>
+              {/* TOKENS, NOT DOLLARS — Ryder, 24 Sep 2026: "no need for ai cost
+                  yet in dollars". Same figure the AI Cost page leads with. */}
               <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, marginTop: 4 }}>
-                {view.broken.usage || m.noUsageYet || m.aiSpendMonth === null ? "—"
-                  : `$${m.aiSpendMonth.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                {view.broken.usage || m.noUsageYet || m.aiTokensMonth === null ? "—" : fmtTokens(m.aiTokensMonth)}
               </div>
               <div style={{ fontSize: 11, color: "var(--ink-dim)", marginTop: 2 }}>
                 {view.broken.usage ? "usage couldn't be read"
                   : m.noUsageYet ? "no usage reported yet"
-                    : m.aiSpendMonth === null ? `${m.aiUnpricedCalls} calls, none of them priced yet`
-                      : m.usageSample ? "sample feed, not real spend"
-                        : m.aiUnpricedCalls ? `from the usage feed · ${m.aiUnpricedCalls} not priced`
-                          : "from the usage feed"}
+                    : m.usageSample ? "sample feed"
+                      : `tokens in + out · ${(m.aiCallsMonth || 0).toLocaleString("en-US")} calls`}
               </div>
             </div>
           </div>
@@ -981,8 +998,8 @@ export default function Overview({ member, setSection }) {
           one of them is broken.
         </p>
         <p style={{ fontSize: 13.5, color: "var(--ink-2)", lineHeight: 1.7, marginTop: 12 }}>
-          <strong>AI spend this month</strong> is what we have paid for AI calls since the 1st. It comes
-          from the usage feed, so it reads a dash until the platform starts posting to it.
+          <strong>AI tokens this month</strong> is how many tokens every AI call used since the 1st (in + out),
+          from the usage feed. It is a count, not dollars — dollars are switched off for now.
         </p>
         <p style={{ fontSize: 12.5, color: "var(--ink-dim)", lineHeight: 1.6, marginTop: 14 }}>
           Every date on this page is counted on the team&apos;s calendar (Central time), including the

@@ -715,8 +715,10 @@ const aiCostPage = read("src/components/admin/AiCost.jsx");
 ok("the new page reads grouped rows from the server, not raw rows in the browser",
   /getAiCost\(/.test(aiCostPage) && !/listUsage\(/.test(aiCostPage));
 ok("the page is owners only", /member\?\.role !== "owner"/.test(aiCostPage));
-ok("unpriced calls are said out loud, never added as $0",
-  /no price in our\s+price book|no price/.test(aiCostPage));
+ok("the page counts TOKENS, not dollars (Ryder, 24 Sep 2026)",
+  /Tokens used/.test(aiCostPage) && !/usdMicros\(/.test(aiCostPage));
+ok("calls with no tokens are said out loud, not dropped",
+  /do not use tokens/.test(aiCostPage));
 ok("no sentence on the page calls a rate limit a failure",
   !/calls failed before the AI reported anything/.test(aiCostPage));
 ok("credits are shown per account", /Credits used/.test(aiCostPage));

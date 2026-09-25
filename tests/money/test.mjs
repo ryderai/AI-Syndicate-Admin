@@ -10,6 +10,7 @@ import {
 import { financeView, expenseInRange, aiDept, changeVs } from "../../lib/money-view.js";
 import { departmentFor } from "../../api/finance-summary.js";
 import { groupRows, jobOf } from "../../api/ai-cost.js";
+import { aiCostView, NO_ACCOUNT } from "../../lib/ai-cost-view.js";
 
 let pass = 0, fail = 0;
 function test(name, fn) {
@@ -124,7 +125,8 @@ const expenses = [
   { incurred_on: "2026-09-10", interval: "one_time", amount_cents: 50000, category: "Contractors", department: "agency" },
 ];
 const SEP = { from: "2026-09-01", to: "2026-09-30" };
-const v = financeView({ summary, ai, expenses, range: SEP, today: "2026-09-24" });
+const v = financeView({ summary, ai, expenses, range: SEP, today: "2026-09-24", aiDollars: true });
+const vTok = financeView({ summary, ai, expenses, range: SEP, today: "2026-09-24" });
 
 test("money in, per side, nets the refund on the day it went back", () => {
   assert.equal(v.sides.agency.in, 1150000);
@@ -143,6 +145,12 @@ test("AI: an agency client's workspace is agency cost, no account is shared", ()
   assert.equal(v.sides.shared.ai, 300);
   assert.equal(v.ai.unpricedCalls, 8, "unpriced calls are counted, not priced at $0");
   assert.equal(aiDept({ client_id: "x" }), "agency");
+});
+test("by default AI adds NO dollars to money out (tokens only, 24 Sep 2026)", () => {
+  assert.equal(vTok.all.ai, 0);
+  assert.equal(vTok.all.out, v.all.out - v.all.ai);
+  assert.equal(vTok.series.reduce((a, b) => a + b.out, 0), vTok.all.out, "the chart agrees");
+  assert.equal(vTok.ai.dollars, false);
 });
 test("typed costs: one-off on its day, monthly once per month, blank side = shared", () => {
   assert.equal(v.sides.agency.typed, 50000);
@@ -180,7 +188,7 @@ test("agency: owed and overdue come from open invoices", () => {
   assert.equal(v.agency.overdue.length, 1);
 });
 test("August does not leak into September", () => {
-  const aug = financeView({ summary, ai, expenses, range: { from: "2026-08-01", to: "2026-08-31" } });
+  const aug = financeView({ summary, ai, expenses, range: { from: "2026-08-01", to: "2026-08-31" }, aiDollars: true });
   assert.equal(aug.all.in, 870145);
   assert.equal(aug.sides.platform.ai, 900);
 });
@@ -210,6 +218,39 @@ test("Node grouping follows the SQL rollup rules (tests/money/sql.sh checks the 
   assert.equal(sep1.priced_calls, 1);
   assert.equal(sep1.cost_micros, 1000, "a string bigint is added, not glued on");
   assert.equal(sep2.cost_micros, 500);
+});
+
+/* ---------------- AI Cost is TOKENS (24 Sep 2026) ---------------- */
+const tokData = {
+  workspaces: { w1: { name: "Dahler" }, w2: { name: "Ryan" } },
+  credits: [{ workspace_id: "w1", spent: 40, refunded: 5, spends: 2 }],
+  rows: [
+    { day: "2026-09-02", workspace_id: "w1", provider: "anthropic", model: "m", job: "brand.scan", calls: 10, input_tokens: 1000, cache_write_tokens: 500, output_tokens: 200, cache_read_tokens: 9000, cost_micros: 999 },
+    { day: "2026-09-03", workspace_id: "w2", provider: "openai", model: "g", job: "social.post", calls: 4, input_tokens: 3000, output_tokens: 1000 },
+    { day: "2026-09-03", workspace_id: null, source: "platform", provider: "serpapi", model: null, job: "Lead capture", calls: 50 },
+    { day: "2026-08-30", workspace_id: "w1", provider: "anthropic", model: "m", job: "brand.scan", calls: 1, input_tokens: 77, output_tokens: 1 },
+  ],
+};
+const tv = aiCostView(tokData, SEP);
+test("tokens = in (input + cache writes) + out; cache reads are counted apart", () => {
+  assert.equal(tv.total.tokensIn, 4500);
+  assert.equal(tv.total.tokensOut, 1200);
+  assert.equal(tv.total.tokens, 5700);
+  assert.equal(tv.total.cacheRead, 9000, "not in the headline");
+});
+test("services with no tokens are counted as calls, not as tokens", () => {
+  assert.equal(tv.total.tokenlessCalls, 50);
+  assert.equal(tv.total.calls, 64);
+});
+test("accounts rank by tokens, and the no-account row is its own line", () => {
+  assert.equal(tv.accounts[0].info.name, "Ryan", "4,000 tokens beats 1,700");
+  assert.equal(tv.accounts[1].tokens, 1700);
+  assert.ok(tv.accounts.some((a) => a.key === NO_ACCOUNT && a.calls === 50 && a.tokens === 0));
+  assert.equal(tv.accountShare, 1, "every token here is tied to an account");
+  assert.equal(tv.accounts[1].credits, 35, "credits land on the same account");
+});
+test("the over-time chart counts tokens, and August stays out of September", () => {
+  assert.equal(tv.series.reduce((a, b) => a + b.tagged + b.none, 0), 5700);
 });
 
 console.log(`\n${pass} passed, ${fail} failed (TZ=${process.env.TZ || "unset"})`);

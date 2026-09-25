@@ -5,7 +5,7 @@ import { toast } from "../../lib/toast.js";
 import { getAiCost } from "../../lib/moneyApi.js";
 import { timeAgo } from "./shared.jsx";
 import {
-  RangePicker, Tabs, Stat, SimpleTable, Card, Loading, usdMicros, pctText, C_PLATFORM,
+  RangePicker, Tabs, Stat, SimpleTable, Card, Loading, pctText, C_PLATFORM,
 } from "./moneyParts.jsx";
 import { aiCostView, jobLabel, NO_ACCOUNT, CONSOLE } from "../../../lib/ai-cost-view.js";
 import { presetRange, previousRange, rangeLabel, monthName, addDays } from "../../../lib/money-range.js";
@@ -33,10 +33,12 @@ import { teamDate } from "../../../lib/brain-context.js";
  * 12 Sep and again 24 Sep 2026 — and hung forever if any one of its eleven
  * reads failed.
  *
- * Every figure is METERED — our count at the moment of the call, from the
- * token numbers the AI company's own reply carried — not the AI company's
- * bill. Calls to services with no price (search APIs, some free models) are
- * counted and shown, never added as $0.
+ * TOKENS, NOT DOLLARS (Ryder, 24 Sep 2026: "make it all based off of token
+ * usage. no need for ai cost yet in dollars"). Every figure is the token
+ * count the AI company's own reply carried, counted at the moment of the
+ * call. No price book is involved, so nothing on this page depends on a
+ * price being right. Dollars can come back later from the same rows — the
+ * server still sends cost_micros.
  * ================================================================== */
 
 const VIEWS = [
@@ -91,7 +93,7 @@ export default function AiCost({ member }) {
   useScreenContext(() => ({
     page: "ai-cost",
     label: "AI Cost",
-    visible: [`AI spend for ${rangeLabel(range)} by account, job, service and day`],
+    visible: [`AI token use for ${rangeLabel(range)} by account, job, service and day`],
   }), [range]);
 
   const v = useMemo(() => (data ? aiCostView(data, range) : null), [data, range]);
@@ -102,21 +104,19 @@ export default function AiCost({ member }) {
   }
 
   const stateLine = state === "live" && data
-    ? `Read ${timeAgo(Date.parse(data.readAt))} · ${n(data.rowCount)} calls${data.via === "scan" ? " · fast mode off until migration 0041 runs" : ""}${data.cached ? " · kept for a minute" : ""}`
+    ? `Read ${timeAgo(Date.parse(data.readAt))} · ${n(data.rowCount)} calls${data.via === "scan" ? " · slow mode until migration 0041 runs" : ""}${data.cached ? " · kept for a minute" : ""}`
     : state === "stale" ? "Showing your last numbers — reading fresh ones…"
       : state === "reloading" ? "Reading…"
         : state === "error" ? `Could not read: ${err}`
           : state === "nokey" ? "Preview mode — no database." : "Reading the usage log…";
 
   const change = (a, b) => (b && b > 0 ? (a - b) / b : null);
+  const share = (x) => pctText(v && v.total.tokens ? x / v.total.tokens : null);
 
   return (
     <div className="mny-page">
       <div className="mny-head">
-        <div>
-          <h1 className="mny-title">AI Cost</h1>
-          <div className="mny-sub">What every AI call cost us, and which account or job it was for. Owners only.</div>
-        </div>
+        <div className="mny-sub">How many AI tokens we used, and which account or job used them. Owners only.</div>
         <div className="mny-head-right">
           <span className="mny-muted mny-state">{stateLine}</span>
           <button type="button" className="btn" onClick={() => { setToday(teamDate(Date.now())); load(range, true); }}>Refresh</button>
@@ -132,47 +132,45 @@ export default function AiCost({ member }) {
           <div className="mny-hero">
             <Stat
               big
-              label="AI cost"
-              value={usdMicros(v.total.costMicros)}
-              change={change(v.total.costMicros, pv?.total.costMicros)}
+              label="Tokens used"
+              value={tok(v.total.tokens)}
+              change={change(v.total.tokens, pv?.total.tokens)}
               changeGoodWhenUp={false}
-              sub={`${n(v.total.calls)} calls · metered by us`}
+              sub={`${tok(v.total.tokensIn)} in · ${tok(v.total.tokensOut)} out · ${n(v.total.calls)} calls`}
             />
             <Stat
               big
               label="Tied to an account"
               value={pctText(v.accountShare)}
-              sub={`${usdMicros(v.accountCostMicros)} across ${v.workspaceCount} account${v.workspaceCount === 1 ? "" : "s"}`}
+              sub={`${tok(v.accountTokens)} tokens across ${v.workspaceCount} account${v.workspaceCount === 1 ? "" : "s"}`}
             />
             <Stat
               big
               label="Credits used"
               value={v.creditsTotal ? n(v.creditsTotal) : "0"}
-              sub={data.creditsVia === "none" ? "the credit ledger could not be read" : "plan tokens spent by platform accounts"}
+              sub={data.creditsVia === "none" ? "the credit ledger could not be read" : "plan tokens charged to platform accounts"}
             />
           </div>
 
-          {v.total.unpricedCalls > 0 && (
-            <div className="mny-note-line">
-              <strong>{n(v.total.unpricedCalls)}</strong> of the {n(v.total.calls)} calls went to services with no price in our
-              price book yet (search APIs and free models) — they are counted below but add nothing to the dollar total.
-            </div>
-          )}
+          <div className="mny-note-line">
+            {v.total.cacheRead > 0 && <><strong>{tok(v.total.cacheRead)}</strong> more tokens were read back from a cache (re-used, not new work — not in the total). </>}
+            {v.total.tokenlessCalls > 0 && <><strong>{n(v.total.tokenlessCalls)}</strong> calls went to services that do not use tokens (search APIs, image tools) — counted as calls.</>}
+          </div>
           {v.unnamed.after.calls > 0 && (
             <div className="mny-alert">
-              <strong>{n(v.unnamed.after.calls)} calls since 23 Sep carry no job name</strong> ({usdMicros(v.unnamed.after.costMicros)}).
-              The platform names every call since then, so these point at something that bypasses its meter context.
+              <strong>{n(v.unnamed.after.calls)} calls since 23 Sep carry no job name</strong> ({tok(v.unnamed.after.tokens)} tokens).
+              The platform names every call since then, so these point at something that bypasses its meter.
             </div>
           )}
 
-          <Tabs value={viewId} onChange={setViewId} options={VIEWS} label="How to group AI cost" />
+          <Tabs value={viewId} onChange={setViewId} options={VIEWS} label="How to group AI use" />
 
           {viewId === "accounts" && (
             <Card
               title={`Accounts · ${rangeLabel(range)}`}
               note={'An account is a platform workspace (its own name, domain and owner). "No account" is the platform\'s public tools (free scan, lead capture) and our own scheduled jobs. Click an account to see its jobs and AI services.'}
             >
-              <AccountTable v={v} openKey={openKey} setOpenKey={setOpenKey} />
+              <AccountTable v={v} openKey={openKey} setOpenKey={setOpenKey} share={share} />
             </Card>
           )}
 
@@ -183,11 +181,11 @@ export default function AiCost({ member }) {
                   { key: "job", label: "Job", render: (r) => <span title={r.job || ""}>{jobLabel(r.job)}</span>, sortValue: (r) => r.job || "" },
                   { key: "accountCount", label: "Accounts", num: true },
                   { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
-                  { key: "costMicros", label: "Cost", num: true, render: (r) => usdMicros(r.costMicros) },
-                  { key: "share", label: "Share", num: true, render: (r) => pctText(v.total.costMicros ? r.costMicros / v.total.costMicros : null), sortValue: (r) => r.costMicros },
+                  { key: "tokens", label: "Tokens", num: true, render: (r) => (r.tokens ? tok(r.tokens) : "—") },
+                  { key: "share", label: "Share", num: true, render: (r) => share(r.tokens), sortValue: (r) => r.tokens },
                 ]}
                 rows={v.jobs.map((j) => ({ ...j, key: j.job || "none" }))}
-                total={{ job: "Total", calls: n(v.total.calls), costMicros: usdMicros(v.total.costMicros) }}
+                total={{ job: "Total", calls: n(v.total.calls), tokens: tok(v.total.tokens) }}
               />
             </Card>
           )}
@@ -199,25 +197,26 @@ export default function AiCost({ member }) {
                   { key: "provider", label: "Service" },
                   { key: "model", label: "Model", render: (r) => r.model || "—" },
                   { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
-                  { key: "unpricedCalls", label: "Not priced", num: true, render: (r) => (r.unpricedCalls ? n(r.unpricedCalls) : "—") },
-                  { key: "costMicros", label: "Cost", num: true, render: (r) => (r.pricedCalls ? usdMicros(r.costMicros) : <span className="mny-muted">no price</span>) },
+                  { key: "tokensIn", label: "Tokens in", num: true, render: (r) => (r.tokens ? tok(r.tokensIn) : "—") },
+                  { key: "tokensOut", label: "Tokens out", num: true, render: (r) => (r.tokens ? tok(r.tokensOut) : "—") },
+                  { key: "tokens", label: "Total", num: true, render: (r) => (r.tokens ? tok(r.tokens) : <span className="mny-muted">no tokens</span>) },
                 ]}
                 rows={v.services.map((s) => ({ ...s, key: `${s.provider}|${s.model}` }))}
-                total={{ provider: "Total", calls: n(v.total.calls), costMicros: usdMicros(v.total.costMicros) }}
+                total={{ provider: "Total", calls: n(v.total.calls), tokensIn: tok(v.total.tokensIn), tokensOut: tok(v.total.tokensOut), tokens: tok(v.total.tokens) }}
               />
             </Card>
           )}
 
           {viewId === "time" && (
             <Card title={v.bucket === "day" ? "Day by day" : "Month by month"}>
-              <CostBars series={v.series} bucket={v.bucket} />
+              <TokenBars series={v.series} bucket={v.bucket} />
               <SimpleTable
                 columns={[
                   { key: "label", label: v.bucket === "day" ? "Day" : "Month", sortValue: (r) => r.key },
                   { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
-                  { key: "tagged", label: "Accounts", num: true, render: (r) => usdMicros(r.tagged) },
-                  { key: "none", label: "No account", num: true, render: (r) => usdMicros(r.none) },
-                  { key: "total", label: "Total", num: true, render: (r) => usdMicros(r.total) },
+                  { key: "tagged", label: "Accounts", num: true, render: (r) => tok(r.tagged) },
+                  { key: "none", label: "No account", num: true, render: (r) => tok(r.none) },
+                  { key: "total", label: "Total tokens", num: true, render: (r) => tok(r.total) },
                 ]}
                 rows={v.series.map((b) => ({ ...b, total: b.tagged + b.none, label: v.bucket === "day" ? b.key : monthName(b.key, { long: true }) })).reverse()}
                 max={62}
@@ -226,8 +225,8 @@ export default function AiCost({ member }) {
           )}
 
           <div className="mny-foot">
-            Dollar figures are metered: counted by us at the moment of each call from the token counts the AI company's reply
-            carried, priced from our price book. They are not the AI company's invoice. Days follow Chicago time.
+            Token counts are the ones each AI company's own reply carried, counted by us at the moment of the call. "Tokens"
+            here = tokens in (including cache writes) + tokens out. Dollar cost is switched off for now. Days follow Chicago time.
             {v.unnamed.before.calls > 0 && ` ${n(v.unnamed.before.calls)} calls from before ${addDays(data.taggingSince, 0)} carry no job name — the platform started naming every call that day.`}
             {data.truncated && " The period held more rows than one read allows — pick a shorter period for exact totals."}
           </div>
@@ -237,7 +236,18 @@ export default function AiCost({ member }) {
   );
 }
 
-function AccountTable({ v, openKey, setOpenKey }) {
+/* 12,400,000 → "12.4M". Tokens run into the millions within days, and a
+ * wall of digits is harder to compare than three characters. The exact
+ * number is in the title (hover). */
+function tok(x) {
+  const v = Number(x) || 0;
+  if (v >= 1e9) return `${(v / 1e9).toFixed(v >= 1e10 ? 0 : 1)}B`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(v >= 1e7 ? 0 : 1)}M`;
+  if (v >= 1e4) return `${Math.round(v / 1e3)}K`;
+  return v.toLocaleString("en-US");
+}
+
+function AccountTable({ v, openKey, setOpenKey, share }) {
   const [all, setAll] = useState(false);
   const rows = all ? v.accounts : v.accounts.slice(0, 25);
   if (!v.accounts.length) return <div className="mny-empty">No AI calls in this period.</div>;
@@ -249,7 +259,9 @@ function AccountTable({ v, openKey, setOpenKey }) {
             <th>Account</th>
             <th className="num">Credits used</th>
             <th className="num">Calls</th>
-            <th className="num">Cost</th>
+            <th className="num">Tokens in</th>
+            <th className="num">Tokens out</th>
+            <th className="num">Total tokens</th>
             <th className="num">Share</th>
           </tr>
         </thead>
@@ -275,12 +287,14 @@ function AccountTable({ v, openKey, setOpenKey }) {
                 </td>
                 <td className="num">{a.credits ? n(a.credits) : "—"}</td>
                 <td className="num">{n(a.calls)}</td>
-                <td className="num"><strong>{usdMicros(a.costMicros)}</strong></td>
-                <td className="num">{pctText(v.total.costMicros ? a.costMicros / v.total.costMicros : null)}</td>
+                <td className="num" title={n(a.tokensIn)}>{tok(a.tokensIn)}</td>
+                <td className="num" title={n(a.tokensOut)}>{tok(a.tokensOut)}</td>
+                <td className="num" title={n(a.tokens)}><strong>{tok(a.tokens)}</strong></td>
+                <td className="num">{share(a.tokens)}</td>
               </tr>,
               open && (
                 <tr key={`${a.key}-open`} className="mny-open-row">
-                  <td colSpan={5}>
+                  <td colSpan={7}>
                     <div className="mny-two">
                       <div>
                         <div className="mny-mini-head">Jobs</div>
@@ -289,7 +303,7 @@ function AccountTable({ v, openKey, setOpenKey }) {
                           columns={[
                             { key: "job", label: "Job", render: (r) => jobLabel(r.job), sortValue: (r) => r.job || "" },
                             { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
-                            { key: "costMicros", label: "Cost", num: true, render: (r) => usdMicros(r.costMicros) },
+                            { key: "tokens", label: "Tokens", num: true, render: (r) => (r.tokens ? tok(r.tokens) : "—") },
                           ]}
                           rows={a.jobs.map((j) => ({ ...j, key: j.job || "none" }))}
                         />
@@ -301,7 +315,7 @@ function AccountTable({ v, openKey, setOpenKey }) {
                           columns={[
                             { key: "provider", label: "Service", render: (r) => `${r.provider}${r.model ? ` · ${r.model}` : ""}` },
                             { key: "calls", label: "Calls", num: true, render: (r) => n(r.calls) },
-                            { key: "costMicros", label: "Cost", num: true, render: (r) => (r.pricedCalls ? usdMicros(r.costMicros) : "no price") },
+                            { key: "tokens", label: "Tokens", num: true, render: (r) => (r.tokens ? tok(r.tokens) : "no tokens") },
                           ]}
                           rows={a.services.map((s) => ({ ...s, key: `${s.provider}|${s.model}` }))}
                         />
@@ -313,6 +327,7 @@ function AccountTable({ v, openKey, setOpenKey }) {
                         {a.info.plan ? ` · plan ${a.info.plan}` : ""}
                         {a.info.subscriptionStatus ? ` · subscription ${a.info.subscriptionStatus}` : ""}
                         {a.creditSpends ? ` · ${n(a.creditSpends)} credit charges` : ""}
+                        {a.cacheRead ? ` · ${tok(a.cacheRead)} tokens read from cache` : ""}
                       </div>
                     )}
                   </td>
@@ -326,7 +341,9 @@ function AccountTable({ v, openKey, setOpenKey }) {
             <td>Total</td>
             <td className="num">{v.creditsTotal ? n(v.creditsTotal) : "—"}</td>
             <td className="num">{n(v.total.calls)}</td>
-            <td className="num">{usdMicros(v.total.costMicros)}</td>
+            <td className="num">{tok(v.total.tokensIn)}</td>
+            <td className="num">{tok(v.total.tokensOut)}</td>
+            <td className="num">{tok(v.total.tokens)}</td>
             <td className="num">100%</td>
           </tr>
         </tfoot>
@@ -338,12 +355,12 @@ function AccountTable({ v, openKey, setOpenKey }) {
   );
 }
 
-function CostBars({ series, bucket }) {
+function TokenBars({ series, bucket }) {
   const [hover, setHover] = useState(null);
   const width = 900, height = 200, pad = { l: 56, r: 12, t: 10, b: 26 };
   const innerW = width - pad.l - pad.r, innerH = height - pad.t - pad.b;
   const max = Math.max(1, ...series.map((b) => b.tagged + b.none));
-  const y = (v) => pad.t + innerH - (v / max) * innerH;
+  const y = (val) => pad.t + innerH - (val / max) * innerH;
   const slot = innerW / Math.max(1, series.length);
   const bw = Math.max(3, Math.min(30, slot * 0.6));
   const every = Math.max(1, Math.ceil(series.length / 12));
@@ -351,11 +368,11 @@ function CostBars({ series, bucket }) {
   const h = hover !== null ? series[hover] : null;
   return (
     <div className="mny-chart" style={{ marginBottom: 14 }}>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="AI cost over time" preserveAspectRatio="none" style={{ height: 200 }}>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="AI tokens over time" preserveAspectRatio="none" style={{ height: 200 }}>
         {[0, 0.5, 1].map((f) => (
           <g key={f}>
             <line x1={pad.l} x2={width - pad.r} y1={y(f * max)} y2={y(f * max)} stroke="var(--rule)" />
-            <text x={pad.l - 8} y={y(f * max) + 4} textAnchor="end" className="mny-axis">{usdMicros(f * max)}</text>
+            <text x={pad.l - 8} y={y(f * max) + 4} textAnchor="end" className="mny-axis">{tok(f * max)}</text>
           </g>
         ))}
         {series.map((b, i) => {
@@ -369,7 +386,7 @@ function CostBars({ series, bucket }) {
               {i % every === 0 && <text x={x + bw / 2} y={height - 8} textAnchor="middle" className="mny-axis">{lab(b.key)}</text>}
               <rect x={pad.l + slot * i} y={pad.t} width={slot} height={innerH} fill="transparent" tabIndex={0}
                 onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(i)} onBlur={() => setHover(null)}
-                aria-label={`${lab(b.key)}: ${usdMicros(b.tagged + b.none)}`} />
+                aria-label={`${lab(b.key)}: ${tok(b.tagged + b.none)} tokens`} />
             </g>
           );
         })}
@@ -378,7 +395,7 @@ function CostBars({ series, bucket }) {
         <span><i style={{ background: C_PLATFORM }} />Tied to an account</span>
         <span><i style={{ background: C_NONE }} />No account</span>
         <span className="mny-readout">
-          {h ? <><strong>{lab(h.key)}</strong> · accounts {usdMicros(h.tagged)} · no account {usdMicros(h.none)} · {n(h.calls)} calls</> : "Point at a bar to read it."}
+          {h ? <><strong>{lab(h.key)}</strong> · accounts {tok(h.tagged)} · no account {tok(h.none)} · {n(h.calls)} calls</> : "Point at a bar to read it."}
         </span>
       </div>
     </div>
