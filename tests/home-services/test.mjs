@@ -788,7 +788,7 @@ test("both screens use the SAME two functions — not a copy of the rule", () =>
 });
 
 test("the Leads page is wired into the sidebar and the router", () => {
-  assert.match(src("src/components/admin/Sidebar.jsx"), /\[\["home-services-leads", "Leads"\]\]/);
+  assert.match(src("src/components/admin/Sidebar.jsx"), /\[\["home-services-leads", "Leads"\](, \["home-services-heat", "Heat map"\])?\]/);
   assert.match(src("src/components/AdminDashboard.jsx"), /case "home-services-leads": return <HomeServicesLeads \/>;/);
 });
 

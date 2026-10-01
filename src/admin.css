@@ -4910,3 +4910,69 @@ select.adm-mtg-in { padding-right: 4px; }
 .mny-nowrap { white-space: nowrap; }
 .mny-closer { border: 1px solid var(--rule); background: var(--bg-1, #fff); border-radius: 12px; padding: 12px 16px 14px; margin: 6px 0 14px; }
 .mny-closer > .mny-mini-head:first-child { margin-top: 0; color: #4f46e5; }
+
+/* ================================================================
+ * HEAT MAP — Home Services → Heat map.  30 Sep 2026.
+ * Everything prefixed .adm-heat-, appended, nothing above touched.
+ * ================================================================ */
+.adm-heat-controls { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 12px; }
+.adm-heat-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-dim); }
+@media (max-width: 600px) { .adm-heat-controls label { flex: 1 1 140px; } .adm-heat-controls select { width: 100%; min-width: 0 !important; } }
+.adm-heat-controls select {
+  min-width: 150px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--rule);
+  background: #fff; color: var(--ink); font: inherit; font-size: 13.5px; font-weight: 500; text-transform: none; letter-spacing: 0;
+}
+.adm-heat .adm-fin-block { margin-top: 18px; }
+.adm-heat-main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.adm-heat-main > .adm-fin-block { margin-top: 18px; }
+.adm-heat-side { display: flex; flex-direction: column; min-width: 0; }
+@media (max-width: 1100px) { .adm-heat-main { grid-template-columns: 1fr; } }
+
+.adm-heat-toggles { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; margin-bottom: 12px; }
+.adm-heat-seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 9px; overflow: hidden; background: var(--bg-2); }
+.adm-heat-seg button { border: 0; background: transparent; padding: 7px 12px; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-2); cursor: pointer; }
+.adm-heat-seg button + button { border-left: 1px solid var(--rule); }
+.adm-heat-seg button.active { background: var(--ink); color: #fff; }
+.adm-heat-seg button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -2px; }
+
+.adm-heat-pic { max-height: 78vh; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--rule); border-radius: 10px; background: #0b1020; }
+.adm-heat-stage { position: relative; width: 100%; }
+.adm-heat-stage img, .adm-heat-stage canvas { position: absolute; left: 0; top: 0; display: block; }
+.adm-heat-stage img { opacity: .82; }
+.adm-heat-stage canvas { pointer-events: none; }
+.adm-heat-fold { position: absolute; left: 0; right: 0; border-top: 2px dashed rgba(255,255,255,.85); pointer-events: none; }
+.adm-heat-fold span { position: absolute; right: 6px; top: 4px; font-size: 10.5px; font-weight: 700; color: #fff; background: rgba(10,34,69,.85); padding: 2px 7px; border-radius: 5px; }
+.adm-heat-tag { position: absolute; left: 8px; font-size: 11.5px; color: #fff; background: rgba(10,34,69,.88); padding: 3px 8px; border-radius: 6px; pointer-events: none; white-space: nowrap; }
+.adm-heat-tag b { font-size: 13px; margin-right: 2px; }
+.adm-heat-legend { display: flex; align-items: center; gap: 8px; padding: 8px 10px; font-size: 11.5px; color: #cbd5e1; background: #0b1020; position: sticky; bottom: 0; }
+.adm-heat-legend i { flex: 0 0 120px; height: 8px; border-radius: 99px; background: linear-gradient(90deg, #2563eb, #10b981, #facc15, #f97316, #dc2626); }
+.adm-heat-legend .dim { color: #94a3b8; }
+
+.adm-heat-changes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.adm-heat-changes li { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; padding: 10px 12px; border-radius: 9px; background: var(--bg-2); border-left: 3px solid var(--rule); font-size: 13px; line-height: 1.5; }
+.adm-heat-changes li b { color: var(--ink); }
+.adm-heat-changes li > span:last-child { grid-column: 1 / -1; color: var(--ink-2); }
+.adm-heat-changes li.v-up { border-left-color: #2563eb; }
+.adm-heat-changes li.v-leave { border-left-color: #dc2626; }
+.adm-heat-changes li.v-cut { border-left-color: #f97316; }
+.adm-heat-changes li.v-dead { border-left-color: #a16207; }
+
+.adm-heat-chip { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 700; white-space: nowrap; background: var(--bg-3, #eef2f7); color: var(--ink-2); margin: 1px 4px 1px 0; }
+.adm-heat-chip.v-up, .v-up > .adm-heat-chip { background: #eff6ff; color: #1d4ed8; }
+.adm-heat-chip.v-leave, .v-leave > .adm-heat-chip { background: #fef2f2; color: #b91c1c; }
+.adm-heat-chip.v-cut, .v-cut > .adm-heat-chip { background: #fff7ed; color: #c2410c; }
+.adm-heat-chip.v-dead, .v-dead > .adm-heat-chip { background: #fefce8; color: #854d0e; }
+.adm-heat-chip.v-keep { background: var(--success-soft, #ecfdf5); color: #006b1a; }
+.adm-heat-chip.v-few { background: var(--bg-3, #eef2f7); color: var(--ink-dim); }
+
+.adm-heat-curve { display: flex; flex-direction: column; gap: 5px; }
+.adm-heat-curve-row { display: grid; grid-template-columns: 40px 1fr 44px; gap: 8px; align-items: center; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.adm-heat-curve-row .d { color: var(--ink-dim); }
+.adm-heat-curve-row .v { text-align: right; font-weight: 600; color: var(--ink); }
+.adm-heat-curve-row .bar { height: 10px; border-radius: 99px; background: var(--bg-2); overflow: hidden; }
+.adm-heat-curve-row .bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent-2), #3b82f6); }
+
+.adm-heat-table tr.sub td:first-child { padding-left: 26px; color: var(--ink-2); }
+.adm-heat-table .small { font-size: 11.5px; margin-top: 2px; }
+.adm-heat-notes { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.65; color: var(--ink-2); }
+.adm-heat-notes li + li { margin-top: 4px; }

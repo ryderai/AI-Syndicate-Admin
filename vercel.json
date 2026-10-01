@@ -59,6 +59,9 @@
     },
     "api/stripe-finance.js": {
       "maxDuration": 30
+    },
+    "api/hs-heat.js": {
+      "maxDuration": 10
     }
   },
   "crons": [

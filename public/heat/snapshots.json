@@ -1,0 +1,1447 @@
+{
+  "pages": {
+    "home-services": {
+      "desktop": {
+        "file": "home-services-desktop.jpg",
+        "url": "https://www.aisyndicate.com/home-services/",
+        "w": 1280,
+        "h": 6280,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 1280,
+            "height": 83
+          },
+          "hero": {
+            "top": 107,
+            "left": 150,
+            "width": 980,
+            "height": 1374
+          },
+          "chat": {
+            "top": 585,
+            "left": 203,
+            "width": 874,
+            "height": 517
+          },
+          "scan-form": {
+            "top": 1129,
+            "left": 198,
+            "width": 884,
+            "height": 303
+          },
+          "calculator": {
+            "top": 1507,
+            "left": 150,
+            "width": 980,
+            "height": 375
+          },
+          "offer": {
+            "top": 1908,
+            "left": 150,
+            "width": 980,
+            "height": 1160
+          },
+          "guarantee": {
+            "top": 3093,
+            "left": 150,
+            "width": 980,
+            "height": 634
+          },
+          "trades": {
+            "top": 3749,
+            "left": 150,
+            "width": 980,
+            "height": 233
+          },
+          "proof": {
+            "top": 4021,
+            "left": 150,
+            "width": 980,
+            "height": 469
+          },
+          "dashboard": {
+            "top": 4516,
+            "left": 150,
+            "width": 980,
+            "height": 1003
+          },
+          "faq": {
+            "top": 5545,
+            "left": 150,
+            "width": 980,
+            "height": 596
+          },
+          "footer": {
+            "top": 6204,
+            "left": 0,
+            "width": 1280,
+            "height": 76
+          }
+        },
+        "taken_at": "2026-09-30T21:08:56.135Z"
+      },
+      "mobile": {
+        "file": "home-services-mobile.jpg",
+        "url": "https://www.aisyndicate.com/home-services/",
+        "w": 390,
+        "h": 9027,
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 390,
+            "height": 74
+          },
+          "hero": {
+            "top": 82,
+            "left": 16,
+            "width": 358,
+            "height": 1839
+          },
+          "chat": {
+            "top": 721,
+            "left": 37,
+            "width": 316,
+            "height": 597
+          },
+          "scan-form": {
+            "top": 1345,
+            "left": 32,
+            "width": 326,
+            "height": 548
+          },
+          "calculator": {
+            "top": 1947,
+            "left": 16,
+            "width": 358,
+            "height": 441
+          },
+          "offer": {
+            "top": 2414,
+            "left": 16,
+            "width": 358,
+            "height": 1651
+          },
+          "guarantee": {
+            "top": 4092,
+            "left": 16,
+            "width": 358,
+            "height": 844
+          },
+          "trades": {
+            "top": 4958,
+            "left": 16,
+            "width": 358,
+            "height": 598
+          },
+          "proof": {
+            "top": 5596,
+            "left": 16,
+            "width": 358,
+            "height": 1073
+          },
+          "dashboard": {
+            "top": 6694,
+            "left": 16,
+            "width": 358,
+            "height": 1310
+          },
+          "faq": {
+            "top": 8031,
+            "left": 16,
+            "width": 358,
+            "height": 818
+          },
+          "footer": {
+            "top": 8912,
+            "left": 0,
+            "width": 390,
+            "height": 115
+          }
+        },
+        "taken_at": "2026-09-30T21:09:01.781Z"
+      }
+    },
+    "lawn-care": {
+      "desktop": {
+        "file": "lawn-care-desktop.jpg",
+        "url": "https://www.aisyndicate.com/home-services/lawn-care/",
+        "w": 1280,
+        "h": 6025,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 1280,
+            "height": 83
+          },
+          "hero": {
+            "top": 107,
+            "left": 150,
+            "width": 980,
+            "height": 1374
+          },
+          "chat": {
+            "top": 585,
+            "left": 203,
+            "width": 874,
+            "height": 517
+          },
+          "scan-form": {
+            "top": 1129,
+            "left": 198,
+            "width": 884,
+            "height": 303
+          },
+          "calculator": {
+            "top": 1507,
+            "left": 150,
+            "width": 980,
+            "height": 375
+          },
+          "offer": {
+            "top": 1908,
+            "left": 150,
+            "width": 980,
+            "height": 1160
+          },
+          "guarantee": {
+            "top": 3093,
+            "left": 150,
+            "width": 980,
+            "height": 634
+          },
+          "proof": {
+            "top": 3767,
+            "left": 150,
+            "width": 980,
+            "height": 469
+          },
+          "dashboard": {
+            "top": 4262,
+            "left": 150,
+            "width": 980,
+            "height": 1003
+          },
+          "faq": {
+            "top": 5290,
+            "left": 150,
+            "width": 980,
+            "height": 596
+          },
+          "footer": {
+            "top": 5950,
+            "left": 0,
+            "width": 1280,
+            "height": 76
+          }
+        },
+        "taken_at": "2026-09-30T21:09:10.974Z"
+      },
+      "mobile": {
+        "file": "lawn-care-mobile.jpg",
+        "url": "https://www.aisyndicate.com/home-services/lawn-care/",
+        "w": 390,
+        "h": 8407,
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 390,
+            "height": 74
+          },
+          "hero": {
+            "top": 82,
+            "left": 16,
+            "width": 358,
+            "height": 1839
+          },
+          "chat": {
+            "top": 721,
+            "left": 37,
+            "width": 316,
+            "height": 597
+          },
+          "scan-form": {
+            "top": 1345,
+            "left": 32,
+            "width": 326,
+            "height": 548
+          },
+          "calculator": {
+            "top": 1947,
+            "left": 16,
+            "width": 358,
+            "height": 441
+          },
+          "offer": {
+            "top": 2414,
+            "left": 16,
+            "width": 358,
+            "height": 1651
+          },
+          "guarantee": {
+            "top": 4092,
+            "left": 16,
+            "width": 358,
+            "height": 844
+          },
+          "proof": {
+            "top": 4976,
+            "left": 16,
+            "width": 358,
+            "height": 1073
+          },
+          "dashboard": {
+            "top": 6074,
+            "left": 16,
+            "width": 358,
+            "height": 1310
+          },
+          "faq": {
+            "top": 7411,
+            "left": 16,
+            "width": 358,
+            "height": 818
+          },
+          "footer": {
+            "top": 8292,
+            "left": 0,
+            "width": 390,
+            "height": 115
+          }
+        },
+        "taken_at": "2026-09-30T21:09:16.541Z"
+      }
+    },
+    "painting": {
+      "desktop": {
+        "file": "painting-desktop.jpg",
+        "url": "https://www.aisyndicate.com/home-services/painting/",
+        "w": 1280,
+        "h": 6025,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 1280,
+            "height": 83
+          },
+          "hero": {
+            "top": 107,
+            "left": 150,
+            "width": 980,
+            "height": 1374
+          },
+          "chat": {
+            "top": 585,
+            "left": 203,
+            "width": 874,
+            "height": 517
+          },
+          "scan-form": {
+            "top": 1129,
+            "left": 198,
+            "width": 884,
+            "height": 303
+          },
+          "calculator": {
+            "top": 1507,
+            "left": 150,
+            "width": 980,
+            "height": 375
+          },
+          "offer": {
+            "top": 1908,
+            "left": 150,
+            "width": 980,
+            "height": 1160
+          },
+          "guarantee": {
+            "top": 3093,
+            "left": 150,
+            "width": 980,
+            "height": 634
+          },
+          "proof": {
+            "top": 3767,
+            "left": 150,
+            "width": 980,
+            "height": 469
+          },
+          "dashboard": {
+            "top": 4262,
+            "left": 150,
+            "width": 980,
+            "height": 1003
+          },
+          "faq": {
+            "top": 5290,
+            "left": 150,
+            "width": 980,
+            "height": 596
+          },
+          "footer": {
+            "top": 5950,
+            "left": 0,
+            "width": 1280,
+            "height": 76
+          }
+        },
+        "taken_at": "2026-09-30T21:09:26.019Z"
+      },
+      "mobile": {
+        "file": "painting-mobile.jpg",
+        "url": "https://www.aisyndicate.com/home-services/painting/",
+        "w": 390,
+        "h": 8361,
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 390,
+            "height": 74
+          },
+          "hero": {
+            "top": 82,
+            "left": 16,
+            "width": 358,
+            "height": 1794
+          },
+          "chat": {
+            "top": 696,
+            "left": 37,
+            "width": 316,
+            "height": 577
+          },
+          "scan-form": {
+            "top": 1300,
+            "left": 32,
+            "width": 326,
+            "height": 548
+          },
+          "calculator": {
+            "top": 1902,
+            "left": 16,
+            "width": 358,
+            "height": 441
+          },
+          "offer": {
+            "top": 2369,
+            "left": 16,
+            "width": 358,
+            "height": 1651
+          },
+          "guarantee": {
+            "top": 4046,
+            "left": 16,
+            "width": 358,
+            "height": 844
+          },
+          "proof": {
+            "top": 4931,
+            "left": 16,
+            "width": 358,
+            "height": 1073
+          },
+          "dashboard": {
+            "top": 6029,
+            "left": 16,
+            "width": 358,
+            "height": 1310
+          },
+          "faq": {
+            "top": 7365,
+            "left": 16,
+            "width": 358,
+            "height": 818
+          },
+          "footer": {
+            "top": 8247,
+            "left": 0,
+            "width": 390,
+            "height": 115
+          }
+        },
+        "taken_at": "2026-09-30T21:09:31.452Z"
+      }
+    },
+    "pool-cleaning": {
+      "desktop": {
+        "file": "pool-cleaning-desktop.jpg",
+        "url": "https://www.aisyndicate.com/home-services/pool-cleaning/",
+        "w": 1280,
+        "h": 6025,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 1280,
+            "height": 83
+          },
+          "hero": {
+            "top": 107,
+            "left": 150,
+            "width": 980,
+            "height": 1374
+          },
+          "chat": {
+            "top": 585,
+            "left": 203,
+            "width": 874,
+            "height": 517
+          },
+          "scan-form": {
+            "top": 1129,
+            "left": 198,
+            "width": 884,
+            "height": 303
+          },
+          "calculator": {
+            "top": 1507,
+            "left": 150,
+            "width": 980,
+            "height": 375
+          },
+          "offer": {
+            "top": 1908,
+            "left": 150,
+            "width": 980,
+            "height": 1160
+          },
+          "guarantee": {
+            "top": 3093,
+            "left": 150,
+            "width": 980,
+            "height": 634
+          },
+          "proof": {
+            "top": 3767,
+            "left": 150,
+            "width": 980,
+            "height": 469
+          },
+          "dashboard": {
+            "top": 4262,
+            "left": 150,
+            "width": 980,
+            "height": 1003
+          },
+          "faq": {
+            "top": 5290,
+            "left": 150,
+            "width": 980,
+            "height": 596
+          },
+          "footer": {
+            "top": 5950,
+            "left": 0,
+            "width": 1280,
+            "height": 76
+          }
+        },
+        "taken_at": "2026-09-30T21:09:41.465Z"
+      },
+      "mobile": {
+        "file": "pool-cleaning-mobile.jpg",
+        "url": "https://www.aisyndicate.com/home-services/pool-cleaning/",
+        "w": 390,
+        "h": 8407,
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 390,
+            "height": 74
+          },
+          "hero": {
+            "top": 82,
+            "left": 16,
+            "width": 358,
+            "height": 1839
+          },
+          "chat": {
+            "top": 721,
+            "left": 37,
+            "width": 316,
+            "height": 597
+          },
+          "scan-form": {
+            "top": 1345,
+            "left": 32,
+            "width": 326,
+            "height": 548
+          },
+          "calculator": {
+            "top": 1947,
+            "left": 16,
+            "width": 358,
+            "height": 441
+          },
+          "offer": {
+            "top": 2414,
+            "left": 16,
+            "width": 358,
+            "height": 1651
+          },
+          "guarantee": {
+            "top": 4092,
+            "left": 16,
+            "width": 358,
+            "height": 844
+          },
+          "proof": {
+            "top": 4976,
+            "left": 16,
+            "width": 358,
+            "height": 1073
+          },
+          "dashboard": {
+            "top": 6074,
+            "left": 16,
+            "width": 358,
+            "height": 1310
+          },
+          "faq": {
+            "top": 7411,
+            "left": 16,
+            "width": 358,
+            "height": 818
+          },
+          "footer": {
+            "top": 8292,
+            "left": 0,
+            "width": 390,
+            "height": 115
+          }
+        },
+        "taken_at": "2026-09-30T21:09:47.043Z"
+      }
+    },
+    "mobile-detailing": {
+      "desktop": {
+        "file": "mobile-detailing-desktop.jpg",
+        "url": "https://www.aisyndicate.com/home-services/mobile-detailing/",
+        "w": 1280,
+        "h": 6025,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 1280,
+            "height": 83
+          },
+          "hero": {
+            "top": 107,
+            "left": 150,
+            "width": 980,
+            "height": 1374
+          },
+          "chat": {
+            "top": 585,
+            "left": 203,
+            "width": 874,
+            "height": 517
+          },
+          "scan-form": {
+            "top": 1129,
+            "left": 198,
+            "width": 884,
+            "height": 303
+          },
+          "calculator": {
+            "top": 1507,
+            "left": 150,
+            "width": 980,
+            "height": 375
+          },
+          "offer": {
+            "top": 1908,
+            "left": 150,
+            "width": 980,
+            "height": 1160
+          },
+          "guarantee": {
+            "top": 3093,
+            "left": 150,
+            "width": 980,
+            "height": 634
+          },
+          "proof": {
+            "top": 3767,
+            "left": 150,
+            "width": 980,
+            "height": 469
+          },
+          "dashboard": {
+            "top": 4262,
+            "left": 150,
+            "width": 980,
+            "height": 1003
+          },
+          "faq": {
+            "top": 5290,
+            "left": 150,
+            "width": 980,
+            "height": 596
+          },
+          "footer": {
+            "top": 5950,
+            "left": 0,
+            "width": 1280,
+            "height": 76
+          }
+        },
+        "taken_at": "2026-09-30T21:09:56.019Z"
+      },
+      "mobile": {
+        "file": "mobile-detailing-mobile.jpg",
+        "url": "https://www.aisyndicate.com/home-services/mobile-detailing/",
+        "w": 390,
+        "h": 8425,
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 390,
+            "height": 74
+          },
+          "hero": {
+            "top": 82,
+            "left": 16,
+            "width": 358,
+            "height": 1858
+          },
+          "chat": {
+            "top": 740,
+            "left": 37,
+            "width": 316,
+            "height": 597
+          },
+          "scan-form": {
+            "top": 1363,
+            "left": 32,
+            "width": 326,
+            "height": 548
+          },
+          "calculator": {
+            "top": 1966,
+            "left": 16,
+            "width": 358,
+            "height": 441
+          },
+          "offer": {
+            "top": 2433,
+            "left": 16,
+            "width": 358,
+            "height": 1651
+          },
+          "guarantee": {
+            "top": 4110,
+            "left": 16,
+            "width": 358,
+            "height": 844
+          },
+          "proof": {
+            "top": 4995,
+            "left": 16,
+            "width": 358,
+            "height": 1073
+          },
+          "dashboard": {
+            "top": 6093,
+            "left": 16,
+            "width": 358,
+            "height": 1310
+          },
+          "faq": {
+            "top": 7429,
+            "left": 16,
+            "width": 358,
+            "height": 818
+          },
+          "footer": {
+            "top": 8311,
+            "left": 0,
+            "width": 390,
+            "height": 115
+          }
+        },
+        "taken_at": "2026-09-30T21:10:01.630Z"
+      }
+    },
+    "pressure-washing": {
+      "desktop": {
+        "file": "pressure-washing-desktop.jpg",
+        "url": "https://www.aisyndicate.com/home-services/pressure-washing/",
+        "w": 1280,
+        "h": 6025,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 1280,
+            "height": 83
+          },
+          "hero": {
+            "top": 107,
+            "left": 150,
+            "width": 980,
+            "height": 1374
+          },
+          "chat": {
+            "top": 585,
+            "left": 203,
+            "width": 874,
+            "height": 517
+          },
+          "scan-form": {
+            "top": 1129,
+            "left": 198,
+            "width": 884,
+            "height": 303
+          },
+          "calculator": {
+            "top": 1507,
+            "left": 150,
+            "width": 980,
+            "height": 375
+          },
+          "offer": {
+            "top": 1908,
+            "left": 150,
+            "width": 980,
+            "height": 1160
+          },
+          "guarantee": {
+            "top": 3093,
+            "left": 150,
+            "width": 980,
+            "height": 634
+          },
+          "proof": {
+            "top": 3767,
+            "left": 150,
+            "width": 980,
+            "height": 469
+          },
+          "dashboard": {
+            "top": 4262,
+            "left": 150,
+            "width": 980,
+            "height": 1003
+          },
+          "faq": {
+            "top": 5290,
+            "left": 150,
+            "width": 980,
+            "height": 596
+          },
+          "footer": {
+            "top": 5950,
+            "left": 0,
+            "width": 1280,
+            "height": 76
+          }
+        },
+        "taken_at": "2026-09-30T21:10:11.693Z"
+      },
+      "mobile": {
+        "file": "pressure-washing-mobile.jpg",
+        "url": "https://www.aisyndicate.com/home-services/pressure-washing/",
+        "w": 390,
+        "h": 8444,
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 390,
+            "height": 74
+          },
+          "hero": {
+            "top": 82,
+            "left": 16,
+            "width": 358,
+            "height": 1877
+          },
+          "chat": {
+            "top": 740,
+            "left": 37,
+            "width": 316,
+            "height": 615
+          },
+          "scan-form": {
+            "top": 1382,
+            "left": 32,
+            "width": 326,
+            "height": 548
+          },
+          "calculator": {
+            "top": 1985,
+            "left": 16,
+            "width": 358,
+            "height": 441
+          },
+          "offer": {
+            "top": 2452,
+            "left": 16,
+            "width": 358,
+            "height": 1651
+          },
+          "guarantee": {
+            "top": 4129,
+            "left": 16,
+            "width": 358,
+            "height": 844
+          },
+          "proof": {
+            "top": 5014,
+            "left": 16,
+            "width": 358,
+            "height": 1073
+          },
+          "dashboard": {
+            "top": 6112,
+            "left": 16,
+            "width": 358,
+            "height": 1310
+          },
+          "faq": {
+            "top": 7448,
+            "left": 16,
+            "width": 358,
+            "height": 818
+          },
+          "footer": {
+            "top": 8330,
+            "left": 0,
+            "width": 390,
+            "height": 115
+          }
+        },
+        "taken_at": "2026-09-30T21:10:17.398Z"
+      }
+    },
+    "electrical": {
+      "desktop": {
+        "file": "electrical-desktop.jpg",
+        "url": "https://www.aisyndicate.com/home-services/electrical/",
+        "w": 1280,
+        "h": 6025,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 1280,
+            "height": 83
+          },
+          "hero": {
+            "top": 107,
+            "left": 150,
+            "width": 980,
+            "height": 1374
+          },
+          "chat": {
+            "top": 585,
+            "left": 203,
+            "width": 874,
+            "height": 517
+          },
+          "scan-form": {
+            "top": 1129,
+            "left": 198,
+            "width": 884,
+            "height": 303
+          },
+          "calculator": {
+            "top": 1507,
+            "left": 150,
+            "width": 980,
+            "height": 375
+          },
+          "offer": {
+            "top": 1908,
+            "left": 150,
+            "width": 980,
+            "height": 1160
+          },
+          "guarantee": {
+            "top": 3093,
+            "left": 150,
+            "width": 980,
+            "height": 634
+          },
+          "proof": {
+            "top": 3767,
+            "left": 150,
+            "width": 980,
+            "height": 469
+          },
+          "dashboard": {
+            "top": 4262,
+            "left": 150,
+            "width": 980,
+            "height": 1003
+          },
+          "faq": {
+            "top": 5290,
+            "left": 150,
+            "width": 980,
+            "height": 596
+          },
+          "footer": {
+            "top": 5950,
+            "left": 0,
+            "width": 1280,
+            "height": 76
+          }
+        },
+        "taken_at": "2026-09-30T21:10:27.253Z"
+      },
+      "mobile": {
+        "file": "electrical-mobile.jpg",
+        "url": "https://www.aisyndicate.com/home-services/electrical/",
+        "w": 390,
+        "h": 8407,
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 390,
+            "height": 74
+          },
+          "hero": {
+            "top": 82,
+            "left": 16,
+            "width": 358,
+            "height": 1839
+          },
+          "chat": {
+            "top": 721,
+            "left": 37,
+            "width": 316,
+            "height": 597
+          },
+          "scan-form": {
+            "top": 1345,
+            "left": 32,
+            "width": 326,
+            "height": 548
+          },
+          "calculator": {
+            "top": 1947,
+            "left": 16,
+            "width": 358,
+            "height": 441
+          },
+          "offer": {
+            "top": 2414,
+            "left": 16,
+            "width": 358,
+            "height": 1651
+          },
+          "guarantee": {
+            "top": 4092,
+            "left": 16,
+            "width": 358,
+            "height": 844
+          },
+          "proof": {
+            "top": 4976,
+            "left": 16,
+            "width": 358,
+            "height": 1073
+          },
+          "dashboard": {
+            "top": 6074,
+            "left": 16,
+            "width": 358,
+            "height": 1310
+          },
+          "faq": {
+            "top": 7411,
+            "left": 16,
+            "width": 358,
+            "height": 818
+          },
+          "footer": {
+            "top": 8292,
+            "left": 0,
+            "width": 390,
+            "height": 115
+          }
+        },
+        "taken_at": "2026-09-30T21:10:32.847Z"
+      }
+    },
+    "restaurants": {
+      "desktop": {
+        "file": "restaurants-desktop.jpg",
+        "url": "https://www.aisyndicate.com/restaurants/",
+        "w": 1280,
+        "h": 5624,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 1280,
+            "height": 83
+          },
+          "hero": {
+            "top": 107,
+            "left": 150,
+            "width": 980,
+            "height": 1374
+          },
+          "chat": {
+            "top": 585,
+            "left": 203,
+            "width": 874,
+            "height": 517
+          },
+          "scan-form": {
+            "top": 1129,
+            "left": 198,
+            "width": 884,
+            "height": 303
+          },
+          "offer": {
+            "top": 1507,
+            "left": 150,
+            "width": 980,
+            "height": 1160
+          },
+          "guarantee": {
+            "top": 2692,
+            "left": 150,
+            "width": 980,
+            "height": 634
+          },
+          "proof": {
+            "top": 3366,
+            "left": 150,
+            "width": 980,
+            "height": 469
+          },
+          "dashboard": {
+            "top": 3861,
+            "left": 150,
+            "width": 980,
+            "height": 1003
+          },
+          "faq": {
+            "top": 4889,
+            "left": 150,
+            "width": 980,
+            "height": 596
+          },
+          "footer": {
+            "top": 5549,
+            "left": 0,
+            "width": 1280,
+            "height": 76
+          }
+        },
+        "taken_at": "2026-09-30T21:10:41.528Z"
+      },
+      "mobile": {
+        "file": "restaurants-mobile.jpg",
+        "url": "https://www.aisyndicate.com/restaurants/",
+        "w": 390,
+        "h": 7939,
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 390,
+            "height": 74
+          },
+          "hero": {
+            "top": 82,
+            "left": 16,
+            "width": 358,
+            "height": 1839
+          },
+          "chat": {
+            "top": 721,
+            "left": 37,
+            "width": 316,
+            "height": 597
+          },
+          "scan-form": {
+            "top": 1345,
+            "left": 32,
+            "width": 326,
+            "height": 548
+          },
+          "offer": {
+            "top": 1947,
+            "left": 16,
+            "width": 358,
+            "height": 1651
+          },
+          "guarantee": {
+            "top": 3624,
+            "left": 16,
+            "width": 358,
+            "height": 844
+          },
+          "proof": {
+            "top": 4509,
+            "left": 16,
+            "width": 358,
+            "height": 1073
+          },
+          "dashboard": {
+            "top": 5607,
+            "left": 16,
+            "width": 358,
+            "height": 1310
+          },
+          "faq": {
+            "top": 6943,
+            "left": 16,
+            "width": 358,
+            "height": 818
+          },
+          "footer": {
+            "top": 7825,
+            "left": 0,
+            "width": 390,
+            "height": 115
+          }
+        },
+        "taken_at": "2026-09-30T21:10:46.985Z"
+      }
+    },
+    "home-management": {
+      "desktop": {
+        "file": "home-management-desktop.jpg",
+        "url": "https://www.aisyndicate.com/home-management/",
+        "w": 1280,
+        "h": 6055,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 1280,
+            "height": 83
+          },
+          "hero": {
+            "top": 107,
+            "left": 150,
+            "width": 980,
+            "height": 1404
+          },
+          "chat": {
+            "top": 615,
+            "left": 203,
+            "width": 874,
+            "height": 517
+          },
+          "scan-form": {
+            "top": 1159,
+            "left": 198,
+            "width": 884,
+            "height": 303
+          },
+          "calculator": {
+            "top": 1537,
+            "left": 150,
+            "width": 980,
+            "height": 375
+          },
+          "offer": {
+            "top": 1938,
+            "left": 150,
+            "width": 980,
+            "height": 1160
+          },
+          "guarantee": {
+            "top": 3123,
+            "left": 150,
+            "width": 980,
+            "height": 634
+          },
+          "proof": {
+            "top": 3797,
+            "left": 150,
+            "width": 980,
+            "height": 469
+          },
+          "dashboard": {
+            "top": 4292,
+            "left": 150,
+            "width": 980,
+            "height": 1003
+          },
+          "faq": {
+            "top": 5320,
+            "left": 150,
+            "width": 980,
+            "height": 596
+          },
+          "footer": {
+            "top": 5980,
+            "left": 0,
+            "width": 1280,
+            "height": 76
+          }
+        },
+        "taken_at": "2026-09-30T21:10:57.035Z"
+      },
+      "mobile": {
+        "file": "home-management-mobile.jpg",
+        "url": "https://www.aisyndicate.com/home-management/",
+        "w": 390,
+        "h": 8425,
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "zones": {
+          "header": {
+            "top": 0,
+            "left": 0,
+            "width": 390,
+            "height": 74
+          },
+          "hero": {
+            "top": 82,
+            "left": 16,
+            "width": 358,
+            "height": 1858
+          },
+          "chat": {
+            "top": 740,
+            "left": 37,
+            "width": 316,
+            "height": 597
+          },
+          "scan-form": {
+            "top": 1363,
+            "left": 32,
+            "width": 326,
+            "height": 548
+          },
+          "calculator": {
+            "top": 1966,
+            "left": 16,
+            "width": 358,
+            "height": 441
+          },
+          "offer": {
+            "top": 2433,
+            "left": 16,
+            "width": 358,
+            "height": 1651
+          },
+          "guarantee": {
+            "top": 4110,
+            "left": 16,
+            "width": 358,
+            "height": 844
+          },
+          "proof": {
+            "top": 4995,
+            "left": 16,
+            "width": 358,
+            "height": 1073
+          },
+          "dashboard": {
+            "top": 6093,
+            "left": 16,
+            "width": 358,
+            "height": 1310
+          },
+          "faq": {
+            "top": 7429,
+            "left": 16,
+            "width": 358,
+            "height": 818
+          },
+          "footer": {
+            "top": 8311,
+            "left": 0,
+            "width": 390,
+            "height": 115
+          }
+        },
+        "taken_at": "2026-09-30T21:11:02.586Z"
+      }
+    }
+  },
+  "base": "https://www.aisyndicate.com",
+  "updated_at": "2026-09-30T21:11:02.682Z",
+  "taken_from": "local build of Home-Services-LP (30 Sep 2026, not yet pushed)"
+}

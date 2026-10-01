@@ -7525,3 +7525,22 @@ but the work was on other people's websites. Measured by us (live read-only quer
     .git/*.lock into _to_delete/ (deleting is blocked), commit only our own paths — the calculator files belong to
     another session. Ryder pushes from Cursor.
   * Separate-agent check before any report: it caught 12 overstatements in the failure report.
+
+## §68 — The landing-page heat map (30 Sep 2026). Built and pushed 1 Oct 2026; 0046 NOT run.
+
+CJ, 30 Sep: "where people drop off, if we need to move stuff up or down and what we can delete." Home Services → Heat map.
+
+- **Write path:** landing page `site.js` section 9 → `POST /api/hs-heat` (text/plain, Origin required, 12 KB, 30/min per
+  view, 240/min per address) → `lib/heat-map.js cleanHeatPost` → `hs_heat_ingest(p)` (service role only). Totals move
+  forward by `seq`; clicks are stored once per `(view_id, cid)` whatever the seq, so the page resends until a 204.
+- **Read path:** `hs_heat_rollup(slug, from, to, device, source, content, who)` → one jsonb value (no 1,000-row cap).
+  `rollupFromRows()` is its JS twin for preview + tests; `tests/heat-map/sql.sh` fails if the two ever differ.
+- **Pictures:** aisyndicate.com is `X-Frame-Options: SAMEORIGIN`, so the page draws on `public/heat/*.jpg` from
+  `scripts/heat-snapshots.mjs`. Clicks are ‰ of their section; the picture paints only its own device's clicks.
+- **Verdicts** (DERIVED, ≥30 visits): Biggest drop-off, Move it up (≥10 clicks, ≥15% of page clicks, <60% reach), Cut or
+  shorten, Fix taps that do nothing (≥5 visits, ≥10% of reachers, top 3). Lead clicks are shown, never a trigger — most
+  happen after the email is given.
+- **Not anonymous once a lead:** session_id joins hs_lead_sources. Never describe this data as anonymous.
+- **Tests:** `bash tests/heat-map/run.sh` (27 pure + real-Postgres SQL half + crosscheck). `tests/heat-map/e2e.sh` drives
+  the real page in Chromium through the real handler into Postgres (needs LP=, PW_MODULE=).
+- Adding a landing page: add its slug to BOTH page_slug checks in a new migration, as 0036–0038 did for 0035.

@@ -15,6 +15,7 @@ const SECTION_TITLES = {
   "home-services": { kicker: "Command", title: "Home Services · which landing page is worth spending on" },
   calculator: { kicker: "Command", title: "AI Revenue Calculator · who used it and what it showed them" },
   "home-services-leads": { kicker: "Command", title: "Leads · who the landing pages brought in" },
+  "home-services-heat": { kicker: "Command", title: "Heat map · where people look, click and leave" },
   sales: { kicker: "Sales", title: "Sales · the pipeline" },
   /* THE REP'S OWN PAGES — Aug 27 2026. `leads` and `mine` are gone as page ids
    * (AdminDashboard turns both into `floor`), and The Floor and Gmail arrived.

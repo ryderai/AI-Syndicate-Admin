@@ -76,7 +76,9 @@ const SECTIONS = [
      * page is worth spending on"; the child answers "who do I ring". Two
      * different jobs on two different days, which is the same reason Finance
      * carries Invoices. */
-    ["home-services", "Home Services", [["home-services-leads", "Leads"]]],
+    /* …and since 30 Sep a second child, Heat map (CJ: "where people drop off,
+     * if we need to move stuff up or down and what we can delete"). */
+    ["home-services", "Home Services", [["home-services-leads", "Leads"], ["home-services-heat", "Heat map"]]],
     /* AI REVENUE CALCULATOR — 24 Sep 2026. Next to Home Services because it
      * is the same kind of page: a public tool on the website and what it
      * brought in. */
