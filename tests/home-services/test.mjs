@@ -20,6 +20,7 @@ import {
   teamDayStartMs, teamDayEndMs, teamToday, addTeamDays, defaultRange, inRange,
   normaliseEmail, digitsOnly, hostFromWebsite, clean,
   rate, summarise, comparePages, funnelFor, ctaCounts, trafficBy, sortRows, captureNote,
+  hsLeadsCsv, HS_CSV_HEADERS,
 } from "../../lib/home-services.js";
 import { allowHit, _resetRateLimit, allowedOrigins, MAX_BODY_BYTES } from "../../lib/hs-http.js";
 
@@ -854,6 +855,26 @@ test("a lead on its fourteenth day is still hot — the screens say \"or less\""
     assert.ok(!/under \{?HS_FRESH_DAYS|less than \$\{HS_FRESH_DAYS\}/.test(src(f)),
       `${f} still says "under"/"less than" for a rule that means "or less"`);
   }
+});
+
+/* ---- CSV for Apollo (3 Oct 2026) ---- */
+test("hsLeadsCsv: Apollo headers, one row per email, names split, formulas defused", () => {
+  const csv = hsLeadsCsv([
+    { name: "Pat  Q. Owner", email: "Pat@GreenLawns.com", phone: "2055550100", company: "Green, Lawns", domain: "greenlawns.com", city: "Vestavia Hills", state: "AL",
+      pageLabel: "Lawn care", utmCampaign: "hs-launch-oct26-c1", utmSource: "meta", stageLabel: "Opened checkout", score: 42, convertedAt: "2026-10-03T12:00:00Z", paid: false },
+    { name: "Dup", email: "pat@greenlawns.com" },
+    { name: "No Email", email: "" },
+    { name: "Eve", email: "eve@x.com", company: "=HYPERLINK(\"http://bad\")", score: null, paid: true },
+  ]);
+  const lines = csv.trim().split("\r\n");
+  assert.equal(lines[0], HS_CSV_HEADERS.join(","));
+  assert.equal(lines.length, 3, "header + 2 unique emails");
+  assert.equal(lines[1], 'Pat,Q. Owner,pat@greenlawns.com,2055550100,"Green, Lawns",greenlawns.com,Vestavia Hills,AL,Lawn care,hs-launch-oct26-c1,meta,Opened checkout,42,2026-10-03,no');
+  assert.ok(lines[2].includes(`"'=HYPERLINK(""http://bad"")"`), "formula cell is quoted and prefixed");
+  assert.ok(lines[2].endsWith(",yes"));
+});
+test("hsLeadsCsv: empty list is just the header", () => {
+  assert.equal(hsLeadsCsv([]), HS_CSV_HEADERS.join(",") + "\r\n");
 });
 
 console.log(results.join("\n"));

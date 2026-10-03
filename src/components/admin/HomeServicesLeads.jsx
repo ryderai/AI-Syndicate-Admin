@@ -10,7 +10,7 @@ import {
   PAGE_SLUGS, PAGE_LABELS,
   HS_LEAD_STAGES, HS_LEAD_STAGE_LABELS, HS_FRESH_DAYS, HS_WEAK_SCORE,
   defaultRange, addTeamDays, teamToday, teamDayStartMs, teamDayEndMs,
-  hsLeadRows, hsHotLeads, hsLeadTotals, sortRows,
+  hsLeadRows, hsHotLeads, hsLeadTotals, sortRows, hsLeadsCsv,
 } from "../../../lib/home-services.js";
 
 /* ==================================================================
@@ -244,6 +244,19 @@ export default function HomeServicesLeads() {
                   type="search" value={q} onChange={(e) => setQ(e.target.value)}
                   placeholder="Name, company or website" aria-label="Search these leads"
                 />
+                {/* 3 Oct 2026: follow-up emails run in Apollo. This downloads exactly the
+                    rows on screen (filters and dates included), one per email. */}
+                <button
+                  type="button" className="btn btn-ghost" disabled={!shown.length}
+                  onClick={() => {
+                    const blob = new Blob([hsLeadsCsv(shown)], { type: "text/csv;charset=utf-8" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url; a.download = `landing-page-leads-${from}-to-${to}.csv`;
+                    document.body.appendChild(a); a.click(); a.remove();
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                  }}
+                >Download for Apollo (CSV)</button>
               </div>
             }
           >
