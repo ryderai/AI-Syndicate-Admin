@@ -59,3 +59,11 @@ export function getAiAccount(workspaceId, range, { refresh = false } = {}) {
   const q = `workspace=${encodeURIComponent(workspaceId)}&from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}${refresh ? "&refresh=1" : ""}`;
   return apiFetch(`/api/ai-account?${q}`);
 }
+
+/* THE META PAGE — 4 Oct 2026. Same short memory as the money pages: the last
+ * answer draws at once, marked with when it was read, while the fresh one runs.
+ * "Refresh" passes refresh=1 so the server skips its own 60-second memory too. */
+export function getMetaAds(range, opts = {}) {
+  const q = `from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`;
+  return cachedRead(`meta:${range.from}:${range.to}`, `/api/meta-ads?${q}`, opts);
+}

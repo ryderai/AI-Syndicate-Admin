@@ -7544,3 +7544,78 @@ CJ, 30 Sep: "where people drop off, if we need to move stuff up or down and what
 - **Tests:** `bash tests/heat-map/run.sh` (27 pure + real-Postgres SQL half + crosscheck). `tests/heat-map/e2e.sh` drives
   the real page in Chromium through the real handler into Postgres (needs LP=, PW_MODULE=).
 - Adding a landing page: add its slug to BOTH page_slug checks in a new migration, as 0036–0038 did for 0035.
+
+## §69. HEAT MAP FULLY LIVE · VERIFIED END TO END — Thu 1 Oct 2026 (append-only; updates §68's "0046 NOT run")
+
+- **State:** fully live. Admin on main `e6c3966`, migration 0046 applied. Website tracker merged into
+  AISyndicateGEO/ai-syndicate through a PR from `feat/landing-heat-tracker` (commit `9582f2fd`: 1 file,
+  `public/home-services/assets/site.js`, +213 / −0). Vercel deployed it.
+- **Proof (MEASURED by us, 1 Oct 2026, Chrome):** https://www.aisyndicate.com/home-services/lawn-care/ loads the tracker
+  (`window.__aisHeat`, 10 sections). It sends to `window.AIS_API_BASE` = https://ai-syndicate-admin.vercel.app +
+  `/api/hs-heat`: 3 sends, all 204. Admin Heat map → Lawn care showed Visits 1, Time 24s, Clicks 4, Taps that do nothing 4,
+  each click in the right section.
+- **Test trap:** Claude's Chrome test tab sits in the background, so `document.hidden` is true and the tracker sends
+  NOTHING (by design: hidden tabs are not visits). To test, run in that tab
+  `Object.defineProperty(document,'hidden',{configurable:true,get:()=>false})`, then really scroll and click and wait
+  15–20 s. The network-request tool only sees requests made after it is first called, so wrap `window.fetch` to log
+  `hs-heat` calls instead.
+- **Dedupe confirmed live:** clicks made while the tab was hidden stayed pending and were stored once each when sent.
+- **Test data:** Lawn care holds 1 test visit from this check (1 Oct, desktop, 4 clicks). It is under the 30-visit floor,
+  so it makes no suggestions. Admins can delete it.
+- **Git account:** pushing the website repo needs `gh auth switch` to the ryderai account; the other account gets
+  "Repository not found". The repo is PR-only with a "Build" check.
+- **Open (optional):** re-take `public/heat/*.jpg` from the live site (current pictures are dated 30 Sep 2026, 1280px).
+- Record: AI-Syndicate/WORK-LOG/2026-10-01--internal--heat-map-fully-live-verified.md.
+
+## §70. THE META PAGE — every ad, and what its clicks did on the page — Sun 4 Oct 2026 (append-only)
+
+Ryder: "build a page on the admin called META that tracks everything on these ads in a dashboard that
+i can click refresh to get updated numbers … every campaign, set and ad … whats working, whats not …
+a section to be the landing page and to show me where people are dropping off."
+
+**Where:** sidebar → Money → **Meta** (`#/dashboard/meta`). Owners only — ad spend is money; the page
+id is in the Money group, `api/meta-ads.js` calls `requireMember(req, ["owner"])`, and
+tests/page-for-address + tests/sales pin it.
+
+**One read:** `GET /api/meta-ads?from&to[&refresh=1]` returns three sources joined:
+1. **Meta** (Marketing API, READ-ONLY token `META_ACCESS_TOKEN`, ads_read): account, campaigns, ad
+   sets, ads (+creative), ad-level insights, and — allowed to fail on their own — daily, placement,
+   age×gender and device breakdowns. Token in the Authorization header, never a URL.
+2. **Our pages**: hs_page_events / hs_lead_sources / hs_heat_sessions / hs_heat_clicks / admin_leads,
+   only visits whose utm_source is a Meta name (case-blind: meta, facebook, fb, ig, instagram, an, msg).
+3. **Stripe**: new AI Pulse subscriptions ($99/mo or $990/yr) in the range, `incomplete*` dropped,
+   matched to an ad through the lead (same email, else same website). Stripe never knows the ad.
+60-second server memory per range; Refresh skips it. Without the token the page still draws all of
+our own numbers and says Meta is not connected (SETUP.md → "Meta page").
+
+**The join:** each ad's tracking code is `utm_campaign` read from the ad's URL-parameters box (or
+its link). Two ads sharing a code are flagged SHARED CODE and every total counts the code ONCE.
+Visits with a code no ad uses (tests, old links) are shown apart, never in an ad or the totals;
+codes containing "test" are excluded everywhere.
+
+**Funnel words are what happened:** `scan_start` fires when someone TAPS a box in the scan form (site.js
+focus listener), so it reads "Tapped into the free-scan form"; `scan_email` = "Gave their email and
+pressed Scan". "Scrolled halfway" is marked skippable and never prints a negative loss. The biggest
+leak is chosen by SHARE lost (min 10 people at the step before), not head count.
+
+**Verdicts** ("What's working, and what isn't") come from fixed rules of thumb in `lib/meta-ads.js`
+`RULES`, printed on the page. Ours, not Meta's. Too little data → "too early", never a verdict.
+
+**Files:** lib/meta-ads.js, api/meta-ads.js, src/components/admin/MetaAds.jsx + metaParts.jsx (new);
+Sidebar, AdminDashboard, Header, financeParts (BASIS.meta "FROM META"), src/lib/moneyApi.js
+(getMetaAds), admin.css (appended `.adm-meta-*`), vercel.json (60 s), scripts/check-ai-usage.mjs
+(graph.facebook.com = free, read-only). Tests: `bash tests/meta-ads/run.sh` → 39 logic checks + 9
+end-to-end checks that run the real handler with fetch stubbed (owner gate, token in header, expired
+token message, cache, Refresh, totals include a deleted ad's spend, case-blind source filter).
+
+**Review:** a separate reviewing agent found 15 defects before ship; fixed: status filter only on ads
+(campaign/ad set edges refuse ad statuses), case-blind source match, totals from every insights row,
+shared codes counted once, "All ads" row = matched ads only, incomplete Stripe subs dropped, heat
+clicks paged, stale-range guard in the UI, timezone-mismatch warning, no "$0.00" day bars when Meta
+is off, lifetime pace labelled as campaign-so-far, nulls shown as "—", range clamped to Meta's 37
+months, visitors = sessions that landed (matches the funnel). Left as known: `metaScans` aliases
+probably never match a custom pixel event (not shown on the page).
+
+**State 4 Oct 2026 ~1 AM CT:** built, lint + build clean in the cloud container, rendered and clicked
+through in a browser against realistic data (screens in AI-Syndicate/Meta-Page-Oct04/). NOT committed,
+NOT pushed, `META_ACCESS_TOKEN` NOT set. Next: token (SETUP.md), push from Cursor, Refresh on the live page.

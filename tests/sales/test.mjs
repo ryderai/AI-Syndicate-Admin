@@ -1071,7 +1071,7 @@ test("the owner's Sales group is one entry that opens to Sales and Stats", () =>
   assert.ok(owner.includes("work"), "Work is still the owner's page");
   /* Since 24 Sep 2026 the ONLY difference is money: Finance, Invoices and AI
    * Cost are owners only. Everything else is still the same menu. */
-  const MONEY = ["finance", "invoices", "ai-cost"];
+  const MONEY = ["finance", "invoices", "ai-cost", "meta"];   // "meta" added 4 Oct 2026 — ad spend, owners only
   assert.deepEqual(pageIdsFor("owner").filter((id) => !MONEY.includes(id)), pageIdsFor("admin"), "admin = owner minus money");
   for (const id of MONEY) assert.ok(!pageIdsFor("admin").includes(id), `${id} is owners only`);
   const salesGroup = groupsFor("owner").filter((g) => g.group === "Sales");

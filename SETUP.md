@@ -1485,3 +1485,33 @@ What it does: adds `calc_runs`, one row per calculation on www.aisyndicate.com/a
 No new Vercel setting. The calculator posts through the same door as the Home Services pages, so `HS_ALLOWED_ORIGINS` must already list `https://www.aisyndicate.com` (it does if the Home Services pages' leads arrive).
 
 Undo: `drop table public.calc_runs;` (calculator leads stay in `admin_leads`).
+
+## Meta page — connect Meta's numbers (added 4 Oct 2026)
+
+The Meta page (sidebar → Money → Meta, owners only) works without this step: everything our landing
+pages counted shows straight away. Meta's own numbers (spend, views, clicks, every campaign, ad set
+and ad) need ONE read-only token. It can only READ — it cannot pause, edit or spend anything.
+
+1. Go to business.facebook.com/settings and pick the **AI Syndicate** business portfolio.
+2. In the left menu click **Users → System users**.
+3. If a system user is already listed (one was made for the Conversions API), click it. If not, click
+   **Add**, name it `AI Syndicate admin reader`, role **Employee**, and click **Create system user**.
+4. Click **Assign assets** → **Ad accounts** → tick **AI Syndicate (1691374768590142)** → turn on
+   **View performance** only (leave "Manage campaigns" off) → **Save changes**.
+5. Click **Generate new token**. Pick the app in the list. (If the list is empty, Meta needs an app
+   first: developers.facebook.com → **Create app** → type **Business** → connect it to the AI Syndicate
+   portfolio, then come back to this step.)
+6. **Token expiration: Never.** Permissions: tick **ads_read** only. Click **Generate token**, then
+   **Copy**. Do not paste it anywhere except step 9.
+7. Go to vercel.com → the **aisyndicate** team → project **ai-syndicate-admin** → **Settings** →
+   **Environment Variables**.
+8. Key: `META_ACCESS_TOKEN`
+9. Value: paste the token. Environments: **Production** (and Preview if you like). Click **Save**.
+10. **Deployments** → the newest one → **⋯** → **Redeploy**.
+11. Open the admin → Money → **Meta** → press **↻ Refresh**. The yellow "Meta is not connected" note
+    disappears and the campaign table fills in.
+
+Optional: `META_AD_ACCOUNT_ID` (defaults to `act_1691374768590142`), `META_GRAPH_VERSION` (defaults to
+`v23.0`). If the page ever says the token "expired or was revoked", repeat steps 2–10.
+
+Sales on the page come from Stripe and need `STRIPE_SECRET_KEY` (already used by Finance).

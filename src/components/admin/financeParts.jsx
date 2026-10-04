@@ -41,6 +41,9 @@ const BASIS = {
    *   derived — a division of two counted numbers, and nothing new was seen */
   counted: { label: "MEASURED", c: "#006b1a", bg: "var(--success-soft)", hint: "Counted from rows the landing pages actually sent. Nobody typed it and nothing was worked out." },
   derived: { label: "DERIVED", c: "var(--accent-deep)", bg: "var(--accent-soft)", hint: "Worked out from the measured counts beside it. No new measurement — if those are right, this is right." },
+  /* Added 4 Oct 2026 for the Meta page. Meta's own reporting is not our count
+   * and not Stripe's — Meta estimates some of it and revises it for a few days. */
+  meta: { label: "FROM META", c: "#1e3a8a", bg: "#eff6ff", hint: "Meta's own reporting, read from its Marketing API. Meta estimates some of these figures and can revise them for up to three days." },
 };
 
 export function BasisBadge({ basis, hint }) {

@@ -11,6 +11,7 @@ import Overview from "./admin/Overview.jsx";
 import Finance from "./admin/Finance.jsx";
 import Invoices from "./admin/Invoices.jsx";
 import AiCost from "./admin/AiCost.jsx";
+import MetaAds from "./admin/MetaAds.jsx";
 import HomeServices from "./admin/HomeServices.jsx";
 import HomeServicesLeads from "./admin/HomeServicesLeads.jsx";
 import HeatMap from "./admin/HeatMap.jsx";
@@ -141,6 +142,7 @@ export default function AdminDashboard({ go }) {
       case "finance": return <Finance member={member} setSection={setSection} />;
       case "invoices": return <Invoices member={member} />;
       case "ai-cost": return <AiCost member={member} />;
+      case "meta": return <MetaAds />;
       /* HOME SERVICES — 14 Sep 2026. Takes no props: everything on it is read
        * from two tables that are the same for everybody who can open the page,
        * and the role gate is `pageIdsForRole` above, not a prop. */

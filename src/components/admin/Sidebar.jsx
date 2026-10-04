@@ -16,6 +16,8 @@ const Icon = {
    * about trades, and every other Command icon is a shape rather than a letter.
    * An item with no entry here renders an empty square that reads as a page
    * that failed to load, which is the note already written above `sales-stats`. */
+  /* META — 4 Oct 2026. A megaphone: it is the page about paid ads. */
+  meta: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 11v3a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z" /><path d="M15 9a4 4 0 0 1 0 6" /><path d="M18 6a8 8 0 0 1 0 12" /></svg>,
   "calculator": <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M8 7h8" /><path d="M8 11h2M12 11h2M16 11h0M8 15h2M12 15h2M8 18h2M12 18h4" /></svg>,
   "home-services": <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.8V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.8" /><path d="M9.5 17.5 15 12" /><path d="M14 11l2-2a2.2 2.2 0 1 1 3 3l-2 2z" /></svg>,
   invoices: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16l3-2 2 2 2-2 2 2 3-2V8z" /><line x1="8" y1="9" x2="14" y2="9" /><line x1="8" y1="13" x2="12" y2="13" /></svg>,
@@ -96,6 +98,10 @@ const SECTIONS = [
    * and migration 0041 makes the money tables owner-only in the database. */
   { group: "Money", roles: ["owner"], items: [
     ["finance", "Finance", [["invoices", "Invoices"], ["ai-cost", "AI Cost"]]],
+    /* META — 4 Oct 2026. Ryder: "build a page on the admin called META that
+     * tracks everything on these ads". Under Money because it is ad SPEND —
+     * owners only, same as Finance; api/meta-ads.js says no to anyone else. */
+    ["meta", "Meta"],
   ]},
   /* WORK AND OPERATIONS SIT TOGETHER — Ryder, 2 Sep 2026: "make work and
    * operations right next to each other, they both do a very similar task and

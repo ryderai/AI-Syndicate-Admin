@@ -77,6 +77,7 @@ const PAID_HOSTS = [
   ["api.anthropic.com", "recorded", "the console's own model calls; every handler that reaches it calls recordAiUsage"],
   ["api.apollo.io", "recorded", "api/lead-scrape.js fetchApollo() — Apollo people search, billed per credit. Recorded NOWHERE until 8 Sep 2026; runSource() now writes one usage row per search, tokens null, so it prints NOT PRICED rather than $0.00. A price row will NOT change that: costMicros() returns null when usage is null, so a per-search fee needs the per_call_micros column, still open in both repos"],
   ["api.stripe.com", "free", "reading our own billing data; Stripe charges on payments, not API calls"],
+  ["graph.facebook.com", "free", "Meta Marketing API, READ-ONLY (ads_read) for the Meta page (api/meta-ads.js, 4 Oct 2026). No per-call charge; the exposure is Meta's per-ad-account rate limit, which the endpoint's 60-second cache protects"],
   ["businessprofileperformance.googleapis.com", "free", "Google Business Profile Performance API (lib/connector-fetch.js). No per-call charge; the exposure is a quota hard stop. Found the moment the blanket googleapis.com exemption was removed, which is the point of removing it"],
   ["generativelanguage.googleapis.com", "must-record-before-use", "Gemini. A PAID model API, and it sits under googleapis.com, which the OURS exemption below used to wave through wholesale. Nothing in this repo calls it today — this line exists so that the day something does, it is already named"],
 ];
