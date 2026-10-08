@@ -33,7 +33,14 @@ await test("both heat tables allow exactly PAGE_SLUGS", () => {
   const lists = [...MIG.matchAll(/page_slug text not null check \(page_slug in \(([\s\S]*?)\)\)/g)]
     .map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
   assert.equal(lists.length, 2, "expected two page_slug checks");
-  for (const l of lists) assert.deepEqual([...l].sort(), [...PAGE_SLUGS].sort());
+  /* 0047 (7 Oct 2026) re-states both lists with free-ai-score added. 0046 must
+   * still be a subset, and the newest statement must equal PAGE_SLUGS. */
+  for (const l of lists) for (const s of l) assert.ok(PAGE_SLUGS.includes(s), `0046 has ${s}, PAGE_SLUGS does not`);
+  const M47 = readFileSync(join(ROOT, "supabase/migrations/0047_free_ai_score_page.sql"), "utf8").replace(/--[^\n]*/g, " ");
+  const heat47 = [...M47.matchAll(/alter table public\.hs_heat_(?:sessions|clicks)\s+add constraint \w+ check \(page_slug in \(([\s\S]*?)\)\)/g)]
+    .map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
+  assert.equal(heat47.length, 2, "0047 should re-state both heat tables");
+  for (const l of heat47) assert.deepEqual([...l].sort(), [...PAGE_SLUGS].sort());
 });
 
 /* The page's copy. Both places it can live are checked when present: the

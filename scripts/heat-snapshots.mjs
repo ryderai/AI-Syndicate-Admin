@@ -49,6 +49,7 @@ const PAGES = {
   "electrical": "/home-services/electrical/",
   "restaurants": "/restaurants/",
   "home-management": "/home-management/",
+  "free-ai-score": "/free-ai-score/",
 };
 const DEVICES = {
   desktop: { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, isMobile: false },

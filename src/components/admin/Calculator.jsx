@@ -40,6 +40,7 @@ const pageLabel = (p) => {
   // 24 Sep 2026: the landing pages open the calculator in a popup
   if (path === "/home-services/") return "landing page popup: home services";
   if (path === "/home-management/") return "landing page popup: home management";
+  if (path === "/free-ai-score/") return "landing page popup: free AI score (all owners)";
   if (path.startsWith("/home-services/")) return "landing page popup: " + path.replace(/^\/home-services\//, "").replace(/\/$/, "").replace(/-/g, " ");
   const slug = path.replace(/^\/ai-revenue-calculator\/?/, "").replace(/\/$/, "");
   return slug ? slug.replace(/-/g, " ") : "main page";

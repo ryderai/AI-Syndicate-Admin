@@ -57,6 +57,7 @@ test("the landing-page popup's pages are accepted too (24 Sep 2026), nothing els
   assert.equal(cleanPath("/home-services/"), "/home-services/");
   assert.equal(cleanPath("/home-services/lawn-care/?utm_source=fb"), "/home-services/lawn-care/");
   assert.equal(cleanPath("/home-management/"), "/home-management/");
+  assert.equal(cleanPath("/free-ai-score/?utm_content=Instagram_Stories"), "/free-ai-score/");
   assert.equal(cleanPath("/home-services/checkout/"), null);
   assert.equal(cleanPath("/restaurants/"), null);
   assert.equal(cleanPath("/home-services/../admin/"), null);

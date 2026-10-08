@@ -46,7 +46,7 @@ const MIG36_CODE = MIG36.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, 
  * It does NOT touch the event list, so events are still read from 0037 above.
  * When the next migration states either list, point the matching constant here
  * at it — that is the whole job of these two lines. */
-const MIG38 = src("supabase/migrations/0038_home_management_page_and_plan.sql");     // newest statement of the PAGE list
+const MIG38 = src("supabase/migrations/0047_free_ai_score_page.sql");     // newest statement of the PAGE list (0047, 7 Oct 2026; was 0038)
 const MIG38_CODE = MIG38.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
 const slugLists = (code) => [...code.matchAll(/page_slug\s+in\s*\(([^)]*)\)/g)]
   .map((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
@@ -98,8 +98,9 @@ test("0038 is a superset of 0035 and 0037 — no page was silently dropped", () 
 
 test("hs_lead_sources allows the same pages as hs_page_events — the two constraints agree (0038)", () => {
   const all = slugLists(MIG38_CODE).map((l) => [...l].sort().join("|"));
-  assert.equal(all.length, 2, "expected the slug list to appear on both tables");
-  assert.equal(all[0], all[1]);
+  // 0047 re-states it on four tables (the two heat-map tables too); every copy must agree.
+  assert.ok(all.length >= 2, "expected the slug list to appear on both tables");
+  for (const a of all) assert.equal(a, all[0]);
 });
 
 test("the device buckets match, and there is no fourth one", () => {
