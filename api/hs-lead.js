@@ -59,6 +59,7 @@ import {
   isPageSlug, normaliseEmail, digitsOnly, hostFromWebsite, clean, captureNote,
 } from "../lib/home-services.js";
 import { cleanConsent, consentNote, recordConsent } from "../lib/lead-consent.js";
+import { buildLeadAlert, postLeadAlert } from "../lib/lead-alert-make.js";
 
 /* One ordinary visitor now costs four posts, not one: the capture when they
  * press Scan (17 Sep), the same lead again carrying the score, then the contact
@@ -186,6 +187,12 @@ export default async function handler(req, res) {
 
     let leadId = null;
     let created = false;
+    /* What #leads in Slack hears about this post (lib/lead-alert-make.js):
+     * "new_lead" once, when the person first lands, and "phone_added" once
+     * more if a later post is the first to carry a phone (the free score asks
+     * for an email only; the calculator asks for the phone). Never on the
+     * score/checkout re-posts — they add nothing a rep has to act on. */
+    let alertEvent = null;
 
     if (existing) {
       leadId = existing.id;
@@ -198,6 +205,7 @@ export default async function handler(req, res) {
         console.error("[hs-lead] update failed", error.message);
         return res.status(500).json({ ok: false, error: "That lead could not be updated." });
       }
+      if (patch.phone) alertEvent = "phone_added";
       /* Appended, never replaced — see rule 2 in the header. Done INSIDE the
        * database (migration 0037) so two submits a second apart cannot read the
        * same old notes and erase each other's line. If the function is not
@@ -238,6 +246,7 @@ export default async function handler(req, res) {
       }
       leadId = data.id;
       created = true;
+      alertEvent = "new_lead";
     }
 
     /* ---- bookkeeping. Logged and swallowed — see rule 4. ---- */
@@ -248,6 +257,24 @@ export default async function handler(req, res) {
 
     await linkEvents(admin, leadId, sessionId)
       .catch((err) => console.error("[hs-lead] event back-fill failed", err?.message || err));
+
+    if (alertEvent) {
+      const known = existing || {};
+      await postLeadAlert(buildLeadAlert({
+        event: alertEvent,
+        where: `Landing page ${clean(b.path, 200) || `/${pageSlug}/`}`,
+        name: incoming.name || known.name || "",
+        company: incoming.company || known.company || "",
+        email: incoming.email || known.email || "",
+        phone: incoming.phone || known.phone || "",
+        website: incoming.domain || known.domain || "",
+        /* The consent THIS post carried (a version we shipped, lib/lead-consent.js).
+         * Only the forms that ask for a phone show the call/text sentence. */
+        callConsent: Boolean(consent),
+        score,
+        utm,
+      }));
+    }
 
     return res.status(200).json({ ok: true, lead_id: leadId, created, updated: !created });
   } catch (err) {

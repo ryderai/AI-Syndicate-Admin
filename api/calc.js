@@ -28,6 +28,7 @@ import { applyCors, readCappedJson, allowHit } from "../lib/hs-http.js";
 import { normaliseEmail, hostFromWebsite, clean, digitsOnly } from "../lib/home-services.js";
 import { cleanRun, leadNote, CALC_VERTICAL } from "../lib/calculator.js";
 import { cleanConsent, consentNote, recordConsent } from "../lib/lead-consent.js";
+import { buildLeadAlert, postLeadAlert } from "../lib/lead-alert-make.js";
 
 const RUN_LIMIT = 60;    // per session per minute — the page debounces to ~1 every 3s while typing
 const LEAD_LIMIT = 6;
@@ -96,13 +97,18 @@ export default async function handler(req, res) {
     const existing = await findByEmail(admin, email);
     let leadId = null;
     let created = false;
+    /* #leads in Slack (lib/lead-alert-make.js). This route is the BACKUP save
+     * for the calculator popup — normally /api/hs-lead made the lead first and
+     * already alerted, so this post finds it with the phone filled and stays
+     * quiet. It speaks only when it made the lead or added its first phone. */
+    let alertEvent = null;
 
     if (existing) {
       leadId = existing.id;
       const patch = { last_activity_at: nowIso };
       if (isBlank(existing.name) && name) patch.name = name;
       if (isBlank(existing.domain) && domain) patch.domain = domain;
-      if (isBlank(existing.phone) && phone) patch.phone = phone;
+      if (isBlank(existing.phone) && phone) { patch.phone = phone; alertEvent = "phone_added"; }
       const { error } = await admin.from("admin_leads").update(patch).eq("id", leadId);
       if (error) {
         console.error("[calc] lead update failed", error.message);
@@ -132,6 +138,7 @@ export default async function handler(req, res) {
       }
       leadId = data.id;
       created = true;
+      alertEvent = "new_lead";
     }
 
     if (consent) await recordConsent(admin, req, leadId, consent, { source: "calc", pagePath: row.page_path });
@@ -148,6 +155,19 @@ export default async function handler(req, res) {
       /* Still swallowed for the visitor — the lead IS saved — but the Calculator
        * page also lists leads by the note this endpoint wrote, so it is not hidden. */
       if (linkErr) console.error("[calc] run link failed twice", linkErr.message);
+    }
+
+    if (alertEvent) {
+      await postLeadAlert(buildLeadAlert({
+        event: alertEvent,
+        where: `Revenue calculator ${row.page_path || ""}`.trim(),
+        name: name || existing?.name || "",
+        email,
+        phone: phone || existing?.phone || "",
+        website: domain || existing?.domain || "",
+        callConsent: Boolean(consent),
+        utm: { utm_source: row.utm_source, utm_campaign: row.utm_campaign },
+      }));
     }
 
     return res.status(200).json({ ok: true, lead_id: leadId, created });
