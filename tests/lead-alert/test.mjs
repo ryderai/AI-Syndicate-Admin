@@ -21,12 +21,12 @@ const NOW = new Date("2026-10-18T18:05:00Z"); // 1:05 PM CT
 /* 1. consent */
 {
   const a = buildLeadAlert({ where: "Landing page /free-ai-score/", name: "Mike", phone: "5125550100", callConsent: true, now: NOW });
-  ok("consent + phone says OK to call", a.slack_text.includes("*OK to call or text*") && a.ok_to_call === "yes");
+  ok("consent + phone says Can call? Yes", a.slack_text.includes("*Can call?* :white_check_mark: Yes") && a.ok_to_call === "yes");
   const b = buildLeadAlert({ where: "x", name: "Mike", phone: "5125550100", callConsent: false, now: NOW });
-  ok("phone without consent never says OK to call", !b.slack_text.includes("OK to call or text") && b.ok_to_call === "no_consent_on_record");
-  ok("phone without consent says email first", b.slack_text.includes("Email first"));
+  ok("phone without consent never says yes", !b.slack_text.includes(":white_check_mark: Yes") && b.ok_to_call === "no_consent_on_record");
+  ok("phone without consent says email only", b.slack_text.includes("*Can call?* :no_entry: No, email only"));
   const c = buildLeadAlert({ where: "x", name: "Mike", email: "m@x.com", callConsent: true, now: NOW });
-  ok("consent without a phone is email only", c.slack_text.includes("EMAIL ONLY") && c.ok_to_call === "no_phone");
+  ok("consent without a phone is email only", c.slack_text.includes("*Can call?* :no_entry: No phone, email only") && c.ok_to_call === "no_phone");
   const d = buildLeadAlert({ where: "x", name: "Mike", phone: "5125550100", callConsent: "yes", now: NOW });
   ok("a truthy non-boolean consent still counts only via Boolean()", d.ok_to_call === "yes");
   const e = buildLeadAlert({ where: "x", name: "Mike", phone: "5125550100", now: NOW });
@@ -40,16 +40,20 @@ const NOW = new Date("2026-10-18T18:05:00Z"); // 1:05 PM CT
   ok("company is escaped", a.slack_text.includes("A&amp;B &lt;Co&gt;"));
   ok("escapeSlack handles null", escapeSlack(null) === "");
   const b = buildLeadAlert({ where: "x", now: NOW });
-  ok("a missing name is said, not blank", b.slack_text.includes("(no name given)"));
+  ok("a missing name shows a dash, not blank", b.slack_text.includes("*Name:* —"));
+  ok("every card has the same six labeled lines", ["*Name:*", "*Business:*", "*Website:*", "*Phone:*", "*Email:*", "*Can call?*"].every((l) => b.slack_text.includes(`\n${l} `)));
+  const w = buildLeadAlert({ where: "Landing page /free-ai-score/", company: "ryderschilling.com", website: "ryderschilling.com", now: NOW });
+  ok("website is not shown twice when it is also the business", w.slack_text.includes("*Business:* —") && w.slack_text.split("ryderschilling.com").length === 2);
 }
 
 /* layout */
 {
   const a = buildLeadAlert({ event: "phone_added", where: "Landing page /free-ai-score/", name: "Mike", phone: "15125550100", callConsent: true, score: 69, utm: { utm_source: "facebook", utm_campaign: "hs-leadform-oct26" }, now: NOW });
-  ok("phone_added has its own headline", a.slack_text.startsWith(":large_yellow_circle: *SAME LEAD, NOW HAS A PHONE*"));
-  ok("source is named", a.slack_text.includes("Meta ad (hs-leadform-oct26)"));
-  ok("score line", a.slack_text.includes("Free AI score: 69/100") && a.score === 69);
-  ok("claim line is last", a.slack_text.trim().split("\n").pop().startsWith(":point_right:"));
+  ok("phone_added has its own headline", a.slack_text.startsWith(":large_yellow_circle: *Same lead, now has a phone · Landing page (from Meta ad)*"), a.slack_text.split("\n")[0]);
+  ok("ad codes stay off the card but ride in the payload", !a.slack_text.includes("hs-leadform-oct26") && a.campaign === "Meta ad (hs-leadform-oct26)");
+  ok("score stays off the card but rides in the payload", !a.slack_text.includes("69") && a.score === 69);
+  ok("Can call? is the last line", a.slack_text.trim().split("\n").pop().startsWith("*Can call?*"));
+  ok("page path stays off the headline", !a.slack_text.includes("/free-ai-score/"));
   ok("time is in CT", a.time_ct === "Sun, Oct 18, 1:05 PM CT" || a.time_ct === "Sun Oct 18, 1:05 PM CT", a.time_ct);
   const b = buildLeadAlert({ where: "x", score: 69.5, now: NOW });
   ok("a non-integer score is dropped", b.score === null && !b.slack_text.includes("score"));
