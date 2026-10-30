@@ -7,6 +7,7 @@ const SECTION_TITLES = {
   finance: { kicker: "Money", title: "Finance · money in, out and kept" },
   invoices: { kicker: "Money", title: "Invoices · billed, paid, owed" },
   "ai-cost": { kicker: "Money", title: "AI Cost · tokens used, by account and job" },
+  linkedin: { kicker: "Delivery", title: "LinkedIn · outreach clients, their answers and their numbers" },
   meta: { kicker: "Money", title: "Meta · every ad, and what its clicks did on the page" },
   "sales-stats": { kicker: "Sales", title: "Stats · how the team is doing" },
   clients: { kicker: "Command", title: "Clients · everyone we work with and everyone who pays" },

@@ -22,6 +22,7 @@ import SalesStats from "./admin/SalesStats.jsx";
 import Operations from "./admin/Operations.jsx";
 import Inbox from "./admin/Inbox.jsx";
 import Tickets from "./admin/Tickets.jsx";
+import LinkedInPage from "./admin/LinkedInPage.jsx";
 import Brain from "./admin/Brain.jsx";
 import NotesPage from "./admin/NotesPage.jsx";
 import Assistant from "./admin/Assistant.jsx";
@@ -177,6 +178,7 @@ export default function AdminDashboard({ go }) {
        * passed around. */
       case "floor": return <SalesPage member={member} mode="floor" />;
       case "operations": return <Operations member={member} />;
+      case "linkedin": return <LinkedInPage member={member} query={query} />;
       case "inbox": return <Inbox member={member} />;
       /* A REP'S OWN MAILBOX. Same component, `mine` set: their own address, their
        * own threads, no sharing controls. The lock that matters is not this prop
