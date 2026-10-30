@@ -55,6 +55,14 @@ export default function LinkedInPage({ member, query = "" }) {
   }, []);
   useEffect(() => { reload(); listTeam().then((t) => setTeam((t.rows || []).filter((p) => p.active !== false))); }, [reload]);
   useEffect(() => { if (urlId) setOpenId(urlId); }, [urlId]);
+  // The header's Refresh button, plus a quiet re-check every 30 seconds while
+  // this tab is on screen, so a client's answers show up without a page reload.
+  useEffect(() => {
+    const onRefresh = () => reload();
+    window.addEventListener("adm-refresh", onRefresh);
+    const timer = setInterval(() => { if (document.visibilityState === "visible") reload(); }, 30000);
+    return () => { window.removeEventListener("adm-refresh", onRefresh); clearInterval(timer); };
+  }, [reload]);
 
   const open = clients.rows.find((c) => c.id === openId) || null;
   useScreenContext(() => ({
