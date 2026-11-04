@@ -197,6 +197,11 @@ export function OutreachTab({ client, member }) {
   }, [client.id]);
   useEffect(() => { loadVersions(); }, [loadVersions]);
   const e = (flow.engagements || []).find((x) => x.id === client.id) || {};
+  /* The client approves or asks for changes on their own page, not here. The
+   * flow polls every 15 s, so when the stage moves, reload the copy too —
+   * the 4 Nov test showed "client review" on screen after the client had
+   * already approved. */
+  useEffect(() => { if (e.flow_stage) loadVersions(); }, [e.flow_stage, loadVersions]);
   const v = versions.rows[0];
   const refresh = () => { loadVersions(); reloadFlow(); loadReplies(); };
   const run = async (label, fn) => { setBusy(label); try { await fn(); } finally { setBusy(""); refresh(); } };
