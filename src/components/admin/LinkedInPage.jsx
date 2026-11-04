@@ -10,6 +10,7 @@ import { copyToClipboard } from "../../lib/clipboard.js";
 import { MetricCard, SourceBadge, Modal, Field, TextInput, EmptyState, timeAgo } from "./shared.jsx";
 import { useScreenContext } from "../../lib/screenContext.js";
 import { OutreachOverview, OutreachTab } from "./linkedinFlow.jsx";
+import { stageLabel as flowStageLabel } from "../../../lib/linkedin-flow.js";
 
 /* LINKEDIN — the LinkedIn Outreach clients. 30 Oct 2026.
  *
@@ -34,6 +35,17 @@ const STAGE_TONE = {
   ended: { c: "var(--ink-dim)", bg: "var(--bg-3)" },
 };
 const stageLabel = (s) => (STAGES.find(([id]) => id === s) || [s, s])[1];
+/* Two stage fields live on a client since 0052: the old hand-set `stage`
+ * (New / Setting up / Live ...) and the Outreach flow's `flow_stage`, which
+ * the console moves by itself. The 4 Nov end-to-end test showed a client the
+ * flow had made Live still counted as "New" here. The flow wins once it has
+ * moved past "form received"; the old field stays editable for anything else. */
+const LIVEISH = ["live", "report_due", "renewed"];
+const isLive = (c) => c.stage === "live" || LIVEISH.includes(c.flow_stage);
+const flowTone = (f) => (LIVEISH.includes(f) ? "live" : f === "paused" ? "paused" : f === "churned" ? "ended" : "setting_up");
+const rowStage = (c) => (c.flow_stage && c.flow_stage !== "form_received"
+  ? { tone: STAGE_TONE[flowTone(c.flow_stage)], label: flowStageLabel(c.flow_stage) }
+  : { tone: STAGE_TONE[c.stage] || STAGE_TONE.new, label: stageLabel(c.stage) });
 
 function Pill({ tone, children }) {
   return (
@@ -72,8 +84,8 @@ export default function LinkedInPage({ member, query = "" }) {
   }), [open?.id]);
 
   const counts = useMemo(() => ({
-    live: clients.rows.filter((c) => c.stage === "live").length,
-    setting: clients.rows.filter((c) => c.status === "submitted" && ["new", "setting_up"].includes(c.stage)).length,
+    live: clients.rows.filter(isLive).length,
+    setting: clients.rows.filter((c) => c.status === "submitted" && !isLive(c) && !["paused", "churned"].includes(c.flow_stage) && ["new", "setting_up"].includes(c.stage)).length,
     drafts: clients.rows.filter((c) => c.status === "draft").length,
   }), [clients.rows]);
 
@@ -93,7 +105,7 @@ export default function LinkedInPage({ member, query = "" }) {
   return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>
-        <MetricCard label="Campaigns live" value={counts.live} badge={<SourceBadge mode={mode} hint={clients.error} />} hint="stage = Live" />
+        <MetricCard label="Campaigns live" value={counts.live} badge={<SourceBadge mode={mode} hint={clients.error} />} hint="stage = Live (or the Outreach flow says live)" />
         <MetricCard label="To set up" value={counts.setting} hint="form sent, not live yet" />
         <MetricCard label="Forms in progress" value={counts.drafts} hint="client is still filling it in" />
       </div>
@@ -134,7 +146,7 @@ export default function LinkedInPage({ member, query = "" }) {
                       <div>{c.contact_name || "—"}</div>
                       <div style={{ color: "var(--ink-dim)", fontSize: 11.5 }}>{c.contact_email || ""}</div>
                     </td>
-                    <td><Pill tone={STAGE_TONE[c.stage] || STAGE_TONE.new}>{stageLabel(c.stage).toUpperCase()}</Pill></td>
+                    <td><Pill tone={rowStage(c).tone}>{rowStage(c).label.toUpperCase()}</Pill></td>
                     <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>
                       {c.status === "submitted"
                         ? <>Sent <span style={{ color: "var(--ink-dim)" }}>{timeAgo(c.submitted_at)}</span>

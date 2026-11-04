@@ -15,7 +15,7 @@ const pid = () => `s-${Math.random().toString(36).slice(2, 10)}`;
 
 /* The client columns the console reads. Never edit_key_hash: that belongs to
  * the client's resume link, not to us. */
-const CLIENT_COLS = "id, status, stage, company, contact_name, contact_email, linkedin_url, ref, source, answers, files, owner_id, client_id, notes, last_saved_at, submitted_at, team_emailed_at, created_at, updated_at";
+const CLIENT_COLS = "id, status, stage, flow_stage, company, contact_name, contact_email, linkedin_url, ref, source, answers, files, owner_id, client_id, notes, last_saved_at, submitted_at, team_emailed_at, created_at, updated_at";
 
 export const TRACKERS = {
   daily: { table: "linkedin_daily_activity", order: "day" },

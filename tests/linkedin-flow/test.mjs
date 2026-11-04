@@ -17,6 +17,8 @@ ok("in_review -> building (client asked for changes)", canAutoMove("in_review", 
 ok("live -> building is NOT automatic (a revision doesn't drag a live client back)", !canAutoMove("live", "building"));
 ok("anything can pause", canAutoMove("live", "paused") && canAutoMove("paid", "paused"));
 ok("churned stays churned automatically", !canAutoMove("churned", "paused"));
+ok("catch-up: paid -> in_review and paid -> approved are allowed (the action proves the steps)", canAutoMove("paid", "in_review") && canAutoMove("paid", "approved") && canAutoMove("building", "approved"));
+ok("catch-up never skips payment or goes backwards", !canAutoMove("form_received", "approved") && !canAutoMove("approved", "in_review") && !canAutoMove("live", "approved"));
 ok("isStage", isStage("live") && !isStage("nope"));
 
 // ---- dates

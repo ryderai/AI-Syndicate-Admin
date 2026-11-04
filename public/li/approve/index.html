@@ -36,6 +36,7 @@
   button.primary { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
   button:disabled { opacity: .55; cursor: not-allowed; }
   button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  a { color: var(--brand); }   /* the PIN link was default dark blue on the dark-mode card (4 Nov test) */
   textarea { width:100%; min-height: 120px; font: inherit; font-size: 16px; padding: 12px; border-radius: 10px; border:1px solid var(--line); background: var(--card); color: var(--ink); }
   .note { padding: 12px 14px; border-radius: 10px; background: #fff7ed; color: var(--warn); font-size: 14px; }
   .done { text-align:center; padding: 48px 16px; }
@@ -125,8 +126,7 @@
           <p class="lead">The last step is a 5-minute login so Julie can start your outreach.</p>
           ${r.bookingUrl ? `<p><a class="primary" style="display:inline-block;padding:12px 18px;border-radius:10px;background:var(--brand);color:#fff;font-weight:700;text-decoration:none" href="${esc(r.bookingUrl)}" target="_blank" rel="noopener">Book your 5-minute login</a></p>` : `<p class="lead">We'll be in touch shortly to pick a time.</p>`}
           ${r.julieEmail ? `<p class="lead">At that time, LinkedIn will email you a verification code. Forward that email to Julie right away: <b>${esc(r.julieEmail)}</b></p>` : ""}
-          ${r.pinUrl ? `<p class="lead">Or type the code on this page and Julie sees it instantly — save the link:<br><a href="${esc(r.pinUrl)}">${esc(r.pinUrl)}</a></p>` : ""}
-          <p class="lead" style="font-size:14px">We never need your password in writing.</p></div>`;
+          ${r.pinUrl ? `<p class="lead">Or type the code on this page and Julie sees it instantly — save the link:<br><a href="${esc(r.pinUrl)}">${esc(r.pinUrl)}</a></p>` : ""}</div>`;
       } catch (e) { msg.textContent = e.message; ev.target.disabled = false; }
     });
     document.getElementById("changes").addEventListener("click", async (ev) => {
