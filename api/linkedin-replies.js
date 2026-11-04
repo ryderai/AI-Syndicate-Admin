@@ -65,7 +65,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== "POST") { res.setHeader("Allow", "POST, PATCH"); return res.status(405).json({ error: "Method not allowed." }); }
-  if (!isAiConfigured()) return res.status(503).json({ error: "Sorting replies is waiting on ANTHROPIC_API_KEY." });
+  if (!isAiConfigured()) return res.status(503).json({ error: "Sorting replies is waiting on ANTHROPIC_API_KEY or AI_GATEWAY_API_KEY." });
   const liClientId = String(body?.liClientId || "");
   const message = String(body?.message || "").trim().slice(0, 4000);
   if (!UUID.test(liClientId) || !message) return res.status(400).json({ error: "liClientId and the reply text are required." });
