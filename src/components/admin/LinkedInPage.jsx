@@ -9,6 +9,7 @@ import { toast } from "../../lib/toast.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 import { MetricCard, SourceBadge, Modal, Field, TextInput, EmptyState, timeAgo } from "./shared.jsx";
 import { useScreenContext } from "../../lib/screenContext.js";
+import { OutreachOverview, OutreachTab } from "./linkedinFlow.jsx";
 
 /* LINKEDIN — the LinkedIn Outreach clients. 30 Oct 2026.
  *
@@ -97,6 +98,8 @@ export default function LinkedInPage({ member, query = "" }) {
         <MetricCard label="Forms in progress" value={counts.drafts} hint="client is still filling it in" />
       </div>
 
+      <OutreachOverview member={member} />
+
       <div className="card" style={{ padding: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ fontSize: 13, color: "var(--ink-2)" }}>
           New client? Send them the form. Their answers show up here as they type.
@@ -180,10 +183,10 @@ function AddClient({ open, onClose, onAdded }) {
 /* ------------------------------------------------------------------ */
 
 const TABS = [
-  ["answers", "Answers"], ["daily", "Daily activity"], ["searches", "Searches"], ["sequences", "Message copy"], ["responses", "Responses"],
+  ["answers", "Answers"], ["outreach", "Outreach"], ["daily", "Daily activity"], ["searches", "Searches"], ["sequences", "Message copy"], ["responses", "Responses"],
 ];
 
-function ClientDetail({ client, team, sample, onBack, onChanged }) {
+function ClientDetail({ client, team, sample, member, onBack, onChanged }) {
   const [tab, setTab] = useState("answers");
   const [notes, setNotes] = useState(client.notes || "");
   useEffect(() => { setNotes(client.notes || ""); }, [client.id, client.notes]);
@@ -246,7 +249,9 @@ function ClientDetail({ client, team, sample, onBack, onChanged }) {
         ))}
       </div>
 
-      {tab === "answers" ? <Answers client={client} sample={sample} /> : <Tracker kind={tab} liId={client.id} />}
+      {tab === "answers" ? <Answers client={client} sample={sample} />
+        : tab === "outreach" ? <OutreachTab client={client} member={member} />
+        : <Tracker kind={tab} liId={client.id} />}
     </>
   );
 }

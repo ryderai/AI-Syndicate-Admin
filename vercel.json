@@ -65,12 +65,44 @@
     },
     "api/hs-heat.js": {
       "maxDuration": 10
+    },
+    "api/linkedin-messages.js": {
+      "maxDuration": 300
+    },
+    "api/linkedin-build-due.js": {
+      "maxDuration": 300
+    },
+    "api/linkedin-stripe-webhook.js": {
+      "maxDuration": 15
+    },
+    "api/linkedin-flow.js": {
+      "maxDuration": 20
+    },
+    "api/linkedin-approval.js": {
+      "maxDuration": 15
+    },
+    "api/linkedin-pin.js": {
+      "maxDuration": 10
+    },
+    "api/linkedin-replies.js": {
+      "maxDuration": 60
+    },
+    "api/linkedin-reports.js": {
+      "maxDuration": 300
     }
   },
   "crons": [
     {
       "path": "/api/lead-scrape",
       "schedule": "0 13 * * 1-5"
+    },
+    {
+      "path": "/api/linkedin-build-due",
+      "schedule": "41 14 * * *"
+    },
+    {
+      "path": "/api/linkedin-reports",
+      "schedule": "53 14 * * *"
     }
   ]
 }
