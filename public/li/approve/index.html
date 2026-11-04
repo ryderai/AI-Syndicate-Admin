@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Review your LinkedIn outreach</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+  :root { --ink:#14121f; --ink2:#4a4760; --line:#e6e3f0; --bg:#f7f6fb; --card:#fff; --brand:#5b3df5; --brand-ink:#fff; --ok:#0f7a3a; --warn:#9a3412; }
+  @media (prefers-color-scheme: dark) { :root { --ink:#f1effa; --ink2:#b7b3cc; --line:#2d2a3d; --bg:#121019; --card:#1b1826; --brand:#8b74ff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color:var(--ink); background:var(--bg); }
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: clamp(22px, 4vw, 30px); line-height:1.2; margin: 8px 0 6px; }
+  h2 { font-size: 18px; margin: 32px 0 10px; }
+  p.lead { color: var(--ink2); margin: 0 0 8px; }
+  .eyebrow { font-size: 12px; letter-spacing:.08em; text-transform: uppercase; color: var(--ink2); font-weight: 700; }
+  .grid { display:grid; gap:16px; grid-template-columns: 1fr; }
+  @media (min-width: 820px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+  .card { background: var(--card); border:1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .variant { cursor: pointer; }
+  .variant.picked { outline: 2px solid var(--brand); }
+  .variant header { display:flex; align-items:center; gap:10px; margin-bottom: 8px; }
+  .variant header input { width: 22px; height: 22px; accent-color: var(--brand); }
+  .msg { border-top: 1px solid var(--line); padding: 10px 0; }
+  .msg:first-of-type { border-top: 0; }
+  .msg .when { font-size: 12px; color: var(--ink2); font-weight: 600; margin-bottom: 4px; }
+  .msg .body { white-space: pre-wrap; }
+  ul.tags { list-style:none; padding:0; margin:4px 0 0; display:flex; flex-wrap:wrap; gap:6px; }
+  ul.tags li { font-size: 13px; background: var(--bg); border:1px solid var(--line); border-radius: 99px; padding: 2px 10px; }
+  .row { margin: 6px 0; font-size: 14px; }
+  .row b { display:block; font-size: 12px; color: var(--ink2); }
+  .actions { position: sticky; bottom: 0; background: var(--bg); padding: 14px 0 calc(14px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); margin-top: 28px; display:flex; flex-wrap: wrap; gap: 10px; }
+  button { font: inherit; font-weight: 700; border-radius: 10px; padding: 12px 18px; min-height: 48px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  textarea { width:100%; min-height: 120px; font: inherit; font-size: 16px; padding: 12px; border-radius: 10px; border:1px solid var(--line); background: var(--card); color: var(--ink); }
+  .note { padding: 12px 14px; border-radius: 10px; background: #fff7ed; color: var(--warn); font-size: 14px; }
+  .done { text-align:center; padding: 48px 16px; }
+  .done h1 { margin-top: 0; }
+  [hidden] { display: none !important; }
+  @media print { .actions { display:none; } body { background:#fff; } .card { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main id="app" aria-live="polite">
+  <p class="lead">Loading…</p>
+</main>
+<script>
+(() => {
+  const app = document.getElementById("app");
+  const t = new URLSearchParams(location.search).get("t") || "";
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const tags = (arr) => (arr && arr.length ? `<ul class="tags">${arr.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "—");
+  let data = null; let picked = null;
+
+  const done = (title, text) => { app.innerHTML = `<div class="done card"><h1>${esc(title)}</h1><p class="lead">${esc(text)}</p></div>`; };
+
+  async function call(method, body) {
+    const res = await fetch(method === "GET" ? `/api/linkedin-approval?t=${encodeURIComponent(t)}` : "/api/linkedin-approval", {
+      method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined,
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || "Something went wrong. Please reply to our email.");
+    return json;
+  }
+
+  function render() {
+    const d = data;
+    const when = (s) => s.step === 1 ? `${s.delay_days} day after they accept` : `${s.delay_days} days after message ${s.step - 1}`;
+    app.innerHTML = `
+      <div class="eyebrow">LinkedIn outreach · ${esc(d.company)}</div>
+      <h1>Review your messages and target lists</h1>
+      <p class="lead">Pick the version you prefer, then approve it — or tell us what to change. Nothing is sent until you approve.</p>
+      ${d.datedFrom ? `<p class="note">Some messages mention specific dates. They'll stop being used from ${esc(d.datedFrom)}.</p>` : ""}
+      <h2>1. Your messages — pick one version</h2>
+      <div class="grid two" role="radiogroup" aria-label="Message version">
+        ${d.variants.map((v, i) => `
+          <section class="card variant" data-name="${esc(v.name)}" aria-labelledby="vh${i}">
+            <header><input type="radio" name="variant" id="v${i}" value="${esc(v.name)}"><label id="vh${i}" for="v${i}"><b>${esc(v.name)}</b></label></header>
+            <div class="msg"><div class="when">Connection request note</div><div class="body">${esc(v.connection_note)}</div></div>
+            ${(v.steps || []).map((s) => `<div class="msg"><div class="when">Message ${s.step} · ${esc(when(s))}${s.step === 4 ? " (last)" : ""}</div><div class="body">${esc(s.body)}</div></div>`).join("")}
+            <div class="msg"><div class="when">InMail · only for people who don't accept</div><div class="body"><b>${esc(v.inmail && v.inmail.subject)}</b>\n${esc(v.inmail && v.inmail.body)}</div></div>
+          </section>`).join("")}
+      </div>
+      <p class="lead" style="font-size:14px;margin-top:8px">{{first_name}}, {{company}} and {{city}} are filled in with each person's details.</p>
+      <h2>2. Who we'll reach</h2>
+      <div class="grid">
+        ${d.target_lists.map((l, i) => `<section class="card"><b>${i + 1}. ${esc(l.title)}</b>
+          <div class="row"><b>Job titles</b>${tags(l.job_titles)}</div>
+          <div class="row"><b>Industries</b>${tags(l.industries)}</div>
+          <div class="row"><b>Locations</b>${tags(l.geography)}</div>
+          <div class="row"><b>Company sizes</b>${tags(l.headcount)}</div>
+          ${l.keywords ? `<div class="row"><b>Keywords</b>${esc(l.keywords)}</div>` : ""}
+          ${l.exclusions ? `<div class="row"><b>Not contacted</b>${esc(l.exclusions)}</div>` : ""}</section>`).join("")}
+      </div>
+      <h2>3. How we'll answer replies</h2>
+      <div class="grid two">
+        ${[["interested", "When someone is interested"], ["question", "When someone asks a question"], ["not_now", "When it's not the right time"], ["referral", "When they refer someone else"]].map(([k, label]) => `<section class="card"><div class="when" style="font-size:12px;font-weight:600;color:var(--ink2)">${label}</div><div class="body" style="white-space:pre-wrap">${esc(d.reply_templates[k])}</div></section>`).join("")}
+      </div>
+      <div id="changesBox" hidden>
+        <h2>What should we change?</h2>
+        <label for="fb" class="lead">Be as specific as you like — which message, what to say instead, anyone to leave out.</label>
+        <textarea id="fb" maxlength="4000"></textarea>
+      </div>
+      <div class="actions">
+        <button class="primary" id="approve" disabled>Approve the selected version</button>
+        <button id="changes">Request changes</button>
+        <span id="msg" class="lead" role="status" style="align-self:center"></span>
+      </div>`;
+    app.querySelectorAll(".variant").forEach((el) => el.addEventListener("click", () => {
+      picked = el.dataset.name;
+      el.querySelector("input").checked = true;
+      app.querySelectorAll(".variant").forEach((x) => x.classList.toggle("picked", x === el));
+      document.getElementById("approve").disabled = false;
+    }));
+    const msg = document.getElementById("msg");
+    document.getElementById("approve").addEventListener("click", async (ev) => {
+      ev.target.disabled = true; msg.textContent = "Saving…";
+      try {
+        const r = await call("POST", { t, action: "approve", variant: picked });
+        app.innerHTML = `<div class="done card"><h1>Approved — thank you!</h1>
+          <p class="lead">The last step is a 5-minute login so Julie can start your outreach.</p>
+          ${r.bookingUrl ? `<p><a class="primary" style="display:inline-block;padding:12px 18px;border-radius:10px;background:var(--brand);color:#fff;font-weight:700;text-decoration:none" href="${esc(r.bookingUrl)}" target="_blank" rel="noopener">Book your 5-minute login</a></p>` : `<p class="lead">We'll be in touch shortly to pick a time.</p>`}
+          ${r.pinUrl ? `<p class="lead">At that time, LinkedIn will send you a verification code. Type it on this page and Julie gets it instantly — save the link:<br><a href="${esc(r.pinUrl)}">${esc(r.pinUrl)}</a></p>` : ""}
+          <p class="lead" style="font-size:14px">We never need your password in writing.</p></div>`;
+      } catch (e) { msg.textContent = e.message; ev.target.disabled = false; }
+    });
+    document.getElementById("changes").addEventListener("click", async (ev) => {
+      const box = document.getElementById("changesBox");
+      if (box.hidden) { box.hidden = false; ev.target.textContent = "Send my changes"; ev.target.classList.add("primary"); document.getElementById("fb").focus(); return; }
+      const feedback = document.getElementById("fb").value.trim();
+      if (feedback.length < 3) { msg.textContent = "Please tell us what to change."; return; }
+      ev.target.disabled = true; msg.textContent = "Sending…";
+      try { await call("POST", { t, action: "changes", feedback }); done("Thanks — we're on it", "We'll send you a revised version for review shortly."); }
+      catch (e) { msg.textContent = e.message; ev.target.disabled = false; }
+    });
+  }
+
+  (async () => {
+    try {
+      data = await call("GET");
+      if (data.state === "revising") return done("Your revised version is on its way", "Thanks for your notes — we'll email you when it's ready to review.");
+      if (data.state !== "review") return done("Nothing to review right now", "We'll email you when your messages are ready.");
+      render();
+    } catch (e) { done("This link isn't working", e.message); }
+  })();
+})();
+</script>
+</body>
+</html>

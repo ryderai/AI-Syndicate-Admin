@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Send your LinkedIn code</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+  :root { --ink:#14121f; --ink2:#4a4760; --line:#e6e3f0; --bg:#f7f6fb; --card:#fff; --brand:#5b3df5; --ok:#0f7a3a; --err:#b42318; }
+  @media (prefers-color-scheme: dark) { :root { --ink:#f1effa; --ink2:#b7b3cc; --line:#2d2a3d; --bg:#121019; --card:#1b1826; --brand:#8b74ff; --ok:#4ade80; --err:#f87171; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color:var(--ink); background:var(--bg); }
+  main { max-width: 480px; margin: 0 auto; padding: 32px 16px 64px; }
+  .card { background: var(--card); border:1px solid var(--line); border-radius: 16px; padding: 22px; }
+  .eyebrow { font-size: 12px; letter-spacing:.08em; text-transform: uppercase; color: var(--ink2); font-weight: 700; }
+  h1 { font-size: 24px; line-height: 1.2; margin: 6px 0 10px; }
+  p { color: var(--ink2); margin: 0 0 12px; }
+  ol { color: var(--ink2); padding-left: 20px; margin: 0 0 16px; }
+  label { font-weight: 700; display:block; margin-bottom: 6px; }
+  input { width: 100%; font: 700 32px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .3em; text-align: center; padding: 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  button { width: 100%; margin-top: 14px; font: inherit; font-weight: 700; min-height: 52px; border-radius: 12px; border: 0; background: var(--brand); color: #fff; cursor: pointer; }
+  button:disabled { opacity:.55; cursor: not-allowed; }
+  input:focus-visible, button:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+  #msg { margin-top: 12px; min-height: 1.4em; font-weight: 600; }
+  .ok { color: var(--ok); } .err { color: var(--err); }
+  .small { font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card" id="card">
+    <div class="eyebrow" id="who">LinkedIn login</div>
+    <h1>Enter the code LinkedIn sent you</h1>
+    <ol>
+      <li>Julie is logging in to your LinkedIn now.</li>
+      <li>LinkedIn sends a verification code to your email (or phone).</li>
+      <li>Type it below. Julie sees it right away and finishes the login.</li>
+    </ol>
+    <form id="f" novalidate>
+      <label for="code">Verification code</label>
+      <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="8" required>
+      <button id="go" type="submit">Send the code to Julie</button>
+      <p id="msg" role="status" aria-live="polite"></p>
+    </form>
+    <p class="small">We never ask for your password here. A code works for 15 minutes and is deleted within a day.</p>
+  </div>
+</main>
+<script>
+(() => {
+  const t = new URLSearchParams(location.search).get("t") || "";
+  const msg = document.getElementById("msg");
+  const go = document.getElementById("go");
+  const code = document.getElementById("code");
+  const say = (text, cls) => { msg.textContent = text; msg.className = cls || ""; };
+  fetch(`/api/linkedin-pin?t=${encodeURIComponent(t)}`).then((r) => r.json().then((j) => ({ ok: r.ok, j }))).then(({ ok, j }) => {
+    if (!ok) { say(j.error || "This link isn't working.", "err"); go.disabled = true; code.disabled = true; return; }
+    document.getElementById("who").textContent = `LinkedIn login · ${j.company || ""}`;
+    code.focus();
+  }).catch(() => say("Couldn't reach us. Check your connection.", "err"));
+  code.addEventListener("input", () => { code.value = code.value.replace(/\D+/g, "").slice(0, 8); });
+  document.getElementById("f").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const c = code.value.trim();
+    if (!/^\d{4,8}$/.test(c)) { say("Please enter just the digits of the code.", "err"); return; }
+    go.disabled = true; say("Sending…");
+    try {
+      const r = await fetch("/api/linkedin-pin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ t, code: c }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "That didn't go through.");
+      say("Sent. Julie has it — you can close this page. If LinkedIn sends another code, enter it here too.", "ok");
+      code.value = ""; go.disabled = false;
+    } catch (e) { say(e.message, "err"); go.disabled = false; }
+  });
+})();
+</script>
+</body>
+</html>
