@@ -82,11 +82,13 @@ function Settings({ settings, reload }) {
   const [conn, setConn] = useState(settings?.daily_caps?.connections ?? 20);
   const [inm, setInm] = useState(settings?.daily_caps?.inmails ?? 10);
   const [cc, setCc] = useState(Array.isArray(settings?.report_cc) ? settings.report_cc.join(", ") : "");
+  const [julie, setJulie] = useState(typeof settings?.julie_email === "string" && settings.julie_email ? settings.julie_email : "porcallajulieann01@gmail.com");
   const save = async () => {
     const a = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "booking_url", value: booking.trim() || null });
     const b = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "daily_caps", value: { connections: Number(conn) || 0, inmails: Number(inm) || 0 } });
     const c = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "report_cc", value: cc.split(",").map((x) => x.trim()).filter(Boolean) });
-    if (a && b && c) { toast("LinkedIn settings saved.", "success"); reload(); }
+    const d = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "julie_email", value: julie.trim() || null });
+    if (a && b && c && d) { toast("LinkedIn settings saved.", "success"); reload(); }
   };
   return (
     <details className="card" style={{ padding: 16 }}>
@@ -96,6 +98,7 @@ function Settings({ settings, reload }) {
         <label style={dim}>Connection requests per account per day<input className="adm-input" type="number" min="0" value={conn} onChange={(e) => setConn(e.target.value)} /></label>
         <label style={dim}>InMails per account per day<input className="adm-input" type="number" min="0" value={inm} onChange={(e) => setInm(e.target.value)} /></label>
         <label style={dim}>Copy reports and lead alerts to<input className="adm-input" value={cc} onChange={(e) => setCc(e.target.value)} /></label>
+        <label style={dim}>Julie's email (clients forward LinkedIn codes here)<input className="adm-input" type="email" value={julie} onChange={(e) => setJulie(e.target.value)} /></label>
       </div>
       <button className="btn" style={{ marginTop: 10 }} onClick={save}>Save settings</button>
     </details>
@@ -104,7 +107,7 @@ function Settings({ settings, reload }) {
 
 export function OutreachOverview({ member }) {
   const [s, reload] = useFlow(30000);
-  const isAdmin = ["owner", "admin"].includes(member?.role);
+  const isAdmin = ["owner", "admin"].includes(member?.role || member?.membership?.role);
   if (s.loading) return null;
   if (s.error) return s.preview ? null : <div className="card" style={{ padding: 16, fontSize: 13, color: "#b42318" }}>LinkedIn flow: {s.error}. If a table is missing, migrations 0051 and 0052 haven't been run yet.</div>;
   const pins = (s.engagements || []).flatMap((e) => (e.pins || []).map((p) => ({ ...p, company: e.company })));
@@ -264,7 +267,7 @@ export function OutreachTab({ client, member }) {
 
       <div className="card" style={box}>
         <h3 style={h}>Login access</h3>
-        <div style={dim}>The client types LinkedIn's verification code on a one-use page; it shows here at once. We never take or store their password.</div>
+        <div style={dim}>At the login slot the client forwards LinkedIn's code email to Julie, or types the code on a one-use page and it shows here within 30 seconds. We never take or store their password.</div>
         <Pins pins={e.pins} reload={reloadFlow} />
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           {isAdmin && <button className="btn" onClick={async () => { const d = await act("/api/linkedin-flow", "PATCH", { id: client.id, action: "pin_link" }, "PIN page link copied — send it to the client."); if (d?.url) copyToClipboard(d.url); }}>Copy a PIN page link</button>}

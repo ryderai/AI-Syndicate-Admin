@@ -75,7 +75,7 @@ export default async function handler(req, res) {
   if (action === "settings") {
     if (role !== "owner") return res.status(403).json({ error: "Only an owner can change LinkedIn settings." });
     const key = String(body?.key || "");
-    if (!["daily_caps", "booking_url", "report_cc"].includes(key)) return res.status(400).json({ error: "Unknown setting." });
+    if (!["daily_caps", "booking_url", "report_cc", "julie_email"].includes(key)) return res.status(400).json({ error: "Unknown setting." });
     const { error } = await admin.from("linkedin_settings").upsert({ key, value: body?.value ?? null, updated_at: new Date().toISOString(), updated_by: member.user.id });
     return error ? res.status(500).json({ error: error.message }) : res.status(200).json({ ok: true });
   }

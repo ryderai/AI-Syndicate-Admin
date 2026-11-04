@@ -93,15 +93,22 @@ ok("classification counts", JSON.stringify(classificationCounts(reps, "2026-11-0
 ok("report lines parse; day-30 keeps 2 recommendations", parseReportLines('{"summary":"Good start.","recommendations":["a","b","c"]}', "day30").recommendations.length === 2);
 ok("mid-month never carries recommendations", parseReportLines('{"summary":"x","recommendations":["a"]}', "midmonth").recommendations.length === 0);
 const mail = reportEmail("day30", { contactName: "Daniel Yearwood", company: "8th St", start: "2026-11-02", end: "2026-12-01", totals: pt.totals, leadNames: pt.leadNames, summary: "Good start.", recommendations: ["Work list 2 next.", "Test Message 2."] });
-ok("report email has every number and the names", /Connection requests sent: 40/.test(mail.text) && /Leads: 1 \(Jane\)/.test(mail.text) && /For next month:/.test(mail.text) && /Hi Daniel,/.test(mail.text));
+ok("report email has every number and the names (CJ's Resources wording)", /40 Connection Requests Sent/.test(mail.text) && /1 Leads Generated \(Jane\)/.test(mail.text) && /we'd recommend the following/.test(mail.text) && /Hello Daniel,/.test(mail.text) && /Results Generated 2026-11-02 - 2026-12-01/.test(mail.text) && /wrap up the month/.test(mail.text) && !/\bI\b/.test(mail.text));
+const midMail = reportEmail("midmonth", { contactName: "Daniel Yearwood", company: "8th St", start: "2026-11-02", end: "2026-11-15", totals: pt.totals, leadNames: [], summary: "", recommendations: ["x"] });
+ok("mid-month report: Resources wording, no recommendations", /mid-month report/.test(midMail.text) && !/recommend the following/.test(midMail.text) && /0|1|40/.test(midMail.text));
 
 // ---- emails
-for (const k of ["resources_ready", "revision_coming", "revised_ready", "approved_book", "live", "lead_alert"]) {
+for (const k of ["onboarding_received", "resources_ready", "revision_coming", "revised_ready", "approved_book", "live", "lead_alert"]) {
   const m = draftEmail(k, { contactName: "Daniel Y", company: "8th St", approvalUrl: "https://x/li/approve/?t=1", pinUrl: "https://x/li/pin/?t=1", prospect: "Jane", message: "Yes", suggested: "Great" });
-  ok(`email ${k} drafts`, m && m.subject && /Hi Daniel,/.test(m.text));
+  ok(`email ${k} drafts`, m && m.subject && /Hello Daniel/.test(m.text));
 }
 ok("approved_book includes the PIN page and never asks for a password", /li\/pin/.test(draftEmail("approved_book", { pinUrl: "https://x/li/pin/?t=1" }).text) && !/send (us )?your password/i.test(draftEmail("approved_book", {}).text));
 ok("no booking link -> asks for a time", /Reply with a time/.test(draftEmail("approved_book", { pinUrl: "p" }).text));
+ok("approved_book tells them to forward the code to Julie (CJ, 4 Nov)", /Forward that code email to Julie right away: porcallajulieann01@gmail.com/.test(draftEmail("approved_book", {}).text));
+ok("approved_book uses the julie_email setting when given", /julie@x\.com/.test(draftEmail("approved_book", { julieEmail: "julie@x.com" }).text));
+ok("live email carries the Sales Navigator inbox tip", /Sales Navigator inbox/.test(draftEmail("live", { contactName: "D" }).text) && /messaging/.test(draftEmail("live", {}).text));
+ok("resources_ready links the review page", /https:\/\/x\/li\/approve/.test(draftEmail("resources_ready", { approvalUrl: "https://x/li/approve/?t=1" }).text));
+ok("onboarding_received carries the booking link when set (CJ, 4 Nov)", /https:\/\/cal\/x/.test(draftEmail("onboarding_received", { bookingUrl: "https://cal/x" }).text) && !/48 hours/.test(draftEmail("onboarding_received", {}).text));
 ok("unknown kind -> null", draftEmail("nope") === null);
 
 // ---- tokens

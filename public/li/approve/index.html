@@ -124,7 +124,8 @@
         app.innerHTML = `<div class="done card"><h1>Approved — thank you!</h1>
           <p class="lead">The last step is a 5-minute login so Julie can start your outreach.</p>
           ${r.bookingUrl ? `<p><a class="primary" style="display:inline-block;padding:12px 18px;border-radius:10px;background:var(--brand);color:#fff;font-weight:700;text-decoration:none" href="${esc(r.bookingUrl)}" target="_blank" rel="noopener">Book your 5-minute login</a></p>` : `<p class="lead">We'll be in touch shortly to pick a time.</p>`}
-          ${r.pinUrl ? `<p class="lead">At that time, LinkedIn will send you a verification code. Type it on this page and Julie gets it instantly — save the link:<br><a href="${esc(r.pinUrl)}">${esc(r.pinUrl)}</a></p>` : ""}
+          ${r.julieEmail ? `<p class="lead">At that time, LinkedIn will email you a verification code. Forward that email to Julie right away: <b>${esc(r.julieEmail)}</b></p>` : ""}
+          ${r.pinUrl ? `<p class="lead">Or type the code on this page and Julie sees it instantly — save the link:<br><a href="${esc(r.pinUrl)}">${esc(r.pinUrl)}</a></p>` : ""}
           <p class="lead" style="font-size:14px">We never need your password in writing.</p></div>`;
       } catch (e) { msg.textContent = e.message; ev.target.disabled = false; }
     });

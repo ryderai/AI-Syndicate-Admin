@@ -16,6 +16,7 @@
  *
  * What the page may show: the copy, lists and templates — never the client's
  * form answers, our checker's notes, or anything about other clients. */
+import { DEFAULT_JULIE_EMAIL } from "../lib/linkedin-emails.js";
 import { getAdminSupabase, readJson } from "../lib/supabase-server.js";
 import { looksLikeToken } from "../lib/linkedin-tokens.js";
 import { byToken, moveStage, pinLink, draftToOutbox, getSettings } from "../lib/linkedin-flow-server.js";
@@ -86,11 +87,12 @@ export default async function handler(req, res) {
     const settings = await getSettings(admin);
     const bookingUrl = typeof settings.booking_url === "string" ? settings.booking_url : null;
     const url = await pinLink(admin, client.id);
-    await draftToOutbox(admin, { client, kind: "approved_book", data: { bookingUrl, pinUrl: url } });
+    const julieEmail = typeof settings.julie_email === "string" && settings.julie_email ? settings.julie_email : DEFAULT_JULIE_EMAIL;
+    await draftToOutbox(admin, { client, kind: "approved_book", data: { bookingUrl, pinUrl: url, julieEmail } });
     /* The brief: "The confirmation screen embeds Julie's booking link". The
      * PIN page link is shown too — this person holds the approval link, so
      * they are the owner the PIN page is for. */
-    return res.status(200).json({ ok: true, state: "approved", bookingUrl, pinUrl: url });
+    return res.status(200).json({ ok: true, state: "approved", bookingUrl, pinUrl: url, julieEmail });
   }
 
   if (body?.action === "changes") {

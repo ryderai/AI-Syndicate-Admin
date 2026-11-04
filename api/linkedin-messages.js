@@ -27,6 +27,7 @@
  * Every model call (1 or 2 per run) is recorded through recordAiUsage,
  * success or failure (scripts/check-ai-usage.mjs). Needs migration 0051. */
 
+import { DEFAULT_JULIE_EMAIL } from "../lib/linkedin-emails.js";
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
 import { draft, isAiConfigured, AI_MODEL } from "../lib/ai.js";
 import { recordAiUsage } from "../lib/ai-usage.js";
@@ -70,9 +71,20 @@ export default async function handler(req, res) {
       if (!UUID.test(liClientId)) return res.status(400).json({ error: "liClientId is required." });
       const { data, error } = await admin.from("linkedin_clients")
         .update({ paid_at: new Date().toISOString(), paid_source: "manual", paid_marked_by: member.user.id })
-        .eq("id", liClientId).is("paid_at", null).select("id, paid_at, paid_source").maybeSingle();
+        .eq("id", liClientId).is("paid_at", null).select("id, paid_at, paid_source, company, contact_name, contact_email, build_due_at").maybeSingle();
       if (error) return res.status(500).json({ error: error.message });
-      return res.status(200).json({ client: data || null, note: data ? "Marked paid." : "Already paid — nothing changed." });
+      /* CJ's Resources file ("Onboarding has been received ... resources shared
+       * with you for review by ...") and his 4 Nov email (the confirmation
+       * should carry Julie's booking link): a DRAFT in the outbox, never sent. */
+      let flowNote = null;
+      if (data) {
+        try {
+          const settings = await getSettings(admin);
+          const dueBy = data.build_due_at ? new Date(data.build_due_at).toLocaleString("en-US", { timeZone: "America/Chicago", weekday: "long", month: "short", day: "numeric" }) : null;
+          await draftToOutbox(admin, { client: data, kind: "onboarding_received", data: { dueBy, bookingUrl: typeof settings.booking_url === "string" ? settings.booking_url : null } });
+        } catch (err) { flowNote = `Marked paid; the confirmation email draft failed: ${err?.message || err}`; }
+      }
+      return res.status(200).json({ client: data || null, note: data ? "Marked paid." : "Already paid — nothing changed.", flowNote });
     }
 
     const id = String(body?.id || "");
@@ -128,7 +140,7 @@ export default async function handler(req, res) {
       await moveStage(admin, client.id, "approved");
       const settings = await getSettings(admin);
       link = await pinLink(admin, client.id);
-      await draftToOutbox(admin, { client, kind: "approved_book", data: { bookingUrl: typeof settings.booking_url === "string" ? settings.booking_url : null, pinUrl: link } });
+      await draftToOutbox(admin, { client, kind: "approved_book", data: { bookingUrl: typeof settings.booking_url === "string" ? settings.booking_url : null, pinUrl: link, julieEmail: typeof settings.julie_email === "string" && settings.julie_email ? settings.julie_email : DEFAULT_JULIE_EMAIL } });
     }
     } catch (err) {
       flowNote = `Saved, but the next flow step didn't run: ${String(err?.message || err).slice(0, 160)}`;
