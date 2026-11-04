@@ -141,7 +141,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed." });
   }
   if (!isAdmin) return res.status(403).json({ error: "Only an owner or admin can write a sequence." });
-  if (!isAiConfigured()) return res.status(503).json({ error: "Writing copy is waiting on ANTHROPIC_API_KEY — SETUP.md § AI." });
+  if (!isAiConfigured()) return res.status(503).json({ error: "Writing copy is waiting on ANTHROPIC_API_KEY or AI_GATEWAY_API_KEY — SETUP.md § AI." });
 
   const body = await readJson(req);
   const liClientId = String(body?.liClientId || "");

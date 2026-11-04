@@ -38,7 +38,7 @@ export default async function handler(req, res) {
   if (!admin) return res.status(503).json({ error: "Waiting on the Supabase keys." });
   const secret = process.env.CRON_SECRET;
   if (!secret || (req.headers?.authorization || "") !== `Bearer ${secret}`) return res.status(401).json({ error: "Not authorized." });
-  if (!isAiConfigured()) return res.status(503).json({ error: "Waiting on ANTHROPIC_API_KEY." });
+  if (!isAiConfigured()) return res.status(503).json({ error: "Waiting on ANTHROPIC_API_KEY or AI_GATEWAY_API_KEY." });
 
   const { data: paid, error } = await admin
     .from("linkedin_clients")

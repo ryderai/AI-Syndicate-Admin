@@ -75,6 +75,7 @@ const RECORDS = /recordAiUsage\s*\(/;
  */
 const PAID_HOSTS = [
   ["api.anthropic.com", "recorded", "the console's own model calls; every handler that reaches it calls recordAiUsage"],
+  ["ai-gateway.vercel.sh", "recorded", "Vercel AI Gateway (lib/anthropic-route.js, 4 Nov 2026): the SAME Claude calls as api.anthropic.com, routed through Vercel when AI_GATEWAY_API_KEY is set because the live Anthropic key needs a workspace header; billed to the Vercel team at Anthropic list price. Same callers, same recordAiUsage rows"],
   ["api.apollo.io", "recorded", "api/lead-scrape.js fetchApollo() — Apollo people search, billed per credit. Recorded NOWHERE until 8 Sep 2026; runSource() now writes one usage row per search, tokens null, so it prints NOT PRICED rather than $0.00. A price row will NOT change that: costMicros() returns null when usage is null, so a per-search fee needs the per_call_micros column, still open in both repos"],
   ["api.stripe.com", "free", "reading our own billing data; Stripe charges on payments, not API calls"],
   ["graph.facebook.com", "free", "Meta Marketing API, READ-ONLY (ads_read) for the Meta page (api/meta-ads.js, 4 Oct 2026). No per-call charge; the exposure is Meta's per-ad-account rate limit, which the endpoint's 60-second cache protects"],
