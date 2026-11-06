@@ -12,10 +12,16 @@
  * in the outbox for a person to copy into Gmail and mark sent. No model calls. */
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
 import { lateItems, julieQueue, chicagoDate, isStage } from "../lib/linkedin-flow.js";
-import { moveStage, approvalLink, pinLink, getSettings, draftToOutbox } from "../lib/linkedin-flow-server.js";
+import { moveStage, approvalLink, pinLink, getSettings, draftToOutbox, linkSignups, mergeSignupInto } from "../lib/linkedin-flow-server.js";
+import { onboardingLink, dueFollowUps } from "../lib/linkedin-v2.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ENG = "id, company, contact_name, contact_email, status, flow_stage, stage_changed_at, stage_history, paid_at, paid_source, build_due_at, booking_at, launch_date, period_start, midmonth_due, report_due, renewal_date, renewed_at, payment_failed_at, messages_attempts, messages_last_error, submitted_at";
+/* v2 (6 Nov 2026) columns, read in their own query and merged in, so the
+ * page still loads if migration 0053 hasn't been run yet (6 Nov check). */
+const ENG_V2 = "id, login_email, login_location, whatsapp, login_times, code_method, login_details_at, password_received_at";
+/* v2 (6 Nov 2026): sales-page sign-ups shown on their own card. */
+const SIGNUP = "id, status, company, contact_name, contact_email, linkedin_url, answers, paid_at, checkout_started_at, merged_into, created_at";
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "private, no-store");
@@ -32,7 +38,11 @@ export default async function handler(req, res) {
      * too, and so does the daily reports run, so a code never outlives a day
      * even when nobody opens anything (4 Nov check). */
     await admin.from("linkedin_pins").delete().lt("expires_at", now.toISOString());
-    const [eng, vers, acts, reps, pins, outbox, reports, settings] = await Promise.all([
+    /* v2: a paid sales-page sign-up is moved onto its onboarding-form row
+     * before anything is read, so the list shows it paid. Guarded: before
+     * migration 0053 the columns don't exist and this does nothing. */
+    try { await linkSignups(admin); } catch { /* 0053 not run yet */ }
+    const [eng, vers, acts, reps, pins, outbox, reports, settings, signups, prospects] = await Promise.all([
       admin.from("linkedin_clients").select(ENG).eq("status", "submitted").order("submitted_at", { ascending: false }).limit(200),
       admin.from("linkedin_sequence_versions").select("id, li_client_id, version, status, chosen_variant, issues, first_dated_on, expires_on, created_at").order("version", { ascending: false }).limit(500),
       admin.from("linkedin_daily_activity").select("li_client_id, day").gte("day", since).limit(5000),
@@ -41,10 +51,15 @@ export default async function handler(req, res) {
       admin.from("linkedin_outbox").select("id, li_client_id, kind, to_email, cc, subject, body_text, internal_note, status, created_at").eq("status", "draft").order("created_at", { ascending: false }).limit(40),
       admin.from("linkedin_reports").select("li_client_id, kind, period_start").limit(2000),
       getSettings(admin),
+      admin.from("linkedin_clients").select(SIGNUP).in("status", ["signup", "merged"]).gte("created_at", new Date(now.getTime() - 90 * 864e5).toISOString()).order("created_at", { ascending: false }).limit(50),
+      admin.from("linkedin_prospects").select("id, li_client_id, name, profile_url, accepted_on, last_step, last_sent_on, status").eq("status", "active").limit(5000),
     ]);
     const err = [eng, vers, acts, reps, pins, outbox, reports].find((r) => r.error)?.error;
     if (err) return res.status(500).json({ error: err.message });
-    const engagements = eng.data || [];
+    const ids = (eng.data || []).map((e) => e.id);
+    const v2 = ids.length ? await admin.from("linkedin_clients").select(ENG_V2).in("id", ids) : { data: [] };
+    const v2By = Object.fromEntries((v2.error ? [] : v2.data || []).map((r) => [r.id, r]));
+    const engagements = (eng.data || []).map((e) => ({ ...e, ...(v2By[e.id] || {}) }));
     const activity = {};
     for (const a of acts.data || []) (activity[a.li_client_id] ||= []).push(a.day);
     /* Reports written for each client's CURRENT month only. */
@@ -53,29 +68,40 @@ export default async function handler(req, res) {
     for (const r of reports.data || []) if (r.period_start === periodOf[r.li_client_id]) (reportKinds[r.li_client_id] ||= []).push(r.kind);
     const latest = {};
     for (const v of vers.data || []) if (!latest[v.li_client_id]) latest[v.li_client_id] = { ...v, blocking: (v.issues || []).filter((i) => i?.level === "block").length, issues: undefined };
+    /* Follow-ups due: each client's APPROVED variant's delays (the brief). */
+    const steps = await approvedSteps(admin, engagements.map((e) => e.id));
+    const followUps = prospects.error ? [] : dueFollowUps(prospects.data || [], steps, chicagoDate(now));
     return res.status(200).json({
       today: chicagoDate(now),
       engagements: engagements.map((e) => ({ ...e, latestVersion: latest[e.id] || null, pins: (pins.data || []).filter((p) => p.li_client_id === e.id) })),
       late: [
         ...engagements.filter((e) => e.payment_failed_at && !["paused", "churned"].includes(e.flow_stage)).map((e) => ({ id: e.id, company: e.company, level: "late", what: `Stripe payment failed ${e.payment_failed_at.slice(0, 10)} — pauses after 3 days unpaid` })),
         ...lateItems(engagements, activity, { now, reports: reportKinds }),
+        /* v2: a sales-page buyer paid but has no onboarding form yet. The
+         * page promises the form within one business day. */
+        ...(signups.error ? [] : signups.data || []).filter((x) => x.status === "signup" && x.paid_at).map((x) => {
+          const hrs = (now - new Date(x.paid_at)) / 3600e3;
+          return hrs >= 24 ? { id: x.id, company: x.company, level: "late", what: `Paid on the sales page ${x.paid_at.slice(0, 10)} — no onboarding form yet (send the welcome email in Emails waiting)` }
+            : { id: x.id, company: x.company, level: "today", what: "Paid on the sales page — send the welcome email with their onboarding form (Emails waiting)" };
+        }),
       ],
-      queue: julieQueue(engagements, reps.data || [], activity, { now }),
+      queue: julieQueue(engagements, reps.data || [], activity, { now, followUps }),
       outbox: outbox.data || [],
       settings,
+      signups: signups.error ? [] : (signups.data || []).map((x) => ({ ...x, formUrl: onboardingLink(x.id), phone: x.answers?.contact_phone || null, goal: x.answers?.goals || null, answers: undefined })),
     });
   }
 
   if (req.method !== "PATCH") { res.setHeader("Allow", "GET, PATCH"); return res.status(405).json({ error: "Method not allowed." }); }
   const body = await readJson(req);
   const action = String(body?.action || "");
-  const julieMay = ["booked", "live", "pin_seen"];
+  const julieMay = ["booked", "live", "pin_seen", "password_received"];
   if (!isAdmin && !julieMay.includes(action)) return res.status(403).json({ error: "Only an owner or admin can do that." });
 
   if (action === "settings") {
     if (role !== "owner") return res.status(403).json({ error: "Only an owner can change LinkedIn settings." });
     const key = String(body?.key || "");
-    if (!["daily_caps", "booking_url", "report_cc", "julie_email"].includes(key)) return res.status(400).json({ error: "Unknown setting." });
+    if (!["daily_caps", "booking_url", "report_cc", "julie_email", "julie_whatsapp", "password_method", "code_alert_email", "signup_notify"].includes(key)) return res.status(400).json({ error: "Unknown setting." });
     const { error } = await admin.from("linkedin_settings").upsert({ key, value: body?.value ?? null, updated_at: new Date().toISOString(), updated_by: member.user.id });
     return error ? res.status(500).json({ error: error.message }) : res.status(200).json({ ok: true });
   }
@@ -89,6 +115,18 @@ export default async function handler(req, res) {
     if (!UUID.test(String(body?.pinId || ""))) return res.status(400).json({ error: "pinId is required." });
     await admin.from("linkedin_pins").update({ seen_at: new Date().toISOString() }).eq("id", body.pinId);
     return res.status(200).json({ ok: true });
+  }
+
+  if (action === "link_signup") {
+    /* An owner or admin ties a paid sign-up to a form row by hand, when the
+     * automatic match can't (a different email on the form). All or nothing:
+     * lib/linkedin-flow-server.js mergeSignupInto. */
+    const formId = String(body?.id || ""), signupId = String(body?.signupId || "");
+    if (!UUID.test(formId) || !UUID.test(signupId)) return res.status(400).json({ error: "id and signupId are required." });
+    const { data: sgn } = await admin.from("linkedin_clients").select("id, status, paid_at, paid_source, stripe_customer_id, stripe_subscription_id, renewal_date, last_invoice_paid_at").eq("id", signupId).maybeSingle();
+    if (!sgn || sgn.status !== "signup" || !sgn.paid_at) return res.status(409).json({ error: "That sign-up isn't paid, or is already linked." });
+    const r = await mergeSignupInto(admin, sgn, formId);
+    return r.ok ? res.status(200).json({ ok: true }) : res.status(409).json({ error: r.error });
   }
 
   const id = String(body?.id || "");
@@ -130,6 +168,16 @@ export default async function handler(req, res) {
         return res.status(200).json({ url: await approvalLink(admin, id) });
       case "pin_link":
         return res.status(200).json({ url: await pinLink(admin, id) });
+      case "onboarding_link":
+        return res.status(200).json({ url: onboardingLink(id) });
+      case "password_received": {
+        /* Julie has the password. The password itself is never sent here or
+         * stored (CJ's brief, Guardrails) — only that she has it. `undo`
+         * clears it (e.g. the client changed their password). */
+        const patch = body?.undo ? { password_received_at: null, password_received_by: null } : { password_received_at: new Date().toISOString(), password_received_by: member.user.id };
+        const { error } = await admin.from("linkedin_clients").update(patch).eq("id", id);
+        return error ? res.status(500).json({ error: error.message }) : res.status(200).json({ ok: true });
+      }
       case "save_lists": {
         /* The approved version's three list specs become rows on the
          * Searches tab (Draft), where Julie adds the Sales Navigator link,
@@ -153,4 +201,16 @@ export default async function handler(req, res) {
   } catch (err) {
     return res.status(500).json({ error: err?.message || "Failed." });
   }
+}
+
+/** Each client's approved variant's steps: { [li_client_id]: [{ step, delay_days }] }. */
+async function approvedSteps(admin, ids) {
+  if (!ids.length) return {};
+  const { data } = await admin.from("linkedin_sequence_versions").select("li_client_id, chosen_variant, content").eq("status", "approved").in("li_client_id", ids).limit(500);
+  const out = {};
+  for (const v of data || []) {
+    const variant = (v.content?.variants || []).find((x) => x?.name === v.chosen_variant) || v.content?.variants?.[0];
+    if (variant?.steps) out[v.li_client_id] = variant.steps;
+  }
+  return out;
 }

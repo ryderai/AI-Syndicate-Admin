@@ -77,17 +77,20 @@ export default function LinkedInPage({ member, query = "" }) {
     return () => { window.removeEventListener("adm-refresh", onRefresh); clearInterval(timer); };
   }, [reload]);
 
-  const open = clients.rows.find((c) => c.id === openId) || null;
+  /* v2 (6 Nov 2026): sales-page sign-ups live on their own card (Outreach
+   * overview), not in the client list, until their form arrives. */
+  const rows = useMemo(() => clients.rows.filter((c) => !["signup", "merged"].includes(c.status)), [clients.rows]);
+  const open = rows.find((c) => c.id === openId) || null;
   useScreenContext(() => ({
     page: "LinkedIn",
     record: open ? { type: "linkedin_client", id: open.id, label: open.company || open.contact_name } : null,
   }), [open?.id]);
 
   const counts = useMemo(() => ({
-    live: clients.rows.filter(isLive).length,
-    setting: clients.rows.filter((c) => c.status === "submitted" && !isLive(c) && !["paused", "churned"].includes(c.flow_stage) && ["new", "setting_up"].includes(c.stage)).length,
-    drafts: clients.rows.filter((c) => c.status === "draft").length,
-  }), [clients.rows]);
+    live: rows.filter(isLive).length,
+    setting: rows.filter((c) => c.status === "submitted" && !isLive(c) && !["paused", "churned"].includes(c.flow_stage) && ["new", "setting_up"].includes(c.stage)).length,
+    drafts: rows.filter((c) => c.status === "draft").length,
+  }), [rows]);
 
   const copyFormLink = async () => {
     const link = `${FORM_URL}?ref=netwrks`;
@@ -125,7 +128,7 @@ export default function LinkedInPage({ member, query = "" }) {
 
       {clients.error && <div className="card" style={{ padding: 16, color: "#b42318", fontSize: 13 }}>Couldn't read the LinkedIn clients: {clients.error}. If it says the table doesn't exist, migration 0048 hasn't been run yet.</div>}
 
-      {!clients.loading && clients.rows.length === 0 && !clients.error ? (
+      {!clients.loading && rows.length === 0 && !clients.error ? (
         <EmptyState icon="in" title="No LinkedIn clients yet"
           body="Copy the form link above and send it to the first client. Their answers appear here while they fill it in, and the team gets an email when they press Send."
           action={<button className="btn btn-accent" onClick={copyFormLink}>Copy form link</button>} />
@@ -134,7 +137,7 @@ export default function LinkedInPage({ member, query = "" }) {
           <table className="adm-table">
             <thead><tr><th>Client</th><th>Contact</th><th>Stage</th><th>Form</th><th>Check before launch</th></tr></thead>
             <tbody>
-              {clients.rows.map((c) => {
+              {rows.map((c) => {
                 const flags = readinessFlags(c.answers);
                 return (
                   <tr key={c.id} className="adm-row-click" tabIndex={0} onClick={() => setOpenId(c.id)} onKeyDown={(e) => { if (e.key === "Enter") setOpenId(c.id); }}>

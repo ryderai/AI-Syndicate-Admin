@@ -45,7 +45,10 @@ const store = {
 /* ---------- clients ---------- */
 export async function listLiClients() {
   if (!live()) return { rows: [...store.clients], sample: true };
-  const { data, error } = await getSupabase().from("linkedin_clients").select(CLIENT_COLS).order("created_at", { ascending: false }).limit(500);
+  /* Sales-page sign-ups (0053) are shown on their own card, and are kept out
+   * HERE, on the server, so a burst of them can't push real clients past
+   * the 500-row limit (6 Nov check). Before 0053, no row has those statuses. */
+  const { data, error } = await getSupabase().from("linkedin_clients").select(CLIENT_COLS).not("status", "in", "(signup,merged)").order("created_at", { ascending: false }).limit(500);
   if (error) return { rows: [], error: error.message, sample: false };
   return { rows: data || [], sample: false };
 }

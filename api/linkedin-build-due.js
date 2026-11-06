@@ -22,7 +22,7 @@ import { getAdminSupabase } from "../lib/supabase-server.js";
 import { draft, isAiConfigured, AI_MODEL } from "../lib/ai.js";
 import { recordAiUsage } from "../lib/ai-usage.js";
 import { ENGAGEMENT_COLUMNS, MAX_AUTO_ATTEMPTS, claim, release, runEngine, saveVersion, saveRevision, loadEngagement } from "../lib/linkedin-engine-server.js";
-import { moveStage } from "../lib/linkedin-flow-server.js";
+import { moveStage, linkSignups } from "../lib/linkedin-flow-server.js";
 
 /* As many clients as fit: a new one is STARTED only while under 70 s have
  * passed, because one client can take up to ~230 s (two model calls of up to
@@ -38,7 +38,12 @@ export default async function handler(req, res) {
   if (!admin) return res.status(503).json({ error: "Waiting on the Supabase keys." });
   const secret = process.env.CRON_SECRET;
   if (!secret || (req.headers?.authorization || "") !== `Bearer ${secret}`) return res.status(401).json({ error: "Not authorized." });
-  if (!isAiConfigured()) return res.status(503).json({ error: "Waiting on ANTHROPIC_API_KEY or AI_GATEWAY_API_KEY." });
+  /* v2 (6 Nov 2026): fold paid sales-page sign-ups into their form rows and
+   * draft their welcome emails BEFORE the AI check, so payments are linked
+   * even while the AI is off. Never sends anything. */
+  let signups = null;
+  try { signups = await linkSignups(admin); } catch (err) { signups = { error: String(err?.message || err).slice(0, 120) }; }
+  if (!isAiConfigured()) return res.status(503).json({ error: "Waiting on ANTHROPIC_API_KEY or AI_GATEWAY_API_KEY.", signups });
 
   const { data: paid, error } = await admin
     .from("linkedin_clients")

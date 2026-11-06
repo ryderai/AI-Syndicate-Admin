@@ -104,9 +104,12 @@ for (const k of ["onboarding_received", "resources_ready", "revision_coming", "r
   const m = draftEmail(k, { contactName: "Daniel Y", company: "8th St", approvalUrl: "https://x/li/approve/?t=1", pinUrl: "https://x/li/pin/?t=1", prospect: "Jane", message: "Yes", suggested: "Great" });
   ok(`email ${k} drafts`, m && m.subject && /Hello Daniel/.test(m.text));
 }
-ok("approved_book includes the PIN page and never asks for a password", /li\/pin/.test(draftEmail("approved_book", { pinUrl: "https://x/li/pin/?t=1" }).text) && !/send (us )?your password/i.test(draftEmail("approved_book", {}).text));
-ok("no booking link -> asks for a time", /Reply with a time/.test(draftEmail("approved_book", { pinUrl: "p" }).text));
-ok("approved_book tells them to forward the code to Julie (CJ, 4 Nov)", /Forward that code email to Julie right away: porcallajulieann01@gmail.com/.test(draftEmail("approved_book", {}).text));
+/* v2 (6 Nov 2026) supersedes the 4 Nov wording: the PIN page is the login page, Julie can't make a booking link, codes by WhatsApp / page / email. */
+ok("approved_book includes the login page and never asks for a password by email", /li\/pin/.test(draftEmail("approved_book", { pinUrl: "https://x/li/pin/?t=1" }).text) && /don't email or text your password/i.test(draftEmail("approved_book", {}).text) && !/send (us )?your password/i.test(draftEmail("approved_book", {}).text));
+ok("no booking link -> Julie confirms a time", /Julie confirms a time/.test(draftEmail("approved_book", { pinUrl: "p" }).text) && /Pick a time here: https:\/\/cal/.test(draftEmail("approved_book", { bookingUrl: "https://cal/x" }).text));
+ok("approved_book still offers forwarding the code to Julie (CJ, 4 Nov)", /forwarding the code email to porcallajulieann01@gmail.com/.test(draftEmail("approved_book", {}).text));
+ok("approved_book names Julie's WhatsApp when set, and the password tool", /WhatsApp \(\+63 900\)/.test(draftEmail("approved_book", { julieWhatsapp: "+63 900" }).text) && /NordPass/.test(draftEmail("approved_book", { passwordMethod: "Use NordPass." }).text));
+ok("signup_paid carries the onboarding form link", /onboarding\/linkedin\/\?ref=sp-/.test(draftEmail("signup_paid", { contactName: "A B", company: "Co", formUrl: "https://www.aisyndicate.com/onboarding/linkedin/?ref=sp-abc" }).text));
 ok("approved_book uses the julie_email setting when given", /julie@x\.com/.test(draftEmail("approved_book", { julieEmail: "julie@x.com" }).text));
 ok("live email carries the Sales Navigator inbox tip", /Sales Navigator inbox/.test(draftEmail("live", { contactName: "D" }).text) && /messaging/.test(draftEmail("live", {}).text));
 ok("resources_ready links the review page", /https:\/\/x\/li\/approve/.test(draftEmail("resources_ready", { approvalUrl: "https://x/li/approve/?t=1" }).text));

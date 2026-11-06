@@ -27,13 +27,12 @@
  * Every model call (1 or 2 per run) is recorded through recordAiUsage,
  * success or failure (scripts/check-ai-usage.mjs). Needs migration 0051. */
 
-import { DEFAULT_JULIE_EMAIL } from "../lib/linkedin-emails.js";
 import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-server.js";
 import { draft, isAiConfigured, AI_MODEL } from "../lib/ai.js";
 import { recordAiUsage } from "../lib/ai-usage.js";
 import { VARIANT_NAMES } from "../lib/linkedin-messages.js";
 import { loadEngagement, claim, release, runEngine, saveVersion, saveRevision } from "../lib/linkedin-engine-server.js";
-import { moveStage, approvalLink, pinLink, draftToOutbox, getSettings } from "../lib/linkedin-flow-server.js";
+import { moveStage, approvalLink, pinLink, draftToOutbox, getSettings, approvedBookData } from "../lib/linkedin-flow-server.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -140,7 +139,7 @@ export default async function handler(req, res) {
       await moveStage(admin, client.id, "approved");
       const settings = await getSettings(admin);
       link = await pinLink(admin, client.id);
-      await draftToOutbox(admin, { client, kind: "approved_book", data: { bookingUrl: typeof settings.booking_url === "string" ? settings.booking_url : null, pinUrl: link, julieEmail: typeof settings.julie_email === "string" && settings.julie_email ? settings.julie_email : DEFAULT_JULIE_EMAIL } });
+      await draftToOutbox(admin, { client, kind: "approved_book", data: approvedBookData(settings, link) });
     }
     } catch (err) {
       flowNote = `Saved, but the next flow step didn't run: ${String(err?.message || err).slice(0, 160)}`;

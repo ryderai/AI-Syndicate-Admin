@@ -16,10 +16,9 @@
  *
  * What the page may show: the copy, lists and templates — never the client's
  * form answers, our checker's notes, or anything about other clients. */
-import { DEFAULT_JULIE_EMAIL } from "../lib/linkedin-emails.js";
 import { getAdminSupabase, readJson } from "../lib/supabase-server.js";
 import { looksLikeToken } from "../lib/linkedin-tokens.js";
-import { byToken, moveStage, pinLink, draftToOutbox, getSettings } from "../lib/linkedin-flow-server.js";
+import { byToken, moveStage, pinLink, draftToOutbox, getSettings, approvedBookData } from "../lib/linkedin-flow-server.js";
 import { VARIANT_NAMES } from "../lib/linkedin-messages.js";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -85,14 +84,15 @@ export default async function handler(req, res) {
     await admin.from("linkedin_clients").update({ approval_token_hash: null, approval_token_expires_at: null }).eq("id", client.id);
     await moveStage(admin, client.id, "approved");
     const settings = await getSettings(admin);
-    const bookingUrl = typeof settings.booking_url === "string" ? settings.booking_url : null;
     const url = await pinLink(admin, client.id);
-    const julieEmail = typeof settings.julie_email === "string" && settings.julie_email ? settings.julie_email : DEFAULT_JULIE_EMAIL;
-    await draftToOutbox(admin, { client, kind: "approved_book", data: { bookingUrl, pinUrl: url, julieEmail } });
+    /* v2 (6 Nov 2026): the PIN link is now the client's login page — the
+     * login details first, then the code. */
+    const book = approvedBookData(settings, url);
+    await draftToOutbox(admin, { client, kind: "approved_book", data: book });
     /* The brief: "The confirmation screen embeds Julie's booking link". The
      * PIN page link is shown too — this person holds the approval link, so
      * they are the owner the PIN page is for. */
-    return res.status(200).json({ ok: true, state: "approved", bookingUrl, pinUrl: url, julieEmail });
+    return res.status(200).json({ ok: true, state: "approved", bookingUrl: book.bookingUrl, pinUrl: url, loginUrl: url, julieEmail: book.julieEmail });
   }
 
   if (body?.action === "changes") {

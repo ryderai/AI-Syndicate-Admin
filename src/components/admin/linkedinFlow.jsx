@@ -3,6 +3,7 @@ import { apiFetch } from "../../lib/adminApi.js";
 import { toast } from "../../lib/toast.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 import { FLOW_STAGES, stageLabel, sendSchedule } from "../../../lib/linkedin-flow.js";
+import { waLink, CODE_METHODS } from "../../../lib/linkedin-v2.js";
 
 /* LINKEDIN OUTREACH — the flow on the console (Builds 1-5 + the PIN page).
  * 4 Nov 2026. CJ's "LinkedIn Outreach — Build Brief for Ryder".
@@ -83,22 +84,35 @@ function Settings({ settings, reload }) {
   const [inm, setInm] = useState(settings?.daily_caps?.inmails ?? 10);
   const [cc, setCc] = useState(Array.isArray(settings?.report_cc) ? settings.report_cc.join(", ") : "");
   const [julie, setJulie] = useState(typeof settings?.julie_email === "string" && settings.julie_email ? settings.julie_email : "porcallajulieann01@gmail.com");
+  /* v2, 6 Nov 2026 (Julie's and CJ's asks). */
+  const [julieWa, setJulieWa] = useState(typeof settings?.julie_whatsapp === "string" ? settings.julie_whatsapp : "");
+  const [pwMethod, setPwMethod] = useState(typeof settings?.password_method === "string" ? settings.password_method : "");
+  const [codeMail, setCodeMail] = useState(settings?.code_alert_email !== false);
+  const [notify, setNotify] = useState(Array.isArray(settings?.signup_notify) ? settings.signup_notify.join(", ") : "cj@aisyndicate.com, ryder@aisyndicate.com");
   const save = async () => {
     const a = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "booking_url", value: booking.trim() || null });
     const b = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "daily_caps", value: { connections: Number(conn) || 0, inmails: Number(inm) || 0 } });
     const c = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "report_cc", value: cc.split(",").map((x) => x.trim()).filter(Boolean) });
     const d = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "julie_email", value: julie.trim() || null });
-    if (a && b && c && d) { toast("LinkedIn settings saved.", "success"); reload(); }
+    const e = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "julie_whatsapp", value: julieWa.trim() || null });
+    const f = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "password_method", value: pwMethod.trim() || null });
+    const g = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "code_alert_email", value: !!codeMail });
+    const k = await act("/api/linkedin-flow", "PATCH", { action: "settings", key: "signup_notify", value: notify.split(",").map((x) => x.trim()).filter(Boolean) });
+    if (a && b && c && d && e && f && g && k) { toast("LinkedIn settings saved.", "success"); reload(); }
   };
   return (
     <details className="card" style={{ padding: 16 }}>
       <summary style={{ cursor: "pointer", fontWeight: 700 }}>LinkedIn Outreach settings (owner)</summary>
       <div style={{ display: "grid", gap: 8, marginTop: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-        <label style={dim}>Julie's booking link (Google Calendar)<input className="adm-input" value={booking} onChange={(e) => setBooking(e.target.value)} placeholder="https://calendar.app.google/…" /></label>
+        <label style={dim}>Julie's booking link (optional — leave blank to agree times by message)<input className="adm-input" value={booking} onChange={(e) => setBooking(e.target.value)} placeholder="https://calendar.app.google/…" /></label>
         <label style={dim}>Connection requests per account per day<input className="adm-input" type="number" min="0" value={conn} onChange={(e) => setConn(e.target.value)} /></label>
         <label style={dim}>InMails per account per day<input className="adm-input" type="number" min="0" value={inm} onChange={(e) => setInm(e.target.value)} /></label>
         <label style={dim}>Copy reports and lead alerts to<input className="adm-input" value={cc} onChange={(e) => setCc(e.target.value)} /></label>
         <label style={dim}>Julie's email (clients forward LinkedIn codes here)<input className="adm-input" type="email" value={julie} onChange={(e) => setJulie(e.target.value)} /></label>
+        <label style={dim}>Julie's WhatsApp (with country code — shows a "Message Julie" button to clients)<input className="adm-input" type="tel" value={julieWa} onChange={(e) => setJulieWa(e.target.value)} placeholder="+63 …" /></label>
+        <label style={dim}>New sales-page sign-ups email<input className="adm-input" value={notify} onChange={(e) => setNotify(e.target.value)} /></label>
+        <label style={{ ...dim, gridColumn: "1 / -1" }}>How clients share their password (shown on their login page and in the email — never typed into our system)<textarea className="adm-input" rows={2} value={pwMethod} onChange={(e) => setPwMethod(e.target.value)} /></label>
+        <label style={{ ...dim, display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={codeMail} onChange={(e) => setCodeMail(e.target.checked)} /> Email Julie each code the moment a client types it</label>
       </div>
       <button className="btn" style={{ marginTop: 10 }} onClick={save}>Save settings</button>
     </details>
@@ -133,8 +147,49 @@ export function OutreachOverview({ member }) {
         <Outbox rows={(s.outbox || []).slice(0, 3)} reload={reload} canMark={isAdmin} />
       </div>
     </div>
+    <Signups rows={s.signups || []} engagements={s.engagements || []} reload={reload} isAdmin={isAdmin} />
     {member?.role === "owner" && <Settings settings={s.settings} reload={reload} />}
     </>
+  );
+}
+
+/* v2, 6 Nov 2026: people who signed up on the LinkedIn Outreach page
+ * (/linkedin-outreach/). CJ, text 5 Nov: "I'll reach out and get them
+ * started" — so the card hands him the onboarding form link per person. A
+ * paid sign-up folds into its form row by itself once the form is sent
+ * (same email, or the form link's ref); "Link to a client" does it by hand. */
+function Signups({ rows, engagements, reload, isAdmin }) {
+  const [pick, setPick] = useState({});
+  if (!rows.length) return null;
+  const unpaidForms = engagements.filter((e) => !e.paid_at);
+  return (
+    <div className="card" style={box}>
+      <h3 style={h}>Sales-page sign-ups ({rows.filter((r) => r.status === "signup").length})</h3>
+      <div style={dim}>From the LinkedIn Outreach page. Paid ones get a welcome draft (with the form link) in Emails waiting.</div>
+      {rows.map((r) => (
+        <div key={r.id} style={{ borderTop: "1px solid var(--line)", paddingTop: 8, display: "grid", gap: 4 }}>
+          <div style={{ fontSize: 13 }}>
+            <b>{r.company}</b> · {r.contact_name} · {r.contact_email}{r.phone ? ` · ${r.phone}` : ""}
+            {" · "}{r.status === "merged" ? <b style={{ color: "var(--ink-dim)" }}>linked to their form</b> : r.paid_at ? <b style={{ color: "#0f7a3a" }}>PAID {fmt(r.paid_at)}</b> : <span style={{ color: "#92400e" }}>went to checkout {fmt(r.checkout_started_at)}, not paid yet</span>}
+          </div>
+          {r.goal && <div style={dim}>Goal: {r.goal}</div>}
+          {r.status === "signup" && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button className="btn" onClick={() => { copyToClipboard(r.formUrl); toast("Onboarding form link copied.", "success"); }}>Copy their onboarding form link</button>
+              {isAdmin && r.paid_at && unpaidForms.length > 0 && (
+                <>
+                  <select className="adm-input" style={{ width: 220 }} value={pick[r.id] || ""} onChange={(ev) => setPick({ ...pick, [r.id]: ev.target.value })}>
+                    <option value="">Link the payment to…</option>
+                    {unpaidForms.map((e) => <option key={e.id} value={e.id}>{e.company} ({e.contact_email})</option>)}
+                  </select>
+                  <button className="btn" disabled={!pick[r.id]} onClick={async () => { if (await act("/api/linkedin-flow", "PATCH", { action: "link_signup", id: pick[r.id], signupId: r.id }, "Payment linked — that client now shows paid.")) reload(); }}>Link</button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -272,10 +327,11 @@ export function OutreachTab({ client, member }) {
 
       <div className="card" style={box}>
         <h3 style={h}>Login access</h3>
-        <div style={dim}>At the login slot the client forwards LinkedIn's code email to Julie, or types the code on a one-use page and it shows here within 30 seconds. We never take or store their password.</div>
+        <div style={dim}>After approving, the client fills in their login page: LinkedIn email, the city they log in from (for the VPN), good times and how they'll pass the code. Codes typed there show here within 30 seconds and are emailed to Julie. The password goes straight to Julie through the sharing tool — it's never typed into or stored in the console.</div>
+        <LoginDetails e={e} client={client} reload={reloadFlow} />
         <Pins pins={e.pins} reload={reloadFlow} />
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          {isAdmin && <button className="btn" onClick={async () => { const d = await act("/api/linkedin-flow", "PATCH", { id: client.id, action: "pin_link" }, "PIN page link copied — send it to the client."); if (d?.url) copyToClipboard(d.url); }}>Copy a PIN page link</button>}
+          {isAdmin && <button className="btn" onClick={async () => { const d = await act("/api/linkedin-flow", "PATCH", { id: client.id, action: "pin_link" }, "Login page link copied — send it to the client. (The old link stops working.)"); if (d?.url) copyToClipboard(d.url); }}>Copy a new login page link</button>}
           <label style={{ ...dim, display: "grid", gap: 2 }}>Login slot (your computer's time)
             <input className="adm-input" type="datetime-local" style={{ width: 220 }} value={booking} onChange={(ev) => setBooking(ev.target.value)} />
           </label>
@@ -288,6 +344,8 @@ export function OutreachTab({ client, member }) {
           </label>
         )}
       </div>
+
+      <Prospects clientId={client.id} live={["live", "report_due", "renewed", "access_scheduled", "approved"].includes(e.flow_stage)} onChange={reloadFlow} />
 
       <div className="card" style={box}>
         <h3 style={h}>Log a reply (Claude sorts it)</h3>
@@ -334,6 +392,92 @@ export function OutreachTab({ client, member }) {
         <h3 style={h}>Emails for this client</h3>
         <Outbox rows={(flow.outbox || []).filter((m) => m.li_client_id === client.id)} reload={reloadFlow} canMark={isAdmin} />
       </div>
+    </div>
+  );
+}
+
+/* v2, 6 Nov 2026: what the client filled in on their login page, for Julie.
+ * Julie's email, 5 Nov: "I need his password and email for LinkedIn. Also
+ * the location so I can set my vpn". The password is NOT here: only whether
+ * Julie has it (she presses the button). */
+function LoginDetails({ e, client, reload }) {
+  if (!["approved", "access_scheduled", "live", "report_due", "renewed"].includes(e.flow_stage)) return null;
+  const copy = (v, what) => { copyToClipboard(v); toast(`${what} copied.`, "success"); };
+  if (!e.login_details_at) return <div style={{ fontSize: 13, color: "#92400e" }}>Waiting on the client's login details. Send them the login page link (below) if they haven't got it.</div>;
+  const method = (CODE_METHODS.find(([k]) => k === e.code_method) || ["", "—"])[1];
+  const wa = waLink(e.whatsapp, `Hi ${String(client.contact_name || "").split(" ")[0] || "there"}, it's Julie from AI Syndicate. I'm about to log in to your LinkedIn — please send me the code LinkedIn gives you.`);
+  return (
+    <div style={{ display: "grid", gap: 8, background: "var(--bg-2)", borderRadius: 10, padding: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "4px 12px", fontSize: 13 }}>
+        <span style={dim}>LinkedIn email</span><span><b>{e.login_email}</b> <button className="btn" style={{ padding: "2px 8px", minHeight: 0 }} onClick={() => copy(e.login_email, "Email")}>Copy</button></span>
+        <span style={dim}>VPN location</span><span><b>{e.login_location}</b></span>
+        <span style={dim}>Good times</span><span>{e.login_times}</span>
+        <span style={dim}>Code by</span><span>{method}{e.whatsapp ? ` · ${e.whatsapp}` : ""}</span>
+        <span style={dim}>Password</span><span>{e.password_received_at ? <b style={{ color: "#0f7a3a" }}>Julie has it ({fmt(e.password_received_at)})</b> : <b style={{ color: "#92400e" }}>not received yet</b>}</span>
+        <span style={dim}>Sent in</span><span>{fmt(e.login_details_at)}</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {wa && <a className="btn" href={wa} target="_blank" rel="noopener noreferrer">WhatsApp the client</a>}
+        {!e.password_received_at
+          ? <button className="btn" onClick={async () => { if (await act("/api/linkedin-flow", "PATCH", { id: client.id, action: "password_received" }, "Noted — Julie has the password (it isn't stored here).")) reload(); }}>Password received</button>
+          : <button className="btn" onClick={async () => { if (await act("/api/linkedin-flow", "PATCH", { id: client.id, action: "password_received", undo: true }, "Cleared.")) reload(); }}>Undo "password received"</button>}
+      </div>
+    </div>
+  );
+}
+
+/* v2, 6 Nov 2026: one row per person who accepted, so Julie sees who is due
+ * which message today (the brief's Build 5 queue). She still sends by hand. */
+function Prospects({ clientId, live, onChange }) {
+  const [st, setSt] = useState({ loading: true, prospects: [] });
+  const [lines, setLines] = useState("");
+  const [accepted, setAccepted] = useState("");
+  const [show, setShow] = useState("due");
+  const load = useCallback(async () => {
+    const r = await apiFetch(`/api/linkedin-prospects?liClientId=${clientId}`);
+    setSt(r.ok ? { loading: false, ...r.data } : { loading: false, prospects: [], error: r.error });
+  }, [clientId]);
+  useEffect(() => { load(); }, [load]);
+  if (!live && !st.prospects.length) return null;
+  const today = st.today;
+  const rows = st.prospects.filter((p) => show === "all" ? true : show === "due" ? p.next && p.next.due <= today : p.status === "active");
+  const due = st.prospects.filter((p) => p.next && p.next.due <= today).length;
+  const doAct = async (id, action, ok) => { if (await act("/api/linkedin-prospects", "PATCH", { id, action }, ok)) { load(); onChange?.(); } };
+  return (
+    <div className="card" style={box}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <h3 style={h}>Prospects and follow-ups</h3>
+        <span style={dim}>{st.prospects.length} people · {due} due today{st.variant ? ` · timing from ${st.variant}` : ""}</span>
+        <select className="adm-input" style={{ width: 150, marginLeft: "auto" }} value={show} onChange={(ev) => setShow(ev.target.value)}>
+          <option value="due">Due today</option><option value="active">Still in the run</option><option value="all">Everyone</option>
+        </select>
+      </div>
+      {st.error && <div style={{ fontSize: 13, color: "#b42318" }}>{st.error}{/relation|does not exist/i.test(st.error) ? " — migration 0053 hasn't been run yet." : ""}</div>}
+      {!st.loading && !st.hasSequence && <div style={dim}>The follow-up timing comes from the approved messages. Once a version is approved, due dates show here.</div>}
+      {rows.length === 0 && !st.loading && <div style={dim}>{show === "due" ? "Nobody is due today." : "No prospects yet. Paste the people who accepted below."}</div>}
+      {rows.slice(0, 60).map((p) => (
+        <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", borderTop: "1px solid var(--line)", paddingTop: 6, fontSize: 13 }}>
+          <span style={{ minWidth: 160 }}><b>{p.profile_url ? <a href={p.profile_url} target="_blank" rel="noopener noreferrer">{p.name}</a> : p.name}</b></span>
+          <span style={dim}>accepted {p.accepted_on} · sent {p.last_step}/4{p.status !== "active" ? ` · ${p.status}` : ""}</span>
+          {p.next && <span style={{ fontWeight: 700, color: p.next.due < today ? "#b42318" : p.next.due === today ? "#92400e" : "var(--ink-dim)" }}>Message {p.next.step} {p.next.due <= today ? (p.next.due < today ? `overdue (${p.next.due})` : "due today") : `on ${p.next.due}`}</span>}
+          <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            {p.status === "active" && p.last_step < 4 && <button className="btn" onClick={() => doAct(p.id, "sent", `Message ${p.last_step + 1} marked sent.`)}>Sent message {p.last_step + 1}</button>}
+            {p.status === "active" && <button className="btn" onClick={() => doAct(p.id, "replied", "Marked replied — log the reply below so it's sorted.")}>Replied</button>}
+            <button className="btn" title="Undo the last change" onClick={() => doAct(p.id, "undo", "Undone.")}>Undo</button>
+          </span>
+        </div>
+      ))}
+      <details>
+        <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700 }}>Add people who accepted</summary>
+        <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+          <textarea className="adm-input" rows={4} placeholder={"One person per line. A profile link is optional:\nJane Smith, https://www.linkedin.com/in/janesmith\nTom Lee"} value={lines} onChange={(ev) => setLines(ev.target.value)} />
+          <label style={{ ...dim, display: "flex", gap: 8, alignItems: "center" }}>Accepted on (blank = today)<input className="adm-input" type="date" style={{ width: 170 }} value={accepted} onChange={(ev) => setAccepted(ev.target.value)} /></label>
+          <button className="btn" style={{ justifySelf: "start" }} disabled={!lines.trim()} onClick={async () => {
+            const d = await act("/api/linkedin-prospects", "POST", { liClientId: clientId, lines, acceptedOn: accepted || undefined });
+            if (d) { toast(`${d.added} added${d.skipped ? `, ${d.skipped} already there` : ""}.`, "success"); setLines(""); load(); onChange?.(); }
+          }}>Add</button>
+        </div>
+      </details>
     </div>
   );
 }

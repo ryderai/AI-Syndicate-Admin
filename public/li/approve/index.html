@@ -122,11 +122,15 @@
       ev.target.disabled = true; msg.textContent = "Saving…";
       try {
         const r = await call("POST", { t, action: "approve", variant: picked });
+        /* v2 (6 Nov 2026): approval leads to the client's login page (login
+         * email, city for Julie's VPN, good times, how to pass the code). A
+         * booking link is shown too when one is set. */
+        const go = r.loginUrl || r.pinUrl;
         app.innerHTML = `<div class="done card"><h1>Approved — thank you!</h1>
-          <p class="lead">The last step is a 5-minute login so Julie can start your outreach.</p>
-          ${r.bookingUrl ? `<p><a class="primary" style="display:inline-block;padding:12px 18px;border-radius:10px;background:var(--brand);color:#fff;font-weight:700;text-decoration:none" href="${esc(r.bookingUrl)}" target="_blank" rel="noopener">Book your 5-minute login</a></p>` : `<p class="lead">We'll be in touch shortly to pick a time.</p>`}
-          ${r.julieEmail ? `<p class="lead">At that time, LinkedIn will email you a verification code. Forward that email to Julie right away: <b>${esc(r.julieEmail)}</b></p>` : ""}
-          ${r.pinUrl ? `<p class="lead">Or type the code on this page and Julie sees it instantly — save the link:<br><a href="${esc(r.pinUrl)}">${esc(r.pinUrl)}</a></p>` : ""}</div>`;
+          <p class="lead">One quick step before launch: tell Julie how to log in. It takes about 2 minutes.</p>
+          ${go ? `<p><a style="display:inline-block;padding:14px 22px;border-radius:10px;background:var(--brand);color:#fff;font-weight:700;text-decoration:none" href="${esc(go)}">Open my login page</a></p>
+          <p class="lead" style="font-size:14px">Save this link — you'll use the same page for the code when Julie logs in.</p>` : `<p class="lead">We'll be in touch shortly about the login.</p>`}
+          ${r.bookingUrl ? `<p class="lead">You can also pick a time here: <a href="${esc(r.bookingUrl)}" target="_blank" rel="noopener">book a 5-minute slot</a>.</p>` : ""}</div>`;
       } catch (e) { msg.textContent = e.message; ev.target.disabled = false; }
     });
     document.getElementById("changes").addEventListener("click", async (ev) => {

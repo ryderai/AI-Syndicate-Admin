@@ -4,73 +4,202 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Send your LinkedIn code</title>
+<title>Your LinkedIn login · AI Syndicate</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.png" type="image/png">
 <style>
-  :root { --ink:#14121f; --ink2:#4a4760; --line:#e6e3f0; --bg:#f7f6fb; --card:#fff; --brand:#5b3df5; --ok:#0f7a3a; --err:#b42318; }
-  @media (prefers-color-scheme: dark) { :root { --ink:#f1effa; --ink2:#b7b3cc; --line:#2d2a3d; --bg:#121019; --card:#1b1826; --brand:#8b74ff; --ok:#4ade80; --err:#f87171; } }
+  :root { --ink:#14121f; --ink2:#4a4760; --line:#e6e3f0; --bg:#f7f6fb; --card:#fff; --brand:#5b3df5; --ok:#0f7a3a; --err:#b42318; --soft:#efeafe; --wa:#128c4a; }
+  @media (prefers-color-scheme: dark) { :root { --ink:#f1effa; --ink2:#b7b3cc; --line:#2d2a3d; --bg:#121019; --card:#1b1826; --brand:#8b74ff; --ok:#4ade80; --err:#f87171; --soft:#241f3a; --wa:#25d366; } }
   * { box-sizing: border-box; }
   body { margin:0; font:16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color:var(--ink); background:var(--bg); }
-  main { max-width: 480px; margin: 0 auto; padding: 32px 16px 64px; }
+  main { max-width: 560px; margin: 0 auto; padding: 28px 16px 64px; display: grid; gap: 16px; }
+  main > * { min-width: 0; }   /* grid items: the big code box mustn't widen the page on a phone */
   .card { background: var(--card); border:1px solid var(--line); border-radius: 16px; padding: 22px; }
   .eyebrow { font-size: 12px; letter-spacing:.08em; text-transform: uppercase; color: var(--ink2); font-weight: 700; }
-  h1 { font-size: 24px; line-height: 1.2; margin: 6px 0 10px; }
+  h1 { font-size: 26px; line-height: 1.2; margin: 6px 0 8px; }
+  h2 { font-size: 19px; margin: 0 0 4px; display: flex; gap: 10px; align-items: center; }
+  .num { flex: none; width: 28px; height: 28px; border-radius: 99px; background: var(--brand); color: #fff; font-size: 14px; display: grid; place-items: center; }
   p { color: var(--ink2); margin: 0 0 12px; }
-  ol { color: var(--ink2); padding-left: 20px; margin: 0 0 16px; }
-  label { font-weight: 700; display:block; margin-bottom: 6px; }
-  input { width: 100%; font: 700 32px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .3em; text-align: center; padding: 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
-  button { width: 100%; margin-top: 14px; font: inherit; font-weight: 700; min-height: 52px; border-radius: 12px; border: 0; background: var(--brand); color: #fff; cursor: pointer; }
+  label { font-weight: 700; display:block; margin: 14px 0 6px; }
+  .hint { font-weight: 400; color: var(--ink2); font-size: 14px; display: block; margin-top: 2px; }
+  input, textarea { min-width: 0; }
+  input[type=text], input[type=email], input[type=tel], textarea { width: 100%; font: inherit; font-size: 16px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-height: 48px; }
+  textarea { min-height: 80px; resize: vertical; }
+  .choices { display: grid; gap: 8px; }
+  .choice { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-height: 48px; font-weight: 600; cursor: pointer; }
+  .choice input { width: 20px; height: 20px; accent-color: var(--brand); }
+  .choice:has(input:checked) { border-color: var(--brand); background: var(--soft); }
+  .err-text { color: var(--err); font-size: 14px; font-weight: 600; margin-top: 4px; }
+  [aria-invalid=true] { border-color: var(--err) !important; }
+  button, .btn { display: inline-flex; justify-content: center; align-items: center; gap: 8px; width: 100%; margin-top: 16px; font: inherit; font-weight: 700; min-height: 52px; border-radius: 12px; border: 0; background: var(--brand); color: #fff; cursor: pointer; text-decoration: none; }
+  .btn.wa { background: var(--wa); }
+  .btn.ghost { background: transparent; color: var(--brand); border: 1px solid var(--line); }
   button:disabled { opacity:.55; cursor: not-allowed; }
-  input:focus-visible, button:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
-  #msg { margin-top: 12px; min-height: 1.4em; font-weight: 600; }
+  input:focus-visible, textarea:focus-visible, button:focus-visible, .btn:focus-visible, .choice:focus-within { outline: 3px solid var(--brand); outline-offset: 2px; }
+  input.code { width: 100%; font: 700 32px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .3em; text-align: center; padding: 14px; }
+  .msg { margin-top: 12px; min-height: 1.4em; font-weight: 600; }
   .ok { color: var(--ok); } .err { color: var(--err); }
-  .small { font-size: 13px; }
+  .note { background: var(--soft); border-radius: 12px; padding: 12px 14px; color: var(--ink); font-size: 15px; }
+  .note b { display:block; margin-bottom: 2px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0 0; font-size: 15px; }
+  dt { color: var(--ink2); } dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .small { font-size: 13px; color: var(--ink2); }
+  [hidden] { display: none !important; }
+  @media print { button, .btn { display: none !important; } body { background: #fff; } .card { break-inside: avoid; } }
 </style>
 </head>
 <body>
 <main>
-  <div class="card" id="card">
-    <div class="eyebrow" id="who">LinkedIn login</div>
-    <h1>Enter the code LinkedIn sent you</h1>
-    <ol>
-      <li>Julie is logging in to your LinkedIn now.</li>
-      <li>LinkedIn sends a verification code to your email (or phone).</li>
-      <li>Type it below. Julie sees it right away and finishes the login.</li>
-    </ol>
-    <form id="f" novalidate>
-      <label for="code">Verification code</label>
-      <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="8" required>
-      <button id="go" type="submit">Send the code to Julie</button>
-      <p id="msg" role="status" aria-live="polite"></p>
+  <header>
+    <div class="eyebrow" id="who">LinkedIn outreach</div>
+    <h1>Your 5-minute LinkedIn login</h1>
+    <p>Julie runs your outreach from your LinkedIn account. Two short steps get her in. Nothing is sent until the messages you approved go out.</p>
+  </header>
+
+  <section class="card" id="stepDetails" aria-labelledby="h1d">
+    <h2 id="h1d"><span class="num" aria-hidden="true">1</span> Your login details</h2>
+    <p>About 2 minutes. Julie uses these to sign in from the right place.</p>
+    <div id="summary" hidden>
+      <dl id="summaryList"></dl>
+      <button class="btn ghost" id="edit" type="button">Change these</button>
+    </div>
+    <form id="details" novalidate>
+      <label for="login_email">Email you sign in to LinkedIn with</label>
+      <input id="login_email" name="login_email" type="email" autocomplete="email" required>
+      <label for="login_location">City and state (or country) you usually log in from
+        <span class="hint">Julie sets her connection to match, so LinkedIn sees a normal login.</span></label>
+      <input id="login_location" name="login_location" type="text" autocomplete="address-level2" placeholder="Birmingham, AL" required>
+      <label for="login_times">Two or three times you're free for 5 minutes
+        <span class="hint">Include your time zone. Example: Tue 10am CT, Wed 2pm CT.</span></label>
+      <textarea id="login_times" name="login_times" required></textarea>
+      <fieldset style="border:0;padding:0;margin:0">
+        <legend style="font-weight:700;margin:14px 0 6px">How you'll pass Julie the code</legend>
+        <div class="choices" id="methods"></div>
+      </fieldset>
+      <div id="waBox" hidden>
+        <label for="whatsapp">Your WhatsApp number <span class="hint">With country code, like +1 205 555 0100.</span></label>
+        <input id="whatsapp" name="whatsapp" type="tel" autocomplete="tel" inputmode="tel">
+      </div>
+      <div class="note" style="margin-top:16px"><b>Your password</b><span id="pwText">Julie will send you a secure link to share it. Please don't email or text your password, and don't type it on this page.</span></div>
+      <button id="saveDetails" type="submit">Save my login details</button>
+      <p class="msg" id="dMsg" role="status" aria-live="polite"></p>
     </form>
-    <p class="small">We never ask for your password here. A code works for 15 minutes and is deleted within a day.</p>
-  </div>
+  </section>
+
+  <section class="card" id="stepCode" aria-labelledby="h2c">
+    <h2 id="h2c"><span class="num" aria-hidden="true">2</span> When Julie logs in</h2>
+    <p>At your time, Julie signs in and LinkedIn sends you a verification code (by email or text). Pass it to her right away. Codes expire in a few minutes.</p>
+    <div id="waSend" hidden><a class="btn wa" id="waLink" href="#" target="_blank" rel="noopener">Message Julie on WhatsApp</a></div>
+    <form id="f" novalidate>
+      <label for="code">Or type the code here — Julie sees it at once</label>
+      <input id="code" class="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="8" required>
+      <button id="go" type="submit">Send the code to Julie</button>
+      <p class="msg" id="msg" role="status" aria-live="polite"></p>
+    </form>
+    <p class="small" id="fwd" hidden></p>
+    <p class="small">A code typed here is deleted after 15 minutes. We never ask for your password on this page.</p>
+  </section>
 </main>
 <script>
 (() => {
   const t = new URLSearchParams(location.search).get("t") || "";
-  const msg = document.getElementById("msg");
-  const go = document.getElementById("go");
-  const code = document.getElementById("code");
-  const say = (text, cls) => { msg.textContent = text; msg.className = cls || ""; };
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const METHODS = [["whatsapp", "WhatsApp Julie the code"], ["page", "Type the code on this page"], ["email", "Forward LinkedIn's code email to Julie"]];
+  let info = null;
+  const say = (el, text, cls) => { el.textContent = text; el.className = `msg ${cls || ""}`; };
+
+  function waHref(text) {
+    const p = String(info?.julie?.whatsapp || "").replace(/\D/g, "");
+    return p ? `https://wa.me/${p}?text=${encodeURIComponent(text)}` : "";
+  }
+  function renderMethods(picked) {
+    const list = METHODS.filter(([k]) => k !== "whatsapp" || info?.julie?.whatsapp);
+    $("methods").innerHTML = list.map(([k, label]) => `<label class="choice"><input type="radio" name="code_method" value="${k}"${picked === k ? " checked" : ""}> ${esc(label)}</label>`).join("");
+    $("methods").querySelectorAll("input").forEach((i) => i.addEventListener("change", syncWa));
+    syncWa();
+  }
+  function syncWa() {
+    const m = (document.querySelector("input[name=code_method]:checked") || {}).value;
+    $("waBox").hidden = m !== "whatsapp";
+  }
+  function renderSummary(d) {
+    const label = (METHODS.find(([k]) => k === d.code_method) || ["", "—"])[1];
+    $("summaryList").innerHTML = [["LinkedIn email", d.login_email], ["Logs in from", d.login_location], ["Good times", d.login_times], ["Code by", label], ...(d.whatsapp ? [["WhatsApp", d.whatsapp]] : [])]
+      .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v || "—")}</dd>`).join("");
+    $("summary").hidden = false; $("details").hidden = true;
+  }
+  function renderCodeStep(d) {
+    const name = info.company || "your company";
+    const link = waHref(`Hi Julie, this is ${name}. Here's my LinkedIn code: `);
+    $("waSend").hidden = !(link && (!d || d.code_method === "whatsapp"));
+    if (link) $("waLink").href = link;
+    const julieEmail = info?.julie?.email;
+    if (julieEmail) { $("fwd").hidden = false; $("fwd").innerHTML = `Or forward LinkedIn's code email to <b>${esc(julieEmail)}</b>.`; }
+  }
+  function fill(d) {
+    for (const k of ["login_email", "login_location", "login_times", "whatsapp"]) $(k).value = d?.[k] || "";
+    renderMethods(d?.code_method || (info?.julie?.whatsapp ? "whatsapp" : "page"));
+  }
+
   fetch(`/api/linkedin-pin?t=${encodeURIComponent(t)}`).then((r) => r.json().then((j) => ({ ok: r.ok, j }))).then(({ ok, j }) => {
-    if (!ok) { say(j.error || "This link isn't working.", "err"); go.disabled = true; code.disabled = true; return; }
-    document.getElementById("who").textContent = `LinkedIn login · ${j.company || ""}`;
-    code.focus();
-  }).catch(() => say("Couldn't reach us. Check your connection.", "err"));
+    if (!ok) {
+      document.querySelector("main").innerHTML = `<section class="card"><h1>This link isn't working</h1><p>${esc(j.error || "Please reply to our email and we'll send a new one.")}</p></section>`;
+      return;
+    }
+    info = j;
+    $("who").textContent = `LinkedIn outreach · ${j.company || ""}`;
+    if (j.passwordMethod) $("pwText").textContent = j.passwordMethod;
+    fill(j.details);
+    if (j.details?.saved_at) renderSummary(j.details);
+    renderCodeStep(j.details);
+  }).catch(() => say($("dMsg"), "Couldn't reach us. Check your connection and reload.", "err"));
+
+  $("edit").addEventListener("click", () => { $("summary").hidden = true; $("details").hidden = false; $("login_email").focus(); });
+
+  $("details").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    document.querySelectorAll(".err-text").forEach((x) => x.remove());
+    document.querySelectorAll("[aria-invalid]").forEach((x) => x.removeAttribute("aria-invalid"));
+    const body = { t, action: "details", login_email: $("login_email").value, login_location: $("login_location").value, login_times: $("login_times").value,
+      whatsapp: $("whatsapp").value, code_method: (document.querySelector("input[name=code_method]:checked") || {}).value || "" };
+    $("saveDetails").disabled = true; say($("dMsg"), "Saving…");
+    try {
+      const r = await fetch("/api/linkedin-pin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        for (const [k, m] of Object.entries(j.errors || {})) {
+          const el = k === "code_method" ? $("methods") : $(k);
+          if (!el) continue;
+          if (k !== "code_method") el.setAttribute("aria-invalid", "true");
+          if (k === "whatsapp") $("waBox").hidden = false;
+          el.insertAdjacentHTML("afterend", `<div class="err-text">${esc(m)}</div>`);
+        }
+        throw new Error(j.error || "That didn't save.");
+      }
+      const d = { ...body, whatsapp: body.whatsapp, saved_at: new Date().toISOString() };
+      renderSummary(d); renderCodeStep(d);
+      say($("dMsg"), "Saved. Julie has what she needs.", "ok");
+      $("summary").insertAdjacentHTML("afterbegin", `<p class="msg ok" role="status">Saved — thank you. Julie will confirm a time with you.</p>`);
+    } catch (e) { say($("dMsg"), e.message, "err"); }
+    finally { $("saveDetails").disabled = false; }
+  });
+
+  const code = $("code");
   code.addEventListener("input", () => { code.value = code.value.replace(/\D+/g, "").slice(0, 8); });
-  document.getElementById("f").addEventListener("submit", async (ev) => {
+  $("f").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const c = code.value.trim();
-    if (!/^\d{4,8}$/.test(c)) { say("Please enter just the digits of the code.", "err"); return; }
-    go.disabled = true; say("Sending…");
+    if (!/^\d{4,8}$/.test(c)) { say($("msg"), "Please enter just the digits of the code.", "err"); return; }
+    $("go").disabled = true; say($("msg"), "Sending…");
     try {
       const r = await fetch("/api/linkedin-pin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ t, code: c }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "That didn't go through.");
-      say("Sent. Julie has it — you can close this page. If LinkedIn sends another code, enter it here too.", "ok");
-      code.value = ""; go.disabled = false;
-    } catch (e) { say(e.message, "err"); go.disabled = false; }
+      say($("msg"), "Sent. Julie has it — you can close this page. If LinkedIn sends another code, enter it here too.", "ok");
+      code.value = "";
+    } catch (e) { say($("msg"), e.message, "err"); }
+    finally { $("go").disabled = false; }
   });
 })();
 </script>

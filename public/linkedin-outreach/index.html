@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LinkedIn Outreach, done for you · AI Syndicate</title>
+<meta name="description" content="We write your LinkedIn messages, build your target lists and send them by hand every day. You approve everything first. $1,000 a month.">
+<!-- Hosted on the console for now (6 Nov 2026); kept out of search until it moves to aisyndicate.com. -->
+<meta name="robots" content="noindex, follow">
+<link rel="canonical" href="https://ai-syndicate-admin.vercel.app/linkedin-outreach/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="AI Syndicate">
+<meta property="og:title" content="LinkedIn Outreach, done for you">
+<meta property="og:description" content="Messages in your voice, three target lists, daily sending by a real person, lead alerts and reports. You approve everything first. $1,000 a month.">
+<meta property="og:url" content="https://ai-syndicate-admin.vercel.app/linkedin-outreach/">
+<meta property="og:image" content="https://ai-syndicate-admin.vercel.app/linkedin-outreach/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="AI Syndicate — LinkedIn Outreach, done for you. $1,000 a month.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="LinkedIn Outreach, done for you">
+<meta name="twitter:description" content="Messages in your voice, three target lists, daily sending by a real person, lead alerts and reports. $1,000 a month.">
+<meta name="twitter:image" content="https://ai-syndicate-admin.vercel.app/linkedin-outreach/og.png">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preload" href="/linkedin-outreach/fonts/inter-tight-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face{font-family:'Inter';font-weight:400;font-display:swap;src:url(/linkedin-outreach/fonts/inter-latin-400-normal.woff2) format('woff2')}
+@font-face{font-family:'Inter';font-weight:500;font-display:swap;src:url(/linkedin-outreach/fonts/inter-latin-500-normal.woff2) format('woff2')}
+@font-face{font-family:'Inter';font-weight:600;font-display:swap;src:url(/linkedin-outreach/fonts/inter-latin-600-normal.woff2) format('woff2')}
+@font-face{font-family:'Inter';font-weight:700;font-display:swap;src:url(/linkedin-outreach/fonts/inter-latin-700-normal.woff2) format('woff2')}
+@font-face{font-family:'Inter Tight';font-weight:700;font-display:swap;src:url(/linkedin-outreach/fonts/inter-tight-latin-700-normal.woff2) format('woff2')}
+@font-face{font-family:'Inter Tight';font-weight:800;font-display:swap;src:url(/linkedin-outreach/fonts/inter-tight-latin-800-normal.woff2) format('woff2')}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Service","name":"LinkedIn Outreach","serviceType":"Done-for-you LinkedIn outreach","provider":{"@type":"Organization","name":"AI Syndicate","url":"https://www.aisyndicate.com/"},
+ "description":"Messages written in the client's voice, three Sales Navigator target lists, daily sending by hand, reply sorting with lead alerts, and mid-month and end-of-month reports. The client approves every message first.",
+ "offers":{"@type":"Offer","price":"1000","priceCurrency":"USD","priceSpecification":{"@type":"UnitPriceSpecification","price":"1000","priceCurrency":"USD","billingDuration":"P1M","unitText":"month"}}}
+</script>
+<style>
+  :root {
+    --navy:#0a2245; --ink:#0a2245; --ink2:#4b5876; --ink3:#6b7591; --line:#e6e8f2; --bg:#ffffff; --soft:#f6f4ff; --soft2:#eef3ff;
+    --violet:#7c5cf5; --blue:#4f7cf0; --brand:#6a5af5; --ok:#0f7a3a; --err:#b42318; --card:#fff;
+    --grad: linear-gradient(100deg, #8b6cf5 0%, #5b8def 100%);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#eef0fb; --ink2:#b8bfd8; --ink3:#949cb8; --line:#262c45; --bg:#0b1020; --soft:#141a33; --soft2:#121a33; --card:#11172c; --navy:#eef0fb; --ok:#4ade80; --err:#f87171; }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+  body { margin: 0; font: 16px/1.6 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); overflow-x: hidden; }
+  a { color: var(--brand); }
+  .wrap { width: 100%; max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+  @media (min-width: 720px) { .wrap { padding: 0 28px; } }
+  h1, h2, h3 { font-family: "Inter Tight", Inter, system-ui, sans-serif; letter-spacing: -0.02em; color: var(--navy); margin: 0; }
+  h1 { font-size: clamp(36px, 7vw, 64px); line-height: 1.04; font-weight: 800; }
+  h2 { font-size: clamp(28px, 4.4vw, 42px); line-height: 1.1; font-weight: 800; }
+  h3 { font-size: 19px; line-height: 1.3; font-weight: 700; }
+  .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .eyebrow { font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--brand); }
+  p { margin: 0; }
+  .lead { font-size: clamp(17px, 2.2vw, 20px); color: var(--ink2); line-height: 1.55; }
+  .muted { color: var(--ink3); font-size: 14px; }
+  .skip { position: absolute; left: -999px; top: 8px; background: var(--navy); color: #fff; padding: 10px 14px; border-radius: 8px; z-index: 10; }
+  .skip:focus { left: 8px; }
+
+  /* header */
+  header.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: saturate(140%) blur(10px); border-bottom: 1px solid var(--line); }
+  header.top .wrap { display: flex; align-items: center; justify-content: space-between; min-height: 60px; gap: 12px; }
+  .logo { display: inline-flex; align-items: center; gap: 9px; text-decoration: none; color: var(--navy); font: 800 15px/1 "Inter Tight", Inter, sans-serif; letter-spacing: .06em; }
+  .logo svg { width: 26px; height: 26px; }
+
+  /* buttons */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 52px; padding: 0 22px; border-radius: 14px; border: 0; font: 700 16px/1 Inter, sans-serif; text-decoration: none; cursor: pointer; color: #fff; background: var(--grad); box-shadow: 0 8px 24px -10px rgba(91, 80, 240, .55); }
+  .btn:hover { filter: brightness(1.05); }
+  .btn.small { min-height: 44px; padding: 0 16px; font-size: 15px; }
+  .btn.ghost { background: transparent; color: var(--navy); border: 1px solid var(--line); box-shadow: none; }
+  .btn:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid var(--violet); outline-offset: 3px; }
+  .btn[disabled] { opacity: .6; cursor: progress; }
+
+  /* hero */
+  .hero { position: relative; padding: 44px 0 52px; background:
+      radial-gradient(900px 420px at 10% -10%, rgba(139,108,245,.16), transparent 60%),
+      radial-gradient(800px 420px at 100% 0%, rgba(91,141,239,.14), transparent 60%); }
+  .hero .grid { display: grid; gap: 32px; align-items: center; }
+  @media (min-width: 960px) { .hero { padding: 72px 0 80px; } .hero .grid { grid-template-columns: 1.05fr .95fr; gap: 48px; } }
+  .hero .lead { margin: 18px 0 26px; max-width: 34em; }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .cta-row .btn { width: 100%; }
+  @media (min-width: 520px) { .cta-row .btn { width: auto; } }
+  .ticks { list-style: none; padding: 0; margin: 22px 0 0; display: grid; gap: 8px; color: var(--ink2); font-size: 15px; }
+  .ticks li { display: flex; gap: 10px; align-items: flex-start; }
+  .ticks svg { flex: none; width: 20px; height: 20px; margin-top: 2px; color: var(--violet); }
+
+  /* the message mock */
+  .mock { background: var(--card); border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 30px 60px -30px rgba(10,34,69,.35); overflow: hidden; }
+  .mock .bar { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 14px; }
+  .mock .av { width: 34px; height: 34px; border-radius: 99px; background: var(--grad); color: #fff; display: grid; place-items: center; font: 800 11px/1 "Inter Tight", sans-serif; flex: none; }
+  .mock .body { padding: 18px 16px 20px; display: grid; gap: 12px; }
+  .bubble { max-width: 88%; padding: 11px 14px; border-radius: 16px; font-size: 14.5px; line-height: 1.45; }
+  .bubble.out { justify-self: end; background: var(--soft2); border-bottom-right-radius: 6px; }
+  .bubble.in { justify-self: start; background: var(--soft); border-bottom-left-radius: 6px; }
+  .tag { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); border-radius: 99px; padding: 4px 10px; justify-self: start; }
+  .mock .foot { padding: 12px 16px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--ink3); }
+
+  /* sections */
+  section.block { padding: 64px 0; }
+  @media (min-width: 960px) { section.block { padding: 88px 0; } }
+  section.alt { background: linear-gradient(180deg, var(--soft) 0%, var(--bg) 100%); }
+  .head { max-width: 720px; margin-bottom: 32px; }
+  .head .lead { margin-top: 12px; }
+
+  .steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; counter-reset: s; }
+  @media (min-width: 720px) { .steps { grid-template-columns: 1fr 1fr; } }
+  @media (min-width: 1040px) { .steps { grid-template-columns: repeat(4, 1fr); } }
+  .steps li { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 20px 18px 18px; counter-increment: s; }
+  .steps li::before { content: counter(s); display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--grad); color: #fff; font: 800 15px/1 "Inter Tight", sans-serif; margin-bottom: 12px; }
+  .steps h3 { margin-bottom: 6px; font-size: 17px; }
+  .steps p { color: var(--ink2); font-size: 15px; }
+  .who { font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ink3); margin-top: 10px; }
+
+  .cards { display: grid; gap: 14px; }
+  @media (min-width: 720px) { .cards { grid-template-columns: 1fr 1fr; } }
+  @media (min-width: 1040px) { .cards { grid-template-columns: repeat(3, 1fr); } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px; }
+  .card h3 { margin: 12px 0 6px; }
+  .card p { color: var(--ink2); font-size: 15px; }
+  .ic { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: var(--soft); color: var(--violet); }
+  .ic svg { width: 22px; height: 22px; }
+
+  .promise { display: grid; gap: 14px; }
+  @media (min-width: 720px) { .promise { grid-template-columns: repeat(2, 1fr); } }
+  @media (min-width: 1040px) { .promise { grid-template-columns: repeat(4, 1fr); } }
+  .promise div { border-left: 3px solid var(--violet); padding: 4px 0 4px 14px; }
+  .promise b { display: block; font-family: "Inter Tight", sans-serif; font-size: 17px; margin-bottom: 4px; color: var(--navy); }
+  .promise span { color: var(--ink2); font-size: 15px; }
+
+  /* price + form */
+  .buy { display: grid; gap: 22px; align-items: start; }
+  @media (min-width: 960px) { .buy { grid-template-columns: .9fr 1.1fr; gap: 32px; } }
+  .price { background: var(--navy); color: #fff; border-radius: 22px; padding: 26px; position: relative; overflow: hidden; }
+  @media (prefers-color-scheme: dark) { .price { background: #1a2147; } }
+  .price::after { content: ""; position: absolute; inset: auto -80px -120px auto; width: 280px; height: 280px; border-radius: 50%; background: var(--grad); opacity: .35; filter: blur(30px); }
+  .price h3 { color: #fff; font-size: 18px; }
+  .amount { font: 800 clamp(48px, 9vw, 64px)/1 "Inter Tight", sans-serif; margin: 14px 0 4px; letter-spacing: -0.03em; }
+  .amount small { font-size: 18px; font-weight: 600; opacity: .8; letter-spacing: 0; }
+  .price ul { list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 9px; position: relative; z-index: 1; }
+  .price li { display: flex; gap: 10px; font-size: 15px; color: #dfe4ff; }
+  .price li svg { flex: none; width: 18px; height: 18px; margin-top: 3px; color: #a99bff; }
+  .price .fine { color: #b9c1e8; font-size: 13px; margin-top: 16px; position: relative; z-index: 1; }
+
+  form.signup { background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 22px; box-shadow: 0 20px 50px -30px rgba(10,34,69,.3); }
+  @media (min-width: 720px) { form.signup { padding: 28px; } }
+  .row2 { display: grid; gap: 0 14px; }
+  @media (min-width: 620px) { .row2 { grid-template-columns: 1fr 1fr; } }
+  label { display: block; font-weight: 600; font-size: 15px; margin: 14px 0 6px; color: var(--navy); }
+  label .opt { font-weight: 400; color: var(--ink3); }
+  input, textarea { width: 100%; font: inherit; font-size: 16px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-height: 48px; }
+  textarea { min-height: 92px; resize: vertical; }
+  [aria-invalid=true] { border-color: var(--err); }
+  .err-text { color: var(--err); font-size: 14px; font-weight: 600; margin-top: 4px; }
+  .hp { position: absolute !important; left: -10000px !important; width: 1px; height: 1px; overflow: hidden; }
+  form.signup .btn { width: 100%; margin-top: 20px; }
+  .formmsg { margin-top: 12px; font-weight: 600; min-height: 1.4em; }
+  .formmsg.err { color: var(--err); } .formmsg.ok { color: var(--ok); }
+  .secure { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 10px; color: var(--ink3); font-size: 13px; }
+
+  /* faq */
+  .faq { display: grid; gap: 10px; max-width: 820px; }
+  details { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 0 18px; }
+  summary { cursor: pointer; list-style: none; padding: 16px 28px 16px 0; font-weight: 700; color: var(--navy); position: relative; min-height: 44px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; position: absolute; right: 0; top: 13px; font-size: 22px; color: var(--violet); }
+  details[open] summary::after { content: "–"; }
+  details p { color: var(--ink2); padding: 0 0 16px; font-size: 15px; }
+
+  footer { border-top: 1px solid var(--line); padding: 28px 0 calc(28px + env(safe-area-inset-bottom)); color: var(--ink3); font-size: 14px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 18px; justify-content: space-between; }
+
+  /* sticky phone CTA */
+  .sticky { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(10px); border-top: 1px solid var(--line); display: none; }
+  .sticky .btn { width: 100%; }
+  @media (max-width: 719px) { .sticky.show { display: block; } body { padding-bottom: 76px; } }
+
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  @media print {
+    header.top, .sticky, form.signup, .cta-row { display: none !important; }
+    body { padding: 0; background: #fff; color: #000; }
+    section.block { padding: 24px 0; }
+    .hero { background: none; padding: 16px 0; }
+    .grad { color: #3d2fb8; -webkit-text-fill-color: #3d2fb8; background: none; }
+    .card, .steps li, .price, details { break-inside: avoid; }
+    .price { background: #fff; color: #000; border: 1px solid #ccc; } .price h3, .price li, .price .fine { color: #000; } .price::after { display: none; }
+    details { border: 0; } details > p { display: block; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#start">Skip to sign up</a>
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="https://www.aisyndicate.com/" aria-label="AI Syndicate home">
+      <svg viewBox="0 0 256 256" fill="none" aria-hidden="true"><g stroke="#40A9D8" stroke-width="14" stroke-linecap="round"><line x1="128" y1="128" x2="128" y2="48"/><line x1="128" y1="128" x2="184.6" y2="71.4"/><line x1="128" y1="128" x2="208" y2="128"/><line x1="128" y1="128" x2="184.6" y2="184.6"/><line x1="128" y1="128" x2="128" y2="208"/><line x1="128" y1="128" x2="71.4" y2="184.6"/><line x1="128" y1="128" x2="48" y2="128"/><line x1="128" y1="128" x2="71.4" y2="71.4"/></g><g fill="#40A9D8"><circle cx="128" cy="128" r="22"/><circle cx="128" cy="48" r="18"/><circle cx="184.6" cy="71.4" r="18"/><circle cx="208" cy="128" r="18"/><circle cx="184.6" cy="184.6" r="18"/><circle cx="128" cy="208" r="18"/><circle cx="71.4" cy="184.6" r="18"/><circle cx="48" cy="128" r="18"/><circle cx="71.4" cy="71.4" r="18"/></g></svg>
+      AI SYNDICATE
+    </a>
+    <a class="btn small" href="#start">Get started</a>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap grid">
+      <div>
+        <div class="eyebrow">LinkedIn Outreach · done for you</div>
+        <h1 style="margin-top:12px">Conversations with the people <span class="grad">you want to reach.</span></h1>
+        <p class="lead">We write your LinkedIn messages in your voice, build your target lists, and a real person sends them from your account every weekday. You approve everything before a single message goes out.</p>
+        <div class="cta-row">
+          <a class="btn" href="#start">Start for $1,000 a month</a>
+          <a class="btn ghost" href="#how">See how it works</a>
+        </div>
+        <ul class="ticks">
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Your messages are ready to review within 48 hours of your onboarding form</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Sent by hand — no bots, no automation tools on your account</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Interested replies come to you with a suggested answer</li>
+        </ul>
+      </div>
+      <div class="mock" role="img" aria-label="Example: a short connection note, a friendly follow-up, and a reply marked as a lead.">
+        <div class="bar"><span class="av" aria-hidden="true">YOU</span><span>Your LinkedIn · Sales Navigator</span></div>
+        <div class="body">
+          <div class="bubble out">Hi Sam — saw you're growing the ops team at Northline. I work with logistics leaders on exactly that. Open to connecting?</div>
+          <div class="bubble out">Thanks for connecting, Sam. Quick question: what's the hardest part of hiring for ops right now?</div>
+          <div class="bubble in">Honestly, finding people fast enough. What do you have in mind?</div>
+          <span class="tag">● Lead — suggested reply ready for you</span>
+        </div>
+        <div class="foot">Example only. Your messages are written from your own answers and approved by you.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="how" aria-labelledby="howH">
+    <div class="wrap">
+      <div class="head">
+        <div class="eyebrow">How it works</div>
+        <h2 id="howH" style="margin-top:10px">Four things from you. <span class="grad">The rest is on us.</span></h2>
+        <p class="lead">You sign up, tell us about your business, approve your messages and give us one 5-minute login. Then outreach runs every weekday.</p>
+      </div>
+      <ol class="steps">
+        <li><h3>Sign up and pay</h3><p>Fill in the short form below, then pay for your first month on Stripe's secure checkout.</p><div class="who">You · 2 minutes</div></li>
+        <li><h3>Tell us about your business</h3><p>An onboarding form: what you sell, who you want to reach, how you like to sound, and any proof you can share.</p><div class="who">You · one form</div></li>
+        <li><h3>We write it all</h3><p>Two versions of your messages, three target lists and four reply templates — on a private page within 48 hours.</p><div class="who">Us · within 48 hours</div></li>
+        <li><h3>You approve</h3><p>Pick the version you like, or ask for changes. Nothing is sent until you approve.</p><div class="who">You · on one page</div></li>
+        <li><h3>A 5-minute login</h3><p>You tell us how to log in and pass the code LinkedIn sends you — by WhatsApp, a private page or email.</p><div class="who">You · 5 minutes, once</div></li>
+        <li><h3>Daily outreach</h3><p>Your outreach specialist sends connection requests and follow-ups by hand every weekday, within safe daily limits.</p><div class="who">Us · every weekday</div></li>
+        <li><h3>Leads come to you</h3><p>Every reply is sorted. Interested people, questions and referrals reach you with a suggested reply.</p><div class="who">Us · same day</div></li>
+        <li><h3>Reports</h3><p>A mid-month check-in and an end-of-month report: requests sent, new connections, conversations and leads.</p><div class="who">Us · day 14 and day 30</div></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="block alt" aria-labelledby="getH">
+    <div class="wrap">
+      <div class="head">
+        <div class="eyebrow">What you get</div>
+        <h2 id="getH" style="margin-top:10px">Everything it takes to run LinkedIn outreach well</h2>
+      </div>
+      <div class="cards">
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div><h3>Messages in your voice</h3><p>A connection note, four follow-ups and an InMail for people who don't accept. Two versions so you can choose. Short, one idea each, ending with a question.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></div><h3>Three target lists</h3><p>Built in LinkedIn Sales Navigator from the job titles, industries, company sizes and places you choose — with a do-not-contact list respected.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div><h3>A real person sending</h3><p>Your outreach specialist sends every message by hand from your account. No bots, no scraping, and daily limits that keep your account safe.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div><h3>Lead alerts</h3><p>When someone is interested, asks a question or refers you, you hear about it with their message and a suggested reply.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/></svg></div><h3>Reports that add up</h3><p>Mid-month and end-of-month: connection requests, InMails, new connections, conversations and the names of your leads.</p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></div><h3>Changes when you want them</h3><p>Not quite right? Tell us what to change on your review page and we send a revised version.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" aria-labelledby="ruleH">
+    <div class="wrap">
+      <div class="head">
+        <div class="eyebrow">Our rules</div>
+        <h2 id="ruleH" style="margin-top:10px">Your name is on every message. <span class="grad">We treat it that way.</span></h2>
+      </div>
+      <div class="promise">
+        <div><b>You approve first</b><span>Nothing is sent until you've picked and approved your messages.</span></div>
+        <div><b>We never invent proof</b><span>Numbers, clients and results only come from what you give us. If there's none, the message asks a question instead.</span></div>
+        <div><b>We don't keep your password</b><span>It goes straight to your outreach specialist through a secure sharing link. It's never stored in our system.</span></div>
+        <div><b>Careful with regulated offers</b><span>For investments, insurance, lending or health, messages invite people to ask for information — they never state terms or returns.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block alt" id="start" aria-labelledby="startH">
+    <div class="wrap">
+      <div class="head">
+        <div class="eyebrow">Get started</div>
+        <h2 id="startH" style="margin-top:10px">Start your LinkedIn outreach</h2>
+        <p class="lead">Two minutes here, then secure checkout. Within one business day of your payment, we send you the onboarding form.</p>
+      </div>
+      <div class="buy">
+        <div class="price">
+          <h3>LinkedIn Outreach</h3>
+          <div class="amount">$1,000 <small>/ month</small></div>
+          <div style="color:#b9c1e8;position:relative;z-index:1">Billed monthly through Stripe, plus any sales tax.</div>
+          <ul>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Two versions of your messages, written for you</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Three Sales Navigator target lists</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Daily sending by hand, every weekday</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Reply sorting and lead alerts</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Mid-month and end-of-month reports</li>
+          </ul>
+          <p class="fine">Questions first? Email <a href="mailto:cj@aisyndicate.com" style="color:#fff">cj@aisyndicate.com</a>.</p>
+        </div>
+
+        <form class="signup" id="signup" novalidate>
+          <div class="row2">
+            <div><label for="name">Your name</label><input id="name" name="name" autocomplete="name" required></div>
+            <div><label for="company">Company</label><input id="company" name="company" autocomplete="organization" required></div>
+          </div>
+          <div class="row2">
+            <div><label for="email">Work email</label><input id="email" name="email" type="email" autocomplete="email" required></div>
+            <div><label for="phone">Phone <span class="opt">(optional)</span></label><input id="phone" name="phone" type="tel" autocomplete="tel"></div>
+          </div>
+          <label for="linkedin_url">Your LinkedIn profile <span class="opt">(optional)</span></label>
+          <input id="linkedin_url" name="linkedin_url" type="url" inputmode="url" placeholder="https://www.linkedin.com/in/…">
+          <label for="site">Company website <span class="opt">(optional)</span></label>
+          <input id="site" name="site" type="text" inputmode="url" placeholder="yourcompany.com">
+          <label for="goal">What would a great month look like? <span class="opt">(optional)</span></label>
+          <textarea id="goal" name="goal" maxlength="1500" placeholder="Example: 8 calls a month with operations leaders at logistics companies in Texas."></textarea>
+          <div class="hp" aria-hidden="true"><label for="hp_check">Leave this empty</label><input id="hp_check" name="hp_check" tabindex="-1" autocomplete="off"></div>
+          <button class="btn" id="go" type="submit">Continue to secure payment →</button>
+          <div class="secure"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>Payment is handled by Stripe. We never see your card.</div>
+          <p class="formmsg" id="msg" role="status" aria-live="polite"></p>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" aria-labelledby="faqH">
+    <div class="wrap">
+      <div class="head"><div class="eyebrow">Questions</div><h2 id="faqH" style="margin-top:10px">Good to know</h2></div>
+      <div class="faq">
+        <details><summary>What do you need from me?</summary><p>Four things: this sign-up, the onboarding form, your approval of the messages, and one 5-minute login. After launch, keep an eye on your LinkedIn and Sales Navigator inboxes — that's where people reply to you.</p></details>
+        <details><summary>How soon does it start?</summary><p>Your messages and lists are ready to review within 48 hours of your onboarding form and first payment. Outreach starts once you approve them and we've logged in.</p></details>
+        <details><summary>Do I need LinkedIn Sales Navigator?</summary><p>Most of the outreach runs in Sales Navigator, and the onboarding form asks whether yours is active. Without it, LinkedIn allows shorter connection notes, and we write to that limit.</p></details>
+        <details><summary>Is it safe for my account?</summary><p>Every message is sent by hand by a person, with no bots or automation tools on your account, and we keep each account under daily sending limits.</p></details>
+        <details><summary>How does the login work? Do you keep my password?</summary><p>You fill in a short private page (your LinkedIn email, the city you log in from, a couple of good times) and share your password with your outreach specialist through a secure link. We never store it. When your specialist logs in, LinkedIn sends you a code and you pass it on by WhatsApp, the private page or email.</p></details>
+        <details><summary>Will the messages sound like me?</summary><p>They're written in first person from your own answers, in the tone you pick. You see both versions first and can ask for changes.</p></details>
+        <details><summary>How does billing work?</summary><p>A monthly subscription through Stripe at $1,000 a month, plus any sales tax. Stripe emails your receipt.</p></details>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© <span id="yr">2026</span> AI Syndicate</span>
+    <span><a href="https://www.aisyndicate.com/">aisyndicate.com</a></span>
+  </div>
+</footer>
+
+<div class="sticky" id="sticky"><a class="btn" href="#start">Start for $1,000 a month</a></div>
+
+<script>
+(() => {
+  document.getElementById("yr").textContent = new Date().getFullYear();
+  /* Where the form posts. Same origin when this page is served by the
+   * console; set data-api on <body> if the page moves to aisyndicate.com. */
+  const API = (document.body.dataset.api || "") + "/api/linkedin-signup";
+  const f = document.getElementById("signup");
+  const msg = document.getElementById("msg");
+  const go = document.getElementById("go");
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const say = (t, cls) => { msg.textContent = t; msg.className = `formmsg ${cls || ""}`; };
+
+  /* Phone: show the sticky button once the hero's buttons scroll away, hide it at the form. */
+  const sticky = document.getElementById("sticky");
+  if ("IntersectionObserver" in window) {
+    let heroGone = false, formShown = false;
+    const sync = () => sticky.classList.toggle("show", heroGone && !formShown);
+    new IntersectionObserver(([e]) => { heroGone = !e.isIntersecting; sync(); }).observe(document.querySelector(".cta-row"));
+    new IntersectionObserver(([e]) => { formShown = e.isIntersecting; sync(); }).observe(document.getElementById("start"));
+  }
+
+  f.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    f.querySelectorAll(".err-text").forEach((x) => x.remove());
+    f.querySelectorAll("[aria-invalid]").forEach((x) => x.removeAttribute("aria-invalid"));
+    const data = Object.fromEntries(new FormData(f).entries());
+    const local = {};
+    if (!data.name || data.name.trim().length < 2) local.name = "Please add your name.";
+    if (!data.company || data.company.trim().length < 2) local.company = "Please add your company.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email || "")) local.email = "Please add a working email.";
+    const show = (errs) => {
+      let first = null;
+      for (const [k, m] of Object.entries(errs)) {
+        const el = document.getElementById(k);
+        if (!el) continue;
+        el.setAttribute("aria-invalid", "true");
+        el.insertAdjacentHTML("afterend", `<div class="err-text" id="${k}-err">${esc(m)}</div>`);
+        el.setAttribute("aria-describedby", `${k}-err`);
+        first = first || el;
+      }
+      if (first) first.focus();
+    };
+    if (Object.keys(local).length) { show(local); say("Please fix the highlighted fields.", "err"); return; }
+    go.disabled = true; say("One moment…");
+    try {
+      const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { if (j.errors) show(j.errors); throw new Error(j.error || "That didn't go through. Please try again."); }
+      say("Taking you to secure checkout…", "ok");
+      window.location.href = j.checkoutUrl;
+    } catch (e) { say(e.message, "err"); go.disabled = false; }
+  });
+})();
+</script>
+</body>
+</html>

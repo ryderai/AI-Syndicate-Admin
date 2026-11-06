@@ -83,7 +83,13 @@ export async function POST(request) {
     const flowCols = "flow_stage, period_start, payment_failed_at";
     let client = null;
     if (info.liClientId) client = (await admin.from("linkedin_clients").select(cols).eq("id", info.liClientId).maybeSingle()).data;
-    if (!client && info.subscriptionId) client = (await admin.from("linkedin_clients").select(cols).eq("stripe_subscription_id", info.subscriptionId).limit(1).maybeSingle()).data;
+    /* v2 (6 Nov 2026): a sales-page sign-up row can hold the same
+     * subscription for a moment before it is merged into the client's form
+     * row. Prefer the sent form, so a renewal lands on the real client. */
+    if (!client && info.subscriptionId) {
+      const { data: subs } = await admin.from("linkedin_clients").select(`${cols}, created_at`).eq("stripe_subscription_id", info.subscriptionId).limit(5);
+      client = (subs || []).find((r) => r.status === "submitted") || (subs || []).find((r) => r.status !== "merged") || null;
+    }
     if (!client && info.email && isLinkedInPurchase(info, { priceIds: process.env.LINKEDIN_STRIPE_PRICE_IDS, paymentLinkIds: process.env.LINKEDIN_STRIPE_PAYMENT_LINK_IDS })) {
       /* Exact email, case-insensitive, with LIKE's wildcards escaped. Two
        * sent forms with one email = a person decides. */
