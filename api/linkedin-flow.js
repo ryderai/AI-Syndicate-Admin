@@ -47,7 +47,7 @@ export default async function handler(req, res) {
       admin.from("linkedin_sequence_versions").select("id, li_client_id, version, status, chosen_variant, issues, first_dated_on, expires_on, created_at").order("version", { ascending: false }).limit(500),
       admin.from("linkedin_daily_activity").select("li_client_id, day").gte("day", since).limit(5000),
       admin.from("linkedin_responses").select("id, li_client_id, day, name, reply_status, needs_review, reactivation_date, classification").limit(2000),
-      admin.from("linkedin_pins").select("id, li_client_id, code, created_at, expires_at, seen_at").gt("expires_at", now.toISOString()).order("created_at", { ascending: false }).limit(50),
+      admin.from("linkedin_pins").select("id, li_client_id, code, created_at, expires_at, seen_at, emailed_at").gt("expires_at", now.toISOString()).order("created_at", { ascending: false }).limit(50),
       admin.from("linkedin_outbox").select("id, li_client_id, kind, to_email, cc, subject, body_text, internal_note, status, created_at").eq("status", "draft").order("created_at", { ascending: false }).limit(40),
       admin.from("linkedin_reports").select("li_client_id, kind, period_start").limit(2000),
       getSettings(admin),
@@ -102,7 +102,14 @@ export default async function handler(req, res) {
     if (role !== "owner") return res.status(403).json({ error: "Only an owner can change LinkedIn settings." });
     const key = String(body?.key || "");
     if (!["daily_caps", "booking_url", "report_cc", "julie_email", "julie_whatsapp", "password_method", "code_alert_email", "signup_notify"].includes(key)) return res.status(400).json({ error: "Unknown setting." });
-    const { error } = await admin.from("linkedin_settings").upsert({ key, value: body?.value ?? null, updated_at: new Date().toISOString(), updated_by: member.user.id });
+    /* A blank setting (e.g. no booking link) is stored as NO row, which the
+     * code reads as "not set". Sending null to the jsonb column stored SQL
+     * NULL and the save failed (6 Nov preview test: "Save settings" with a
+     * blank booking link returned 500). */
+    const blank = body?.value === null || body?.value === undefined || body?.value === "";
+    const { error } = blank
+      ? await admin.from("linkedin_settings").delete().eq("key", key)
+      : await admin.from("linkedin_settings").upsert({ key, value: body.value, updated_at: new Date().toISOString(), updated_by: member.user.id });
     return error ? res.status(500).json({ error: error.message }) : res.status(200).json({ ok: true });
   }
   if (action === "outbox_done") {

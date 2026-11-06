@@ -72,7 +72,7 @@ function Pins({ pins, reload }) {
   return pins.map((p) => (
     <div key={p.id} role="status" style={{ display: "flex", alignItems: "center", gap: 12, padding: 12, borderRadius: 10, background: "var(--success-soft)", flexWrap: "wrap" }}>
       <span style={{ fontFamily: "var(--mono)", fontSize: 28, fontWeight: 800, letterSpacing: "0.2em" }}>{p.code}</span>
-      <span style={dim}>sent {fmt(p.created_at)} · expires {fmt(p.expires_at)}{p.seen_at ? " · used" : ""}</span>
+      <span style={dim}>sent {fmt(p.created_at)} · expires {fmt(p.expires_at)}{p.emailed_at ? " · emailed to Julie" : ""}{p.seen_at ? " · used" : ""}</span>
       <button className="btn" onClick={() => { copyToClipboard(p.code); act("/api/linkedin-flow", "PATCH", { action: "pin_seen", pinId: p.id }).then(reload); }}>Copy code</button>
     </div>
   ));

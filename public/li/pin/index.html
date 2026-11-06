@@ -91,7 +91,7 @@
     <p>At your time, Julie signs in and LinkedIn sends you a verification code (by email or text). Pass it to her right away. Codes expire in a few minutes.</p>
     <div id="waSend" hidden><a class="btn wa" id="waLink" href="#" target="_blank" rel="noopener">Message Julie on WhatsApp</a></div>
     <form id="f" novalidate>
-      <label for="code">Or type the code here — Julie sees it at once</label>
+      <label for="code" id="codeLabel">Type the code here — Julie sees it at once</label>
       <input id="code" class="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="8" required>
       <button id="go" type="submit">Send the code to Julie</button>
       <p class="msg" id="msg" role="status" aria-live="polite"></p>
@@ -133,6 +133,7 @@
     const name = info.company || "your company";
     const link = waHref(`Hi Julie, this is ${name}. Here's my LinkedIn code: `);
     $("waSend").hidden = !(link && (!d || d.code_method === "whatsapp"));
+    $("codeLabel").textContent = $("waSend").hidden ? "Type the code here — Julie sees it at once" : "Or type the code here — Julie sees it at once";
     if (link) $("waLink").href = link;
     const julieEmail = info?.julie?.email;
     if (julieEmail) { $("fwd").hidden = false; $("fwd").innerHTML = `Or forward LinkedIn's code email to <b>${esc(julieEmail)}</b>.`; }
