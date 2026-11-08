@@ -19,6 +19,7 @@ const SECTION_TITLES = {
   "home-services-leads": { kicker: "Command", title: "Leads · who the landing pages brought in" },
   "home-services-heat": { kicker: "Command", title: "Heat map · where people look, click and leave" },
   sales: { kicker: "Sales", title: "Sales · the pipeline" },
+  start: { kicker: "Delivery", title: "Start packets · proposal, agreement, questions and payment in one link" },
   /* THE REP'S OWN PAGES — Aug 27 2026. `leads` and `mine` are gone as page ids
    * (AdminDashboard turns both into `floor`), and The Floor and Gmail arrived.
    * Without an entry the fallback capitalises the page id, so the header would

@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Get started with AI Syndicate</title>
+<meta name="description" content="Your proposal, agreement, a few questions and payment — all in one place.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="AI Syndicate">
+<meta property="og:title" content="Get started with AI Syndicate">
+<meta property="og:description" content="Your proposal, agreement, a few questions and payment — all in one place.">
+<meta property="og:image" content="https://ai-syndicate-admin.vercel.app/start/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="AI Syndicate — get started in one place">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Get started with AI Syndicate">
+<meta name="twitter:description" content="Your proposal, agreement, a few questions and payment — all in one place.">
+<meta name="twitter:image" content="https://ai-syndicate-admin.vercel.app/start/og.jpg">
+<meta name="theme-color" content="#0a2245">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.png" type="image/png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink:#0a2245; --ink-2:#2d4663; --ink-dim:#5a7290; --ink-faint:#9eb1c7;
+    --accent:#5b5bd6; --accent-2:#8b5cf6; --accent-deep:#4338ca; --accent-soft:#eef0ff;
+    --rule:#e1e8f0; --bg:#f5f8fb; --card:#fff; --ok:#00813a; --ok-soft:#e8f7ee; --danger:#c8102e; --danger-soft:#fdecef;
+    --display:"Inter Tight", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --body:"Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --radius:14px;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin:0; font: 16px/1.6 var(--body); color: var(--ink); background: var(--bg); overflow-x: hidden; }
+  a { color: var(--accent-deep); }
+  [hidden] { display: none !important; }
+  .top { background: var(--ink); color: #fff; }
+  .top-in { max-width: 860px; margin: 0 auto; padding: 14px 16px; display:flex; align-items:center; gap:10px; }
+  .brand { display:flex; align-items:center; gap:10px; font: 700 18px/1 var(--display); letter-spacing:-.01em; color:#fff; text-decoration:none; }
+  .brand svg { width: 30px; height: 30px; flex: none; }
+  .top .for { margin-left:auto; font-size: 13px; color: #c9d6e6; text-align:right; min-width: 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width: 55%; }
+  .hero { background: linear-gradient(135deg, #0a2245 0%, #24306e 55%, #4338ca 100%); color:#fff; }
+  .hero-in { max-width: 860px; margin: 0 auto; padding: 28px 16px 30px; }
+  .hero h1 { font: 800 clamp(26px, 6vw, 40px)/1.12 var(--display); letter-spacing: -.02em; margin: 0 0 8px; }
+  .hero p { margin: 0; color: #d7defa; font-size: clamp(15px, 3.6vw, 17px); max-width: 60ch; }
+  .steps-bar { position: sticky; top: 0; z-index: 5; background: rgba(245,248,251,.96); backdrop-filter: blur(6px); border-bottom: 1px solid var(--rule); }
+  .steps-in { max-width: 860px; margin: 0 auto; padding: 10px 16px; display:flex; gap:6px; overflow-x:auto; scrollbar-width: none; }
+  .steps-in::-webkit-scrollbar { display:none; }
+  .step-pill { flex: none; display:flex; align-items:center; gap:8px; font: 600 14px/1 var(--body); color: var(--ink-dim); background: transparent; border:1px solid transparent; border-radius: 99px; padding: 8px 12px 8px 8px; min-height: 44px; cursor: pointer; }
+  .step-pill .n { width: 26px; height: 26px; border-radius: 50%; display:inline-flex; align-items:center; justify-content:center; background: #fff; border:1px solid var(--rule); font-size: 13px; }
+  .step-pill[aria-current="step"] { color: var(--ink); background: #fff; border-color: var(--rule); }
+  .step-pill[aria-current="step"] .n { background: var(--accent-deep); color:#fff; border-color: var(--accent-deep); }
+  .step-pill.done .n { background: var(--ok); color:#fff; border-color: var(--ok); }
+  main { max-width: 860px; margin: 0 auto; padding: 20px 16px calc(120px + env(safe-area-inset-bottom)); }
+  .card { background: var(--card); border:1px solid var(--rule); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(10,34,69,.04); }
+  h2 { font: 700 clamp(21px, 4.6vw, 26px)/1.2 var(--display); margin: 0 0 6px; letter-spacing: -.01em; }
+  h3 { font: 700 18px/1.3 var(--display); margin: 22px 0 8px; }
+  .sub { color: var(--ink-dim); margin: 0 0 14px; }
+  .kv { display:grid; grid-template-columns: 1fr; gap: 12px; margin: 14px 0 4px; }
+  @media (min-width: 640px) { .kv { grid-template-columns: 1fr 1fr; } }
+  .kv div { background: var(--bg); border:1px solid var(--rule); border-radius: 12px; padding: 12px 14px; }
+  .kv b { display:block; font-size: 12px; text-transform: uppercase; letter-spacing:.06em; color: var(--ink-dim); margin-bottom: 2px; }
+  .kv span { font-weight: 600; overflow-wrap: anywhere; }
+  .price { font: 800 clamp(24px, 6vw, 32px)/1.15 var(--display); color: var(--accent-deep); }
+  ul.incl { margin: 6px 0 0; padding-left: 22px; }
+  ul.incl li { margin: 4px 0; }
+  .contract { border:1px solid var(--rule); border-radius: 12px; padding: 18px; max-height: 60vh; overflow:auto; background:#fff; font-size: 15px; line-height: 1.65; }
+  .contract h4 { font: 700 16px/1.3 var(--display); margin: 16px 0 6px; }
+  .contract p { margin: 0 0 10px; overflow-wrap: anywhere; }
+  .signed-by { display:flex; gap:14px; align-items:center; flex-wrap: wrap; border:1px solid var(--rule); border-radius: 12px; padding: 12px 14px; margin: 14px 0; background: var(--ok-soft); }
+  .signed-by .sig { min-width: 160px; max-width: 240px; min-height: 48px; display:flex; align-items:center; }
+  .signed-by .sig img { max-width: 100%; max-height: 64px; }
+  .typed-sig { font: italic 600 28px/1.1 "Snell Roundhand", "Segoe Script", "Brush Script MT", cursive; color: #1b2a6b; }
+  .signed-by .who { font-size: 14px; color: var(--ink-2); }
+  .signed-by .who b { color: var(--ink); display:block; font-size: 15px; }
+  label.f { display:block; font-weight: 600; margin: 16px 0 4px; }
+  .req { color: var(--danger); }
+  .hint { display:block; color: var(--ink-dim); font-size: 14px; font-weight: 400; margin: -2px 0 6px; }
+  input[type=text], input[type=email], input[type=tel], input[type=url], textarea {
+    width: 100%; font: 16px/1.45 var(--body); color: var(--ink); background:#fff; border:1px solid #c9d5e3; border-radius: 10px; padding: 12px 13px; min-height: 48px; }
+  textarea { min-height: 96px; resize: vertical; }
+  input:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible, .chip input:focus-visible + span { outline: 3px solid var(--accent); outline-offset: 2px; }
+  fieldset { border:0; margin: 16px 0 0; padding: 0; min-width: 0; }
+  legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+  .chips { display:flex; flex-wrap: wrap; gap: 8px; }
+  .chip { position: relative; }
+  .chip input { position:absolute; opacity: 0; width: 1px; height: 1px; }
+  .chip span { display:inline-flex; align-items:center; min-height: 44px; padding: 8px 14px; border:1px solid #c9d5e3; border-radius: 99px; background:#fff; cursor:pointer; font-size: 15px; }
+  .chip input:checked + span { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-deep); font-weight: 600; }
+  .err { color: var(--danger); font-size: 14px; font-weight: 600; margin-top: 4px; }
+  .has-err input, .has-err textarea, .has-err .pad { border-color: var(--danger) !important; }
+  .platform-steps { background: var(--bg); border:1px solid var(--rule); border-radius: 12px; padding: 12px 16px; margin-top: 10px; }
+  .platform-steps ol { margin: 6px 0 0; padding-left: 20px; }
+  .copy-line { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin: 8px 0 2px; font-size: 15px; }
+  .tabs { display:flex; gap: 6px; margin: 6px 0 8px; }
+  .tabs button { min-height: 44px; padding: 8px 14px; border-radius: 10px; border:1px solid #c9d5e3; background:#fff; font: 600 15px var(--body); color: var(--ink-2); cursor:pointer; }
+  .tabs button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color:#fff; }
+  .pad { position: relative; border: 1px dashed #9eb1c7; border-radius: 12px; background:#fff; height: 170px; touch-action: none; overflow: hidden; }
+  .pad canvas { width: 100%; height: 100%; display:block; touch-action: none; cursor: crosshair; }
+  .pad .line { position:absolute; left: 18px; right: 18px; bottom: 38px; border-bottom: 1px solid #c9d5e3; pointer-events:none; }
+  .pad .x { position:absolute; left: 18px; bottom: 40px; color: var(--ink-faint); font-weight: 700; pointer-events:none; }
+  .pad-tools { display:flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 14px; color: var(--ink-dim); }
+  .typed-preview { margin-top: 8px; min-height: 56px; border:1px solid var(--rule); border-radius: 12px; padding: 10px 14px; background:#fff; }
+  .check { display:flex; gap: 12px; align-items:flex-start; margin: 16px 0 0; font-size: 15px; }
+  .check input { width: 24px; height: 24px; margin: 2px 0 0; accent-color: var(--accent-deep); flex: none; }
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap: 8px; min-height: 48px; padding: 12px 20px; border-radius: 12px; border: 1px solid #c9d5e3; background: #fff; color: var(--ink); font: 700 16px/1.2 var(--body); cursor: pointer; text-decoration: none; }
+  .btn.primary { background: var(--accent-deep); border-color: var(--accent-deep); color: #fff; }
+  .btn.primary:hover { background: #3730a3; }
+  .btn.small { min-height: 44px; padding: 8px 14px; font-size: 14px; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .pay-box { border:1px solid var(--rule); border-radius: 12px; padding: 16px; background: var(--bg); }
+  .status { display:inline-flex; gap: 8px; align-items:center; font-weight: 600; font-size: 15px; padding: 6px 12px; border-radius: 99px; background: #fff; border:1px solid var(--rule); }
+  .status.ok { background: var(--ok-soft); color: var(--ok); border-color: #b7e3c6; }
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: rgba(255,255,255,.97); border-top: 1px solid var(--rule); backdrop-filter: blur(6px); }
+  .bar-in { max-width: 860px; margin: 0 auto; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); display:flex; gap: 10px; align-items:center; }
+  .bar-in .grow { flex: 1; min-width: 0; font-size: 14px; color: var(--ink-dim); }
+  .notice { border-radius: 12px; padding: 14px 16px; margin: 0 0 16px; font-weight: 600; }
+  .notice.bad { background: var(--danger-soft); color: var(--danger); }
+  .notice.good { background: var(--ok-soft); color: var(--ok); }
+  .review-list { list-style: none; margin: 10px 0 0; padding: 0; }
+  .review-list li { display:flex; gap: 10px; align-items:flex-start; padding: 10px 0; border-top: 1px solid var(--rule); }
+  .review-list li:first-child { border-top: 0; }
+  .tick { width: 24px; height: 24px; border-radius: 50%; flex:none; display:inline-flex; align-items:center; justify-content:center; font-size: 14px; font-weight: 800; color:#fff; background: var(--ok); }
+  .tick.no { background: var(--danger); }
+  .answers dt { font-weight: 600; margin-top: 10px; }
+  .answers dd { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+  .loading { text-align:center; padding: 60px 16px; color: var(--ink-dim); }
+  .foot { text-align:center; color: var(--ink-dim); font-size: 13px; padding: 8px 16px 24px; }
+  @media (prefers-reduced-motion: no-preference) { .card { animation: rise .25s ease-out; } @keyframes rise { from { transform: translateY(6px); } to { transform: none; } } }
+  @media print {
+    body { background: #fff; font-size: 12pt; }
+    .top, .steps-bar, .bar, .no-print, .hero { display: none !important; }
+    main { padding: 0; max-width: none; }
+    .card { border: 0; box-shadow: none; padding: 0; margin: 0 0 18pt; break-inside: auto; animation: none; }
+    .contract { max-height: none; overflow: visible; border: 0; padding: 0; }
+    .print-only { display: block !important; }
+    a { color: inherit; text-decoration: none; }
+  }
+  .print-only { display: none; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <span class="brand" aria-label="AI Syndicate">
+      <svg viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#3b82f6"/></linearGradient><radialGradient id="g2" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#c4b5fd"/><stop offset=".5" stop-color="#8b5cf6"/><stop offset="1" stop-color="#4338ca"/></radialGradient></defs><g stroke="url(#g1)" stroke-width="3" stroke-linecap="round"><line x1="50" y1="50" x2="50" y2="18"/><line x1="50" y1="50" x2="72.6" y2="27.4"/><line x1="50" y1="50" x2="82" y2="50"/><line x1="50" y1="50" x2="72.6" y2="72.6"/><line x1="50" y1="50" x2="50" y2="82"/><line x1="50" y1="50" x2="27.4" y2="72.6"/><line x1="50" y1="50" x2="18" y2="50"/><line x1="50" y1="50" x2="27.4" y2="27.4"/></g><g fill="url(#g1)"><circle cx="50" cy="12" r="6.5"/><circle cx="76.9" cy="23.1" r="6.5"/><circle cx="88" cy="50" r="6.5"/><circle cx="76.9" cy="76.9" r="6.5"/><circle cx="50" cy="88" r="6.5"/><circle cx="23.1" cy="76.9" r="6.5"/><circle cx="12" cy="50" r="6.5"/><circle cx="23.1" cy="23.1" r="6.5"/></g><circle cx="50" cy="50" r="11" fill="url(#g2)"/></svg>
+      AI Syndicate
+    </span>
+    <span class="for" id="for"></span>
+  </div>
+</header>
+<section class="hero" id="hero" hidden>
+  <div class="hero-in">
+    <h1 id="hero-title">Let's get you started.</h1>
+    <p id="hero-sub">Everything is in one place: the proposal, the agreement, a few questions about your business, and payment. It takes about 10 minutes, and you can come back to this link any time.</p>
+  </div>
+</section>
+<nav class="steps-bar no-print" id="steps-bar" aria-label="Steps" hidden><div class="steps-in" id="steps"></div></nav>
+<main id="main"><div class="loading" id="loading">Loading your packet…</div></main>
+<div class="bar no-print" id="bar" hidden>
+  <div class="bar-in">
+    <button class="btn" type="button" id="back">Back</button>
+    <span class="grow" id="bar-msg" aria-live="polite"></span>
+    <button class="btn primary" type="button" id="next">Next</button>
+  </div>
+</div>
+<p class="foot no-print">AI Syndicate · Private link — please don't forward it.</p>
+
+<script>
+(function () {
+  "use strict";
+  var T = new URLSearchParams(location.search).get("t") || "";
+  var PREVIEW = new URLSearchParams(location.search).get("preview") === "1";
+  var STORE = "ais-start-" + T.slice(0, 10);
+  var P = null;            // the packet from the server
+  var step = 0;
+  var STEPS = [];
+  var state = { answers: {}, signer: { name: "", title: "", email: "" }, sigKind: "drawn", sigTyped: "", sigData: "", consent: false, payDone: false, payNote: "", hp: "" };
+  var errors = {};
+
+  function save() { try { var s = Object.assign({}, state); delete s.hp; localStorage.setItem(STORE, JSON.stringify(s)); } catch (e) {} }
+  function restore() { try { var raw = localStorage.getItem(STORE); if (raw) { var s = JSON.parse(raw); if (s && typeof s === "object") { delete s.hp; Object.assign(state, s); } } } catch (e) {} }
+
+  /* tiny element builder: everything goes in as text, never as HTML */
+  function h(tag, attrs, kids) {
+    var el = document.createElement(tag);
+    if (attrs) for (var k in attrs) {
+      var v = attrs[k];
+      if (v === null || v === undefined || v === false) continue;
+      if (k === "class") el.className = v;
+      else if (k === "text") el.textContent = v;
+      else if (k.slice(0, 2) === "on") el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v === true ? "" : v);
+    }
+    (Array.isArray(kids) ? kids : kids ? [kids] : []).forEach(function (c) { if (c === null || c === undefined || c === false) return; el.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
+    return el;
+  }
+  function fmtDate(d) { var x = /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(d + "T12:00:00Z") : new Date(d); return isNaN(x) ? "" : x.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }); }
+  function fmtTime(d) { var x = new Date(d); return isNaN(x) ? "" : x.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }); }
+  function api(method, body) {
+    var url = method === "GET" ? "/api/start-public?t=" + encodeURIComponent(T) + (PREVIEW ? "&preview=1" : "") : "/api/start-public";
+    return fetch(url, { method: method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined, credentials: "same-origin" })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { d.__status = r.status; return d; }); })
+      .catch(function () { return { __status: 0, error: "No connection. Check your internet and try again." }; });
+  }
+  var main = document.getElementById("main");
+  /* Fixing a field clears its red message straight away (not only on the next tap of Next). */
+  function clearErr(el) {
+    var box = el && el.closest && el.closest(".has-err"); if (!box) return;
+    box.classList.remove("has-err");
+    var msg = box.querySelector(":scope > .err"); if (msg) msg.remove();
+    box.querySelectorAll("[aria-invalid]").forEach(function (x) { x.removeAttribute("aria-invalid"); });
+  }
+  main.addEventListener("input", function (e) { clearErr(e.target); });
+  main.addEventListener("change", function (e) { clearErr(e.target); if (e.target.id === "f-paydone") { var pe = main.querySelector(".card > .err"); if (pe) pe.remove(); } });
+  function fail(msg) { main.innerHTML = ""; main.appendChild(h("div", { class: "card" }, [h("h2", { text: "This link isn't working" }), h("p", { class: "sub", text: msg })])); }
+
+  /* ---------------- load ---------------- */
+  if (!T) { fail("This page needs the link from your email. Open the email again and tap the link."); return; }
+  api("GET").then(function (d) {
+    if (!d.packet) { fail(d.error || "Something went wrong. Please reply to the email you got."); return; }
+    P = d.packet;
+    document.getElementById("for").textContent = "For " + P.business;
+    document.title = "Get started — " + P.business + " + AI Syndicate";
+    if (P.returned) { renderDone(false); return; }
+    restore();
+    if (!state.signer.email) state.signer.email = P.contact_email || "";
+    if (!state.signer.name) state.signer.name = P.contact_name || "";
+    (P.questions || []).forEach(function (q) {
+      if (state.answers[q.id] === undefined && q.prefill) {
+        var v = q.prefill === "business" ? P.business : q.prefill === "contact_name" ? P.contact_name : q.prefill === "contact_email" ? P.contact_email : q.prefill === "website" ? P.website : "";
+        if (v) state.answers[q.id] = v;
+      }
+    });
+    STEPS = [{ id: "proposal", label: "Proposal" }, { id: "agreement", label: "Sign" }, { id: "questions", label: "Questions" }];
+    if (P.payment) STEPS.push({ id: "payment", label: "Payment" });
+    STEPS.push({ id: "send", label: "Send back" });
+    document.getElementById("hero").hidden = false;
+    var first = (P.contact_name || "").split(/\s+/)[0];
+    document.getElementById("hero-title").textContent = first ? "Welcome, " + first + "." : "Let's get you started.";
+    document.getElementById("steps-bar").hidden = false;
+    if (PREVIEW) { var pv = document.createElement("div"); pv.className = "notice good no-print"; pv.style.cssText = "max-width:860px;margin:12px auto 0;"; pv.textContent = "Preview — this is what the client sees. Nothing you do here is sent."; document.getElementById("hero").after(pv); }
+    document.getElementById("bar").hidden = false;
+    render();
+  });
+
+  /* ---------------- steps ---------------- */
+  function renderSteps() {
+    var box = document.getElementById("steps"); box.innerHTML = "";
+    STEPS.forEach(function (s, i) {
+      box.appendChild(h("button", { type: "button", class: "step-pill" + (i < step ? " done" : ""), "aria-current": i === step ? "step" : null, onclick: function () { go(i); } },
+        [h("span", { class: "n", text: i < step ? "✓" : String(i + 1) }), s.label]));
+    });
+  }
+  function go(i) {
+    if (i > step) { for (var k = step; k < i; k++) { if (!checkStep(k)) { step = k; render(); focusErr(); return; } } }
+    step = Math.max(0, Math.min(STEPS.length - 1, i)); errors = {}; render(); window.scrollTo(0, 0);
+  }
+  function render() {
+    renderSteps();
+    main.innerHTML = "";
+    var id = STEPS[step].id;
+    if (id === "proposal") main.appendChild(viewProposal());
+    if (id === "agreement") main.appendChild(viewAgreement());
+    if (id === "questions") main.appendChild(viewQuestions());
+    if (id === "payment") main.appendChild(viewPayment());
+    if (id === "send") main.appendChild(viewSend());
+    document.getElementById("back").hidden = step === 0;
+    var nx = document.getElementById("next");
+    nx.textContent = id === "send" ? "Sign and send back" : "Next";
+    document.getElementById("bar-msg").textContent = "Step " + (step + 1) + " of " + STEPS.length;
+    if (id === "agreement") setupPad();
+  }
+  document.getElementById("back").addEventListener("click", function () { go(step - 1); });
+  document.getElementById("next").addEventListener("click", function () {
+    if (STEPS[step].id === "send") return submit();
+    if (!checkStep(step)) { render(); focusErr(); return; }
+    go(step + 1);
+  });
+  function focusErr() {
+    setTimeout(function () { var el = main.querySelector(".has-err input, .has-err textarea, .has-err canvas, .has-err"); if (el) { el.scrollIntoView({ block: "center" }); if (el.focus) el.focus({ preventScroll: true }); } }, 30);
+    document.getElementById("bar-msg").textContent = "A few things need a look.";
+  }
+
+  /* ---------------- 1. proposal ---------------- */
+  function viewProposal() {
+    var p = P.proposal || {};
+    var card = h("section", { class: "card", "aria-labelledby": "t-prop" }, [
+      h("h2", { id: "t-prop", text: "Your proposal" }),
+      h("p", { class: "sub", text: "Here's what we agreed to do for " + P.business + "." }),
+      h("div", { class: "price", text: p.price || "" }),
+      h("div", { class: "kv" }, [
+        h("div", null, [h("b", { text: "Package" }), h("span", { text: p.package || "—" })]),
+        p.term ? h("div", null, [h("b", { text: "Terms" }), h("span", { text: p.term })]) : null,
+        p.start_date ? h("div", null, [h("b", { text: "Start date" }), h("span", { text: fmtDate(p.start_date) })]) : null,
+        P.website ? h("div", null, [h("b", { text: "Website" }), h("span", { text: P.website.replace(/^https?:\/\//, "").replace(/\/$/, "") })]) : null,
+      ]),
+    ]);
+    var inc = String(p.includes || "").split(/\n+/).map(function (s) { return s.replace(/^[-•*]\s*/, "").trim(); }).filter(Boolean);
+    if (inc.length) { card.appendChild(h("h3", { text: "What's included" })); card.appendChild(h("ul", { class: "incl" }, inc.map(function (s) { return h("li", { text: s }); }))); }
+    if (p.notes) { card.appendChild(h("h3", { text: "Notes" })); String(p.notes).split(/\n{2,}/).forEach(function (para) { card.appendChild(h("p", { text: para })); }); }
+    if (p.doc_url) card.appendChild(h("p", null, [h("a", { class: "btn small", href: p.doc_url, target: "_blank", rel: "noopener", text: "Open the full proposal" })]));
+    return card;
+  }
+
+  /* ---------------- 2. agreement + signature ---------------- */
+  function contractNode() {
+    var box = h("div", { class: "contract", tabindex: "0", "aria-label": "Agreement text" });
+    String(P.contract_text || "").split(/\n{2,}/).forEach(function (block) {
+      var b = block.trim(); if (!b) return;
+      if (/^#{1,3}\s+/.test(b)) box.appendChild(h("h4", { text: b.replace(/^#{1,3}\s+/, "") }));
+      else { var para = h("p"); b.split("\n").forEach(function (line, i) { if (i) para.appendChild(h("br")); para.appendChild(document.createTextNode(line)); }); box.appendChild(para); }
+    });
+    return box;
+  }
+  function sigNode(kind, data) { return kind === "drawn" && /^data:image\/png/.test(data || "") ? h("img", { src: data, alt: "Signature" }) : h("span", { class: "typed-sig", text: data || "" }); }
+  function aisBlock() {
+    var a = P.ais_signature; if (!a) return null;
+    return h("div", { class: "signed-by" }, [
+      h("div", { class: "sig" }, sigNode(a.kind, a.data)),
+      h("div", { class: "who" }, [h("b", { text: a.name }), (a.title ? a.title : "AI Syndicate") + " · Signed " + fmtTime(a.signed_at)]),
+    ]);
+  }
+  function field(id, label, input, opts) {
+    opts = opts || {};
+    var wrap = h("div", { class: errors[id] ? "has-err" : "" }, [
+      h("label", { class: "f", for: "f-" + id }, [label, opts.req ? h("span", { class: "req", "aria-hidden": "true", text: " *" }) : null]),
+      opts.hint ? h("span", { class: "hint", id: "h-" + id, text: opts.hint }) : null, input,
+      errors[id] ? h("div", { class: "err", id: "e-" + id, text: errors[id] }) : null,
+    ]);
+    input.id = "f-" + id;
+    var desc = [opts.hint ? "h-" + id : "", errors[id] ? "e-" + id : ""].filter(Boolean).join(" ");
+    if (desc) input.setAttribute("aria-describedby", desc);
+    if (errors[id]) input.setAttribute("aria-invalid", "true");
+    if (opts.req) input.setAttribute("aria-required", "true");
+    return wrap;
+  }
+  function viewAgreement() {
+    var card = h("section", { class: "card", "aria-labelledby": "t-agr" }, [h("h2", { id: "t-agr", text: P.contract_title || "Agreement" }), h("p", { class: "sub", text: "Please read it, then sign at the bottom." })]);
+    if (P.contract_pdf) card.appendChild(h("p", null, [h("a", { class: "btn", href: P.contract_pdf.url, target: "_blank", rel: "noopener", text: "Open the agreement (PDF)" }), " ", h("span", { class: "hint", style: "display:inline", text: P.contract_pdf.name })]));
+    if (P.contract_text) card.appendChild(contractNode());
+    var a = aisBlock(); if (a) card.appendChild(a);
+
+    card.appendChild(h("h3", { text: "Your signature" }));
+    var nm = h("input", { type: "text", autocomplete: "name", value: state.signer.name, oninput: function (e) { state.signer.name = e.target.value; if (state.sigKind === "typed") updateTyped(); save(); } });
+    card.appendChild(field("signer_name", "Full name", nm, { req: true }));
+    var ti = h("input", { type: "text", autocomplete: "organization-title", value: state.signer.title, oninput: function (e) { state.signer.title = e.target.value; save(); } });
+    card.appendChild(field("signer_title", "Title", ti, { hint: "For example: Owner, President, Managing Partner." }));
+    var em = h("input", { type: "email", autocomplete: "email", inputmode: "email", value: state.signer.email, oninput: function (e) { state.signer.email = e.target.value; save(); } });
+    card.appendChild(field("signer_email", "Email", em, { req: true }));
+
+    var sigWrap = h("div", { class: errors.signature ? "has-err" : "", id: "sig-wrap" });
+    sigWrap.appendChild(h("div", { class: "f", id: "sig-label", style: "font-weight:600;margin:16px 0 4px", text: "Sign" }));
+    var tabs = h("div", { class: "tabs", role: "group", "aria-labelledby": "sig-label" }, [
+      h("button", { type: "button", "aria-pressed": state.sigKind === "drawn" ? "true" : "false", onclick: function () { state.sigKind = "drawn"; save(); render(); }, text: "Draw" }),
+      h("button", { type: "button", "aria-pressed": state.sigKind === "typed" ? "true" : "false", onclick: function () { state.sigKind = "typed"; save(); render(); }, text: "Type my name" }),
+    ]);
+    sigWrap.appendChild(tabs);
+    if (state.sigKind === "drawn") {
+      sigWrap.appendChild(h("div", { class: "pad", id: "pad" }, [h("canvas", { id: "pad-canvas", "aria-label": "Draw your signature with your finger or mouse", role: "img", tabindex: "0" }), h("span", { class: "line" }), h("span", { class: "x", text: "×" })]));
+      sigWrap.appendChild(h("div", { class: "pad-tools" }, [h("span", { text: "Sign with your finger or mouse." }), h("button", { type: "button", class: "btn small", onclick: function () { state.sigData = ""; save(); setupPad(true); }, text: "Clear" })]));
+    } else {
+      sigWrap.appendChild(h("div", { class: "typed-preview", id: "typed-prev" }, h("span", { class: "typed-sig", text: state.signer.name || "Your name" })));
+    }
+    if (errors.signature) { sigWrap.appendChild(h("div", { class: "err", id: "e-signature", text: errors.signature })); var cvs = sigWrap.querySelector("canvas"); if (cvs) cvs.setAttribute("aria-describedby", "e-signature"); }
+    card.appendChild(sigWrap);
+
+    var cb = h("input", { type: "checkbox", id: "f-consent", "aria-invalid": errors.consent ? "true" : null, "aria-describedby": errors.consent ? "e-consent" : null, onchange: function (e) { state.consent = e.target.checked; save(); } });
+    cb.checked = !!state.consent;
+    card.appendChild(h("div", { class: errors.consent ? "has-err" : "" }, [h("label", { class: "check", for: "f-consent" }, [cb, h("span", { text: P.consent_text })]), errors.consent ? h("div", { class: "err", id: "e-consent", text: errors.consent }) : null]));
+    return card;
+  }
+  function updateTyped() { var el = document.getElementById("typed-prev"); if (el) { el.innerHTML = ""; el.appendChild(h("span", { class: "typed-sig", text: state.signer.name || "Your name" })); } }
+  function setupPad(clear) {
+    var cv = document.getElementById("pad-canvas"); if (!cv) return;
+    var ratio = Math.min(window.devicePixelRatio || 1, 2);
+    var r = cv.getBoundingClientRect();
+    cv.width = Math.round(r.width * ratio); cv.height = Math.round(r.height * ratio);
+    var ctx = cv.getContext("2d"); ctx.scale(ratio, ratio);
+    ctx.lineWidth = 2.4; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#13205a";
+    if (clear) ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!clear && state.sigData) { var img = new Image(); img.onload = function () { ctx.drawImage(img, 0, 0, r.width, r.height); }; img.src = state.sigData; }
+    var drawing = false, last = null, inked = 0;
+    function pt(e) { var b = cv.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
+    cv.onpointerdown = function (e) { e.preventDefault(); drawing = true; last = pt(e); try { cv.setPointerCapture(e.pointerId); } catch (x) {} ctx.beginPath(); ctx.arc(last.x, last.y, 1, 0, Math.PI * 2); ctx.fillStyle = "#13205a"; ctx.fill(); };
+    cv.onpointermove = function (e) { if (!drawing) return; e.preventDefault(); var p2 = pt(e); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p2.x, p2.y); ctx.stroke(); inked += Math.abs(p2.x - last.x) + Math.abs(p2.y - last.y); last = p2; };
+    cv.onpointerup = cv.onpointercancel = function () { if (!drawing) return; drawing = false; if (inked > 20 || state.sigData) { state.sigData = cv.toDataURL("image/png"); save(); clearErr(cv); } };
+  }
+
+  /* ---------------- 3. questions ---------------- */
+  function viewQuestions() {
+    var wrap = h("div");
+    (P.parts || []).forEach(function (part, pi) {
+      var qs = (P.questions || []).filter(function (q) { return q.part === part.id; });
+      var card = h("section", { class: "card", "aria-labelledby": "t-part-" + part.id }, [h("h2", { id: "t-part-" + part.id, text: part.title })]);
+      if (pi === 0) card.appendChild(h("p", { class: "sub", text: "Skip anything you don't know yet. Only the ones with * are needed." }));
+      qs.forEach(function (q) { card.appendChild(questionNode(q)); });
+      wrap.appendChild(card);
+    });
+    return wrap;
+  }
+  function questionNode(q) {
+    var val = state.answers[q.id];
+    if (q.type === "radio" || q.type === "checks") {
+      var fs = h("fieldset", { class: errors[q.id] ? "has-err" : "", "aria-describedby": [q.hint ? "h-" + q.id : "", errors[q.id] ? "e-" + q.id : ""].filter(Boolean).join(" ") || null, "aria-invalid": errors[q.id] ? "true" : null }, [h("legend", null, [q.label, q.required ? h("span", { class: "req", text: " *" }) : null])]);
+      if (q.hint) fs.appendChild(h("span", { class: "hint", id: "h-" + q.id, text: q.hint }));
+      var chips = h("div", { class: "chips" });
+      q.options.forEach(function (opt, i) {
+        var inp = h("input", { type: q.type === "radio" ? "radio" : "checkbox", name: q.id, value: opt, id: "f-" + q.id + "-" + i });
+        inp.checked = q.type === "radio" ? val === opt : Array.isArray(val) && val.indexOf(opt) >= 0;
+        inp.addEventListener("change", function () {
+          if (q.type === "radio") state.answers[q.id] = opt;
+          else { var list = Array.isArray(state.answers[q.id]) ? state.answers[q.id].slice() : []; var at = list.indexOf(opt); if (inp.checked && at < 0) list.push(opt); if (!inp.checked && at >= 0) list.splice(at, 1); state.answers[q.id] = list; }
+          save(); if (q.steps) showSteps(q, fs);
+        });
+        chips.appendChild(h("label", { class: "chip", for: "f-" + q.id + "-" + i }, [inp, h("span", { text: opt })]));
+      });
+      fs.appendChild(chips);
+      if (errors[q.id]) fs.appendChild(h("div", { class: "err", id: "e-" + q.id, text: errors[q.id] }));
+      if (q.steps) showSteps(q, fs);
+      return fs;
+    }
+    var attrs = { value: q.type === "textarea" ? null : (val || ""), oninput: function (e) { state.answers[q.id] = e.target.value; save(); } };
+    var input;
+    if (q.type === "textarea") { input = h("textarea", attrs); input.value = val || ""; }
+    else input = h("input", Object.assign({ type: q.type, autocomplete: q.id === "c_name" ? "name" : q.id === "c_email" ? "email" : q.id === "c_phone" ? "tel" : "off", inputmode: q.type === "email" ? "email" : q.type === "tel" ? "tel" : q.type === "url" ? "url" : null }, attrs));
+    return field(q.id, q.label, input, { req: q.required, hint: q.hint });
+  }
+  function showSteps(q, fs) {
+    var old = fs.querySelector(".platform-steps"); if (old) old.remove();
+    var pick = state.answers[q.id]; var steps = P.platform_steps && P.platform_steps[pick]; if (!steps) return;
+    var box = h("div", { class: "platform-steps" }, [
+      h("div", { class: "copy-line" }, [h("span", { text: "Our email for every invite:" }), h("b", { text: P.grant_email }),
+        h("button", { type: "button", class: "btn small", onclick: function (e) { var b = e.currentTarget; try { navigator.clipboard.writeText(P.grant_email).then(function () { b.textContent = "Copied"; }); } catch (x) {} }, text: "Copy" })]),
+      h("ol", null, steps.map(function (s) { return h("li", { text: s }); })),
+    ]);
+    fs.appendChild(box);
+  }
+
+  /* ---------------- 4. payment ---------------- */
+  var payTimer = null;
+  function viewPayment() {
+    var pay = P.payment;
+    var stat = h("span", { class: "status" + (state.payChecked === "card" ? " ok" : ""), id: "pay-status", "aria-live": "polite", text: state.payChecked === "card" ? "Stripe shows your card — thank you" : "" });
+    if (!stat.textContent) stat.hidden = true;
+    var cb = h("input", { type: "checkbox", id: "f-paydone", "aria-invalid": errors.payment ? "true" : null, "aria-describedby": errors.payment ? "e-payment" : null, onchange: function (e) { state.payDone = e.target.checked; save(); } }); cb.checked = !!state.payDone;
+    var note = h("textarea", { oninput: function (e) { state.payNote = e.target.value; save(); } }); note.value = state.payNote || "";
+    var card = h("section", { class: "card", "aria-labelledby": "t-pay" }, [
+      h("h2", { id: "t-pay", text: "Add your card" }),
+      h("p", { class: "sub", text: "Stripe keeps your card safe. We never see the number." }),
+      h("div", { class: "pay-box" }, [
+        pay.note ? h("p", { style: "margin:0 0 12px;font-weight:600", text: pay.note }) : null,
+        h("a", { class: "btn primary", href: pay.url, target: "_blank", rel: "noopener", onclick: function () { startPayWatch(); }, text: "Open Stripe to add my card" }),
+        h("p", { class: "hint", style: "margin:10px 0 0", text: "It opens in a new tab. Come back here when you're done." }),
+        h("div", { style: "margin-top:10px" }, stat),
+      ]),
+      h("div", { class: errors.payment ? "has-err" : "" }, [
+        h("label", { class: "check", for: "f-paydone" }, [cb, h("span", { text: "I added my card in Stripe." })]),
+      ]),
+      field("pay_note", "Paying another way?", note, { hint: "Check, bank transfer, or someone else in your office handles billing? Tell us here." }),
+      errors.payment ? h("div", { class: "err", id: "e-payment", role: "alert", text: errors.payment }) : null,
+    ]);
+    return card;
+  }
+  function startPayWatch() {
+    clearInterval(payTimer); var tries = 0;
+    payTimer = setInterval(function () { tries++; if (tries > 40) return clearInterval(payTimer); checkPay(); }, 6000);
+  }
+  function checkPay() {
+    return api("POST", { t: T, action: "payment_check" }).then(function (d) {
+      if (d.state === "card") {
+        clearInterval(payTimer); state.payChecked = "card"; state.payDone = true; save();
+        var el = document.getElementById("pay-status"); if (el) { el.hidden = false; el.className = "status ok"; el.textContent = "Stripe shows your card — thank you"; }
+        var cb = document.getElementById("f-paydone"); if (cb) cb.checked = true;
+      }
+    });
+  }
+  window.addEventListener("focus", function () { if (P && P.payment && STEPS[step] && STEPS[step].id === "payment" && state.payChecked !== "card") checkPay(); });
+
+  /* ---------------- 5. review + send ---------------- */
+  function viewSend() {
+    var items = [];
+    STEPS.forEach(function (s, i) { if (s.id !== "send") items.push({ label: s.label, ok: checkStep(i, true) }); });
+    var card = h("section", { class: "card", "aria-labelledby": "t-send" }, [
+      h("h2", { id: "t-send", text: "Ready to send it back?" }),
+      h("p", { class: "sub", text: "When you press \"Sign and send back,\" your signature is added to the agreement and everything goes to the AI Syndicate team." }),
+      h("ul", { class: "review-list" }, items.map(function (it) { return h("li", null, [h("span", { class: "tick" + (it.ok ? "" : " no"), "aria-hidden": "true", text: it.ok ? "✓" : "!" }), h("span", { text: it.label + (it.ok ? " — done" : " — needs a look") })]); })),
+    ]);
+    var hp = h("input", { type: "text", name: "fax", tabindex: "-1", autocomplete: "off", "aria-hidden": "true", style: "position:absolute;left:-9999px;width:1px;height:1px;opacity:0", oninput: function (e) { state.hp = e.target.value; } });
+    card.appendChild(hp);
+    if (errors.form) card.appendChild(h("div", { class: "notice bad", role: "alert", text: errors.form }));
+    return card;
+  }
+
+  /* ---------------- checks (same rules as the server) ---------------- */
+  var EMAIL = /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[a-z]{2,}$/i;
+  function checkStep(i, quiet) {
+    var id = STEPS[i].id, e = {};
+    if (id === "agreement") {
+      if ((state.signer.name || "").trim().length < 2) e.signer_name = "Type your full name.";
+      if (!EMAIL.test((state.signer.email || "").trim())) e.signer_email = "Add your email.";
+      if (state.sigKind === "drawn" && !state.sigData) e.signature = "Draw your signature in the box, or tap \"Type my name\".";
+      if (!state.consent) e.consent = "Tick the box to agree.";
+    }
+    if (id === "questions") {
+      (P.questions || []).forEach(function (q) {
+        var v = state.answers[q.id];
+        var empty = v === undefined || v === null || (Array.isArray(v) ? !v.length : !String(v).trim());
+        if (q.required && empty) e[q.id] = "This one is needed.";
+        if (!empty && q.type === "email" && !EMAIL.test(String(v).trim())) e[q.id] = "That email doesn't look right.";
+      });
+    }
+    if (id === "payment" && P.payment && !state.payDone && !(state.payNote || "").trim()) e.payment = "Add your card in Stripe, then tick the box. Paying another way? Say how in the box.";
+    if (!quiet) errors = e;
+    return Object.keys(e).length === 0;
+  }
+
+  var sending = false;
+  function submit() {
+    if (sending) return;
+    if (PREVIEW) { errors = { form: "This is a preview, so sending is off. The client's own link sends it." }; render(); return; }
+    for (var i = 0; i < STEPS.length - 1; i++) { if (!checkStep(i)) { step = i; render(); focusErr(); return; } }
+    sending = true;
+    var nx = document.getElementById("next"); nx.disabled = true; nx.textContent = "Sending…";
+    var sig = state.sigKind === "drawn" ? { kind: "drawn", data: state.sigData } : { kind: "typed", data: state.signer.name };
+    api("POST", { t: T, action: "submit", signer: state.signer, signature: sig, consent: !!state.consent, answers: state.answers, payment_done: !!state.payDone, payment_note: state.payNote || "", hp_fax: state.hp || "" }).then(function (d) {
+      sending = false; nx.disabled = false; nx.textContent = "Sign and send back";
+      if (d.ok && d.packet) { P = d.packet; try { localStorage.removeItem(STORE); } catch (x) {} renderDone(true); return; }
+      if (d.packet && d.packet.returned) { P = d.packet; renderDone(false); return; }
+      if (d.errors) {
+        errors = d.errors;
+        for (var j = 0; j < STEPS.length; j++) { var sid = STEPS[j].id; var keys = Object.keys(errors);
+          var hit = keys.some(function (k) { return (sid === "agreement" && /^(signer_|signature|consent)/.test(k)) || (sid === "payment" && k === "payment") || (sid === "questions" && (P.questions || []).some(function (q) { return q.id === k; })); });
+          if (hit) { step = j; render(); focusErr(); return; } }
+      }
+      errors = { form: d.error || "Couldn't send. Please try again." }; render();
+      document.getElementById("bar-msg").textContent = errors.form;
+    });
+  }
+
+  /* ---------------- done / the client's copy ---------------- */
+  function renderDone(fresh) {
+    document.getElementById("steps-bar").hidden = true;
+    document.getElementById("bar").hidden = true;
+    document.getElementById("hero").hidden = false;
+    document.getElementById("hero-title").textContent = "You're all set.";
+    document.getElementById("hero-sub").textContent = "Thank you. Your signed agreement and answers are with the AI Syndicate team. We'll be in touch shortly about next steps.";
+    main.innerHTML = "";
+    var r = P.receipt || {};
+    if (fresh) main.appendChild(h("div", { class: "notice good", role: "status", text: "Sent. The team has it." }));
+    var top = h("section", { class: "card" }, [
+      h("h2", { text: "Your copy" }),
+      h("p", { class: "sub", text: "Keep this for your records. Print it, or save it as a PDF from the print screen." }),
+      h("p", { class: "no-print" }, h("button", { type: "button", class: "btn primary", onclick: function () { window.print(); }, text: "Print or save as PDF" })),
+      h("div", { class: "print-only" }, [h("h2", { text: P.business + " + AI Syndicate" }), h("p", { text: "Signed copy" })]),
+    ]);
+    main.appendChild(top);
+    main.appendChild(viewProposal());
+    var agr = h("section", { class: "card" }, [h("h2", { text: P.contract_title || "Agreement" })]);
+    if (P.contract_pdf) agr.appendChild(h("p", null, [h("a", { class: "btn small", href: P.contract_pdf.url, target: "_blank", rel: "noopener", text: "Open the agreement (PDF)" })]));
+    if (P.contract_text) agr.appendChild(contractNode());
+    var a = aisBlock(); if (a) agr.appendChild(a);
+    if (r.signer) agr.appendChild(h("div", { class: "signed-by" }, [h("div", { class: "sig" }, sigNode(r.signer.kind, r.signer.data)), h("div", { class: "who" }, [h("b", { text: r.signer.name }), (r.signer.title ? r.signer.title + " · " : "") + "Signed for " + P.business + " " + fmtTime(r.signer.signed_at)])]));
+    if (r.contract_sha256) agr.appendChild(h("p", { class: "hint", style: "overflow-wrap:anywhere", text: "Document fingerprint (SHA-256): " + r.contract_sha256 }));
+    main.appendChild(agr);
+    var ans = h("section", { class: "card" }, [h("h2", { text: "Your answers" })]);
+    (P.parts || []).forEach(function (part) {
+      var qs = (P.questions || []).filter(function (q) { return q.part === part.id && r.answers && r.answers[q.id] && String(r.answers[q.id]).length; });
+      if (!qs.length) return;
+      ans.appendChild(h("h3", { text: part.title }));
+      ans.appendChild(h("dl", { class: "answers" }, qs.reduce(function (acc, q) { var v = r.answers[q.id]; acc.push(h("dt", { text: q.label })); acc.push(h("dd", { text: Array.isArray(v) ? v.join(", ") : String(v) })); return acc; }, [])));
+    });
+    main.appendChild(ans);
+    window.scrollTo(0, 0);
+  }
+})();
+</script>
+</body>
+</html>
