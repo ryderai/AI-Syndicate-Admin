@@ -163,6 +163,9 @@ const SECTIONS = [
     ["overview", "Overview"],
     ["floor", "The Floor"],
     ["gmail", "Gmail"],
+    /* Start packets — Ryder, 7 Nov 2026: anyone doing sales can send one.
+     * A rep sees only their own (api/start-packets.js). */
+    ["start", "Start packets"],
     ["brain", "AI Brain"],
   ]},
   /* SALES IS TWO DIFFERENT MENUS — Ryder, Aug 26 2026.

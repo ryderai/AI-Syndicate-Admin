@@ -1,5 +1,8 @@
 /* /api/start-packets — the TEAM side of start packets. 6 Nov 2026.
- * Console members only (owner + admin). The client side is /api/start-public.
+ * Console members: owners, admins AND sales reps (Ryder, 7 Nov 2026: "anyone
+ * doing sales or getting new clients is able to easily just send" one). A rep
+ * sees and works only the packets they made or sent; owners and admins see
+ * all. The client side is /api/start-public.
  * The rules live in lib/start-packet.js; read its header first.
  *
  *   GET                         the list (newest first, 200 max)
@@ -61,8 +64,11 @@ function forConsole(p) {
 
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
-  const member = await requireMember(req, ["owner", "admin"]);
+  const member = await requireMember(req, ["owner", "admin", "sales"]);
   if (!member) return res.status(401).json({ error: "Not authorized." });
+  const isRep = member.membership?.role === "sales";
+  /* A rep's own packets only. Owners and admins: everything. */
+  const mine = (p) => !isRep || p.created_by === member.user.id || p.sent_by === member.user.id;
   const admin = getAdminSupabase();
   const myEmail = String(member.membership?.email || member.user?.email || "").toLowerCase();
   const isSigner = myEmail === SIGNER_EMAIL();
@@ -71,7 +77,7 @@ export default async function handler(req, res) {
     const id = req.query?.id || new URL(req.url, "http://x").searchParams.get("id");
     if (id) {
       const p = await load(admin, id);
-      if (!p) return res.status(404).json({ error: "No such packet." });
+      if (!p || !mine(p)) return res.status(404).json({ error: "No such packet." });
       const { data: events } = await admin.from("start_packet_events").select("kind,at,by_email,ip,detail").eq("packet_id", id).order("at", { ascending: true }).limit(200);
       let pdfUrl = null;
       if (p.contract_pdf_path) {
@@ -80,7 +86,9 @@ export default async function handler(req, res) {
       }
       return res.status(200).json({ packet: forConsole(p), events: events || [], pdfUrl, isSigner, signerEmail: SIGNER_EMAIL(), consoleUrl: consoleLink(p.id) });
     }
-    const { data, error } = await admin.from("start_packets").select(LIST_COLS).order("updated_at", { ascending: false }).limit(200);
+    let q = admin.from("start_packets").select(LIST_COLS).order("updated_at", { ascending: false }).limit(200);
+    if (isRep) q = q.eq("created_by", member.user.id);
+    const { data, error } = await q;
     if (error) return res.status(500).json({ error: error.message });
     return res.status(200).json({ packets: (data || []).map((p) => ({ ...p, stage: stageLabel(p) })), isSigner, signerEmail: SIGNER_EMAIL() });
   }
@@ -103,7 +111,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ packet: forConsole(data) });
     }
     const p = await load(admin, body.id);
-    if (!p) return res.status(404).json({ error: "No such packet." });
+    if (!p || !mine(p)) return res.status(404).json({ error: "No such packet." });
     if (LOCKED.includes(p.status)) return res.status(409).json({ error: "This packet was already sent, so it can't change. Cancel it and make a new one." });
     const next = { ...p, ...v };
     const patch = { ...v };
@@ -119,7 +127,7 @@ export default async function handler(req, res) {
   }
 
   const p = await load(admin, body.id);
-  if (!p) return res.status(404).json({ error: "No such packet." });
+  if (!p || !mine(p)) return res.status(404).json({ error: "No such packet." });
 
   /* ---------- the agreement PDF ---------- */
   if (action === "pdf_upload") {
