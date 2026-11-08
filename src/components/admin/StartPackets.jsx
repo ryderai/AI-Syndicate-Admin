@@ -10,10 +10,11 @@ import { questionsFor, partsFor, FORM_KINDS, stageLabel } from "../../../lib/sta
  *
  * Andrew (call, 6 Nov): Julia uploads the contract, the Stripe link and the
  * onboarding form, and the client gets "one email with one conversation".
- * Ryder (6 Nov): one of us fills it in, CJ signs it, we send it, the client
+ * Ryder (6 Nov): one of us fills it in and sends it (7 Nov: the sender signs
+ * for AI Syndicate — it was CJ only on 6 Nov), the client
  * fills it in and sends it back, and every team member gets a copy.
  *
- * Flow on this page:  Fill in → CJ signs → Make the link + send → (client) →
+ * Flow on this page:  Fill in → sign → Make the link + send → (client) →
  * Signed + sent back. The server rules: api/start-packets.js and
  * lib/start-packet.js. The client's page: public/start/index.html. */
 
@@ -60,33 +61,31 @@ function SigShow({ sig, name }) {
 export default function StartPackets({ member, query = "" }) {
   const urlId = new URLSearchParams(String(query).replace(/^\?/, "")).get("id");
   const [list, setList] = useState(null);
-  const [isSigner, setIsSigner] = useState(false);
-  const [signerEmail, setSignerEmail] = useState("cj@aisyndicate.com");
   const [openId, setOpenId] = useState(urlId || null);
   const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     const r = await apiFetch("/api/start-packets");
     if (!r.ok) { toast.error("Couldn't load start packets", r.error); setList([]); return; }
-    setList(r.data.packets || []); setIsSigner(Boolean(r.data.isSigner)); setSignerEmail(r.data.signerEmail || signerEmail);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    setList(r.data.packets || []);
+  }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (urlId) setOpenId(urlId); }, [urlId]);
 
   const open = (id) => { setCreating(false); setOpenId(id); window.history.replaceState(null, "", `#/dashboard/start${id ? `?id=${id}` : ""}`); };
 
   if (creating || openId) {
-    return <PacketEditor key={openId || "new"} id={openId} member={member} isSigner={isSigner} signerEmail={signerEmail}
+    return <PacketEditor key={openId || "new"} id={openId} member={member}
       onBack={() => { open(null); load(); }} onCreated={(id) => { setCreating(false); open(id); load(); }} />;
   }
 
   return (
     <div style={{ maxWidth: 1100 }}>
       <SectionHeader kicker="DELIVERY" title="Start packets"
-        subtitle="One link for a new client: the proposal, the agreement, the onboarding questions and the Stripe link. CJ signs, you send, they sign and send it back, and the whole team gets a copy."
+        subtitle="One link for a new client: the proposal, the agreement, the onboarding questions and the Stripe link. You sign and send, they sign and send it back, and the whole team gets a copy."
         right={<button className="btn btn-accent" onClick={() => setCreating(true)}>New start packet</button>} />
       <ol style={{ display: "flex", flexWrap: "wrap", gap: 8, listStyle: "none", padding: 0, margin: "8px 0 18px" }}>
-        {["Fill it in", "CJ signs", "Send the link", "Client signs + answers + pays", "Team gets a copy"].map((s, i) => (
+        {["Fill it in", "Sign it", "Send the link", "Client signs + answers + pays", "Team gets a copy"].map((s, i) => (
           <li key={s} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--bg-1, #fafbfc)", border: "1px solid var(--rule)", borderRadius: 99, padding: "6px 12px 6px 6px", fontSize: 13, fontWeight: 600 }}>
             <span style={{ width: 22, height: 22, borderRadius: "50%", background: "var(--accent-soft)", color: "var(--accent-deep)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}>{i + 1}</span>{s}
           </li>
@@ -117,7 +116,7 @@ export default function StartPackets({ member, query = "" }) {
   );
 }
 
-function PacketEditor({ id, member, isSigner, signerEmail, onBack, onCreated }) {
+function PacketEditor({ id, member, onBack, onCreated }) {
   const [p, setP] = useState(id ? null : { ...EMPTY, status: "draft" });
   const [events, setEvents] = useState([]);
   const [pdfUrl, setPdfUrl] = useState(null);
@@ -153,8 +152,8 @@ function PacketEditor({ id, member, isSigner, signerEmail, onBack, onCreated }) 
     setBusy("");
     if (!r.ok) { setErrors(r.status === 400 ? (r.data?.errors || {}) : {}); toast.error("Not saved", r.error); return false; }
     setErrors({}); setDirty(false);
-    if (!p.id) { toast.success("Saved", "Now CJ signs it."); onCreated(r.data.packet.id); return true; }
-    toast.success("Saved", r.data.cjSignatureCleared ? "You changed what CJ signed, so his signature was cleared. He signs again." : "");
+    if (!p.id) { toast.success("Saved", "Now sign it, then send it."); onCreated(r.data.packet.id); return true; }
+    toast.success("Saved", r.data.cjSignatureCleared ? "You changed what was signed, so the signature was cleared. Sign it again." : "");
     await load(); return true;
   };
 
@@ -170,7 +169,7 @@ function PacketEditor({ id, member, isSigner, signerEmail, onBack, onCreated }) 
     setBusy("");
     if (error) { toast.error("Upload failed", error.message); return; }
     const done = await call("pdf_attached", { path: u.path, name: file.name }, "Couldn't attach it");
-    if (done) { toast.success("Agreement PDF attached", done.cjSignatureCleared ? "CJ's signature was cleared — he signs again." : ""); load(); }
+    if (done) { toast.success("Agreement PDF attached", done.cjSignatureCleared ? "The signature was cleared — sign it again." : ""); load(); }
   };
 
   const err = (k) => errors[k] ? <div style={{ color: "var(--danger)", fontSize: 12.5, fontWeight: 600, marginTop: -8, marginBottom: 10 }}>{errors[k]}</div> : null;
@@ -178,7 +177,7 @@ function PacketEditor({ id, member, isSigner, signerEmail, onBack, onCreated }) 
   return (
     <div style={{ maxWidth: 1000 }}>
       <button className="btn btn-sm" onClick={onBack} style={{ marginBottom: 12 }}>← All start packets</button>
-      <SectionHeader kicker="START PACKET" title={p.business || "New start packet"} subtitle={p.id ? stageLabel(p) : "Fill it in, then save. CJ signs next."} right={p.id ? <Pill status={p.status} /> : null} />
+      <SectionHeader kicker="START PACKET" title={p.business || "New start packet"} subtitle={p.id ? stageLabel(p) : "Fill it in, then save. You sign it next."} right={p.id ? <Pill status={p.status} /> : null} />
 
       {p.status === "returned" && <Returned p={p} pdfUrl={pdfUrl} call={call} reload={load} />}
 
@@ -254,11 +253,11 @@ function PacketEditor({ id, member, isSigner, signerEmail, onBack, onCreated }) 
       {!locked && (
         <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "6px 0 18px", flexWrap: "wrap" }}>
           <button className="btn btn-accent" disabled={!!busy} onClick={save}>{busy === "save" ? "Saving…" : p.id ? "Save changes" : "Save"}</button>
-          {dirty && p.id && <span style={{ fontSize: 13, color: "var(--ink-dim)" }}>Unsaved changes{p.ais_signed_at ? " — saving a change clears CJ's signature" : ""}</span>}
+          {dirty && p.id && <span style={{ fontSize: 13, color: "var(--ink-dim)" }}>Unsaved changes{p.ais_signed_at ? " — saving a change clears the signature" : ""}</span>}
         </div>
       )}
 
-      {p.id && !locked && <CjSign p={p} isSigner={isSigner} signerEmail={signerEmail} dirty={dirty} call={call} reload={load} />}
+      {p.id && !locked && <SignPanel p={p} member={member} dirty={dirty} call={call} reload={load} />}
       {p.id && p.ais_signed_at && ["ready", "sent", "opened"].includes(p.status) && <SendPanel p={p} member={member} dirty={dirty} call={call} reload={load} />}
       {p.id && p.status !== "void" && p.status !== "returned" && (
         <div style={{ margin: "18px 0" }}>
@@ -270,10 +269,10 @@ function PacketEditor({ id, member, isSigner, signerEmail, onBack, onCreated }) 
   );
 }
 
-function CjSign({ p, isSigner, signerEmail, dirty, call, reload }) {
+function SignPanel({ p, member, dirty, call, reload }) {
   const [kind, setKind] = useState("typed");
   const [drawn, setDrawn] = useState("");
-  const [title, setTitle] = useState("Co-owner, AI Syndicate");
+  const [title, setTitle] = useState("AI Syndicate");
   const onDraw = useCallback((d) => setDrawn(d), []);
   if (p.ais_signed_at) {
     return (
@@ -286,16 +285,6 @@ function CjSign({ p, isSigner, signerEmail, dirty, call, reload }) {
       </div>
     );
   }
-  if (!isSigner) {
-    return (
-      <div className="card" style={{ padding: 20, marginBottom: 14 }}>
-        <h3 style={{ margin: "0 0 8px", fontFamily: "var(--display)" }}>5 · Waiting for CJ to sign</h3>
-        <p style={{ margin: "0 0 12px", fontSize: 14, color: "var(--ink-2)" }}>Only {signerEmail} can sign for AI Syndicate. Once he signs, you can make the link and send it.</p>
-        <button className="btn" disabled={dirty} onClick={async () => { if (await call("ask_cj", {}, "Email didn't send")) toast.success("CJ was emailed", "He gets a link to this packet."); }}>Email CJ to sign it</button>
-        {dirty && <span style={{ marginLeft: 10, fontSize: 13, color: "var(--ink-dim)" }}>Save first.</span>}
-      </div>
-    );
-  }
   return (
     <div className="card" style={{ padding: 20, marginBottom: 14, borderColor: "var(--accent)" }}>
       <h3 style={{ margin: "0 0 8px", fontFamily: "var(--display)" }}>5 · Sign for AI Syndicate</h3>
@@ -305,10 +294,10 @@ function CjSign({ p, isSigner, signerEmail, dirty, call, reload }) {
         <button type="button" className={`btn btn-sm ${kind === "typed" ? "btn-primary" : ""}`} aria-pressed={kind === "typed"} onClick={() => setKind("typed")}>Type my name</button>
         <button type="button" className={`btn btn-sm ${kind === "drawn" ? "btn-primary" : ""}`} aria-pressed={kind === "drawn"} onClick={() => setKind("drawn")}>Draw</button>
       </div>
-      {kind === "drawn" ? <SigPad onChange={onDraw} /> : <div style={{ padding: "8px 12px", border: "1px solid var(--rule)", borderRadius: 12, background: "#fff" }}><SigShow sig={{ kind: "typed" }} name="CJ Britton" /></div>}
+      {kind === "drawn" ? <SigPad onChange={onDraw} /> : <div style={{ padding: "8px 12px", border: "1px solid var(--rule)", borderRadius: 12, background: "#fff" }}><SigShow sig={{ kind: "typed" }} name={member?.membership?.full_name || "Your name"} /></div>}
       <div style={{ marginTop: 12 }}>
         <button className="btn btn-accent" disabled={dirty || (kind === "drawn" && !drawn)} onClick={async () => {
-          const r = await call("cj_sign", { title, updated_at: p.updated_at, signature: kind === "drawn" ? { kind, data: drawn } : { kind: "typed", data: "" } }, "Couldn't sign");
+          const r = await call("sign", { title, updated_at: p.updated_at, signature: kind === "drawn" ? { kind, data: drawn } : { kind: "typed", data: "" } }, "Couldn't sign");
           if (r) { toast.success("Signed", "Now make the link and send it."); reload(); }
         }}>Sign for AI Syndicate</button>
         {dirty && <span style={{ marginLeft: 10, fontSize: 13, color: "var(--ink-dim)" }}>Save first.</span>}
@@ -428,7 +417,7 @@ function Returned({ p, pdfUrl, call, reload }) {
 }
 
 const EVENT_WORDS = {
-  created: "Made", edited: "Edited", edited_cj_signature_cleared: "Edited — CJ's signature cleared", pdf_attached: "Agreement PDF attached", pdf_removed: "Agreement PDF removed",
+  created: "Made", edited: "Edited", edited_cj_signature_cleared: "Edited — signature cleared", signed: "Signed for AI Syndicate", pdf_attached: "Agreement PDF attached", pdf_removed: "Agreement PDF removed",
   cj_signed: "CJ signed for AI Syndicate", asked_cj: "CJ emailed to sign", link_made: "Link made", link_replaced: "New link made (old one stopped working)", sent: "Sent to the client",
   opened: "Client opened it", returned: "Client signed and sent it back", team_copy_sent: "Team copy emailed", team_copy_failed: "Team copy FAILED to email", team_copy_resent: "Team copy emailed again",
   payment_checked: "Stripe checked", cancelled: "Cancelled",

@@ -9,12 +9,13 @@
  *   GET  ?id=<uuid>             one packet + its events (+ a 10-minute PDF link)
  *   POST { action, ... }
  *     save          { id?, ...fields }   create or update. Locked once sent.
- *                                        A change to what CJ signed clears his signature.
+ *                                        A change to what was signed clears the signature.
  *     pdf_upload    { id, name }         a one-time upload URL for the agreement PDF
  *     pdf_attached  { id, path, name }   after the browser uploaded it: hash it, attach it
  *     pdf_remove    { id }
- *     cj_sign       { id, title?, signature:{kind,data} }   ONLY CJ's login (START_SIGNER_EMAIL)
- *     ask_cj        { id }               emails CJ that a packet waits for his signature
+ *     sign          { id, updated_at, title?, signature:{kind,data} }   the person sending signs
+ *                                        for AI Syndicate (Ryder, 7 Nov 2026: "Why can it not come
+ *                                        from the person sending the email?"). Was CJ-only on 6 Nov.
  *     make_link     { id }               a fresh private link (the old one stops working)
  *     mark_sent     { id, via, to }      after the person sent it (Gmail or copied)
  *     check_payment { id }               read-only Stripe check of the packet's customer
@@ -27,7 +28,7 @@ import { requireMember, getAdminSupabase, readJson } from "../lib/supabase-serve
 import { getStripe } from "../lib/stripe-server.js";
 import { newToken, hashToken, adminBaseUrl } from "../lib/linkedin-tokens.js";
 import {
-  validateDraft, contentFingerprint, checkSignature, SIGNER_EMAIL, SIGNER_NAME_DEFAULT, LINK_DAYS,
+  validateDraft, contentFingerprint, checkSignature, LINK_DAYS,
   stageLabel, teamList, teamEmail, clientEmailDraft, checkStripeCard, sha256,
 } from "../lib/start-packet.js";
 import { sendTeamEmail } from "../lib/start-notify.js";
@@ -71,7 +72,6 @@ export default async function handler(req, res) {
   const mine = (p) => !isRep || p.created_by === member.user.id || p.sent_by === member.user.id;
   const admin = getAdminSupabase();
   const myEmail = String(member.membership?.email || member.user?.email || "").toLowerCase();
-  const isSigner = myEmail === SIGNER_EMAIL();
 
   if (req.method === "GET") {
     const id = req.query?.id || new URL(req.url, "http://x").searchParams.get("id");
@@ -84,13 +84,13 @@ export default async function handler(req, res) {
         const { data } = await admin.storage.from(BUCKET).createSignedUrl(p.contract_pdf_path, 600);
         pdfUrl = data?.signedUrl || null;
       }
-      return res.status(200).json({ packet: forConsole(p), events: events || [], pdfUrl, isSigner, signerEmail: SIGNER_EMAIL(), consoleUrl: consoleLink(p.id) });
+      return res.status(200).json({ packet: forConsole(p), events: events || [], pdfUrl, consoleUrl: consoleLink(p.id) });
     }
     let q = admin.from("start_packets").select(LIST_COLS).order("updated_at", { ascending: false }).limit(200);
     if (isRep) q = q.eq("created_by", member.user.id);
     const { data, error } = await q;
     if (error) return res.status(500).json({ error: error.message });
-    return res.status(200).json({ packets: (data || []).map((p) => ({ ...p, stage: stageLabel(p) })), isSigner, signerEmail: SIGNER_EMAIL() });
+    return res.status(200).json({ packets: (data || []).map((p) => ({ ...p, stage: stageLabel(p) })) });
   }
 
   if (req.method !== "POST") { res.setHeader("Allow", "GET, POST"); return res.status(405).json({ error: "Method not allowed." }); }
@@ -165,16 +165,15 @@ export default async function handler(req, res) {
     return res.status(200).json({ packet: forConsole(data) });
   }
 
-  /* ---------- CJ signs for AI Syndicate ---------- */
-  if (action === "cj_sign") {
-    if (!isSigner) return res.status(403).json({ error: `Only ${SIGNER_EMAIL()} can sign for AI Syndicate.` });
+  /* ---------- the sender signs for AI Syndicate ---------- */
+  if (action === "sign" || action === "cj_sign") {
     if (LOCKED.includes(p.status)) return res.status(409).json({ error: "Already sent." });
     const check = validateDraft({ ...p, has_pdf: Boolean(p.contract_pdf_path) }, { forSend: true });
     if (!check.ok) return res.status(400).json({ error: "Fill these in before signing.", errors: check.errors });
-    const name = String(member.membership?.full_name || SIGNER_NAME_DEFAULT).slice(0, 120);
+    const name = String(member.membership?.full_name || myEmail).slice(0, 120);
     const sig = checkSignature(body.signature, name);
     if (!sig.ok) return res.status(400).json({ error: sig.error });
-    /* He signs what was on HIS screen: if anyone saved since he opened it, refuse. */
+    /* They sign what was on THEIR screen: if anyone saved since they opened it, refuse. */
     const sameVersion = body.updated_at && new Date(body.updated_at).getTime() === new Date(p.updated_at).getTime();
     /* (A save landing in the milliseconds after this check is still caught:
      * the stored fingerprint would no longer match, so make_link and the
@@ -182,29 +181,19 @@ export default async function handler(req, res) {
     if (!sameVersion) return res.status(409).json({ error: "Someone changed this packet since you opened it. Reload, read it again, then sign." });
     const fp = contentFingerprint(p);
     const { data, error } = await admin.from("start_packets").update({
-      ais_signer_name: name, ais_signer_title: String(body.title || "Co-owner, AI Syndicate").slice(0, 120), ais_signer_email: myEmail,
+      ais_signer_name: name, ais_signer_title: String(body.title || "AI Syndicate").slice(0, 120), ais_signer_email: myEmail,
       ais_signature: sig.value, ais_signed_at: new Date().toISOString(), ais_signed_by: member.user.id,
       contract_sha256: fp, status: "ready",
     }).eq("id", p.id).in("status", ["draft", "ready"]).select("*").maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
     if (!data) return res.status(409).json({ error: "Someone changed this packet just now. Reload, read it again, then sign." });
-    await logEvent(admin, p.id, "cj_signed", member, req, { sha256: fp, kind: sig.value.kind });
+    await logEvent(admin, p.id, "signed", member, req, { sha256: fp, kind: sig.value.kind });
     return res.status(200).json({ packet: forConsole(data) });
   }
-  if (action === "ask_cj") {
-    const r = await sendTeamEmail({
-      to: [SIGNER_EMAIL()], allowed: teamList([SIGNER_EMAIL()]),
-      subject: `Ready for your signature: ${p.business} start packet`,
-      text: `${myEmail || "Someone on the team"} filled in the start packet for ${p.business}. It needs your signature before it can go to the client.\n\nOpen it, read it, and press "Sign for AI Syndicate":\n${consoleLink(p.id)}\n\n— AI Syndicate console`,
-    });
-    await logEvent(admin, p.id, "asked_cj", member, req, { sent: r.sent, reason: r.reason || null });
-    return res.status(r.sent ? 200 : 502).json(r.sent ? { ok: true } : { error: `Email didn't send (${r.reason}).` });
-  }
-
   /* ---------- the private link ---------- */
   if (action === "make_link") {
-    if (!p.ais_signed_at || !["ready", "sent", "opened"].includes(p.status)) return res.status(409).json({ error: "CJ signs first. Then you can make the link." });
-    if (contentFingerprint(p) !== p.contract_sha256) return res.status(409).json({ error: "The packet changed after CJ signed. He needs to sign again." });
+    if (!p.ais_signed_at || !["ready", "sent", "opened"].includes(p.status)) return res.status(409).json({ error: "Sign it first. Then you can make the link." });
+    if (contentFingerprint(p) !== p.contract_sha256) return res.status(409).json({ error: "The packet changed after it was signed. Sign it again." });
     const token = newToken();
     const expires = new Date(Date.now() + LINK_DAYS * 86400000).toISOString();
     const { error } = await admin.from("start_packets").update({ token_hash: hashToken(token), token_expires_at: expires }).eq("id", p.id);

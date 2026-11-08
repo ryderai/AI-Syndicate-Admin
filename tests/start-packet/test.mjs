@@ -2,7 +2,7 @@
  * Run: node tests/start-packet/test.mjs — no key, no network. */
 import {
   validateDraft, validateReturn, contentFingerprint, fillBlanks, paymentLinkFor, publicView, teamEmail, clientEmailDraft,
-  checkSignature, teamList, questionsFor, partsFor, stageLabel, checkStripeCard, SIGNER_EMAIL, CONSENT_TEXT, QUESTIONS,
+  checkSignature, teamList, questionsFor, partsFor, stageLabel, checkStripeCard, CONSENT_TEXT, QUESTIONS,
 } from "../../lib/start-packet.js";
 import { sendTeamEmail } from "../../lib/start-notify.js";
 
@@ -49,7 +49,6 @@ ok("the Stripe link is part of what's signed", contentFingerprint({ ...base, pay
 ok("the website is part of what's signed", contentFingerprint({ ...base, website: "https://other.example.com/" }) !== fp);
 ok("the question set is part of what's signed", contentFingerprint({ ...base, form_kind: "website_geo" }) !== fp);
 ok("form_kind 'constructor' can't sneak through", validateDraft({ ...base, form_kind: "constructor" }).value.form_kind === "geo");
-ok("the signer is CJ by default", SIGNER_EMAIL() === "cj@aisyndicate.com");
 
 // ---- blanks
 const filled = fillBlanks(base.contract_text, base, new Date("2026-11-06T18:00:00Z"));
@@ -127,7 +126,7 @@ ok("START_PACKET_TEAM overrides the list", teamList().join() === "a@aisyndicate.
 delete process.env.START_PACKET_TEAM;
 const ce = clientEmailDraft(base, "https://x/start/?t=abc", "Julia Craig");
 ok("client email has the link, their first name and the sender", ce.body.includes("https://x/start/?t=abc") && ce.body.startsWith("Hi Pat,") && ce.body.trim().endsWith("Julia Craig"));
-ok("stage labels read plainly", stageLabel({ status: "draft" }).includes("CJ") && stageLabel({ status: "returned" }) === "Signed + sent back");
+ok("stage labels read plainly", stageLabel({ status: "draft" }).includes("sign it") && stageLabel({ status: "returned" }) === "Signed + sent back");
 
 // ---- Stripe check never throws and never writes
 const calls = [];
