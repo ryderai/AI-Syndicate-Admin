@@ -281,6 +281,8 @@
     document.getElementById("hero").hidden = false;
     var first = (P.contact_name || "").split(/\s+/)[0];
     document.getElementById("hero-title").textContent = first ? "Welcome, " + first + "." : "Let's get you started.";
+    if (P.onboarding) document.getElementById("hero-sub").textContent = "Everything is in one place: the proposal, the agreement" + (P.payment ? ", our onboarding form, and payment." : ", and our onboarding form.") + " It takes about 10 minutes, and you can come back to this link any time.";
+    else if (!P.payment) document.getElementById("hero-sub").textContent = "Everything is in one place: the proposal, the agreement, and a few questions about your business. It takes about 10 minutes, and you can come back to this link any time.";
     document.getElementById("hero-eyebrow").textContent = "Start packet · " + (P.business || "") + " · AI Syndicate";
     document.getElementById("spot-steps").textContent = STEPS.length + ", one at a time";
     document.getElementById("hero-foot").textContent = STEPS.length + " steps · " + STEPS.map(function (s) { return s.label; }).join(" → ");
@@ -299,6 +301,12 @@
   });
 
   /* ---------------- steps ---------------- */
+  /* After Next/Back, land on the step itself, not the big welcome at the top. */
+  function toStepTop() {
+    var bar = document.getElementById("steps-bar");
+    var y = bar && !bar.hidden ? bar.getBoundingClientRect().top + window.pageYOffset : 0;
+    window.scrollTo(0, y);
+  }
   function renderSteps() {
     var box = document.getElementById("steps"); box.innerHTML = "";
     STEPS.forEach(function (s, i) {
@@ -308,7 +316,7 @@
   }
   function go(i) {
     if (i > step) { for (var k = step; k < i; k++) { if (!checkStep(k)) { step = k; render(); focusErr(); return; } } }
-    step = Math.max(0, Math.min(STEPS.length - 1, i)); errors = {}; render(); window.scrollTo(0, 0);
+    step = Math.max(0, Math.min(STEPS.length - 1, i)); errors = {}; render(); toStepTop();
   }
   function render() {
     renderSteps();
