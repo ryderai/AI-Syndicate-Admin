@@ -227,8 +227,8 @@ function PacketEditor({ id, member, onBack, onCreated }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0 16px" }}>
             <Field label="Business name *"><TextInput value={p.business} onChange={(e) => set("business", e.target.value)} /></Field>
             <Field label="Website"><TextInput value={p.website || ""} onChange={(e) => set("website", e.target.value)} placeholder="example.com" /></Field>
-            <Field label="Who signs (name) *"><TextInput value={p.contact_name || ""} onChange={(e) => set("contact_name", e.target.value)} /></Field>
-            <Field label="Their email *"><TextInput type="email" value={p.contact_email || ""} onChange={(e) => set("contact_email", e.target.value)} /></Field>
+            <Field label="Client's name (the person who signs) *"><TextInput value={p.contact_name || ""} onChange={(e) => set("contact_name", e.target.value)} placeholder="Their name, not yours" /></Field>
+            <Field label="Client's email *"><TextInput type="email" value={p.contact_email || ""} onChange={(e) => set("contact_email", e.target.value)} placeholder="Where the packet email goes" /></Field>
           </div>
           {err("business")}{err("contact_name")}{err("contact_email")}{err("website")}
         </div>
@@ -272,7 +272,7 @@ function PacketEditor({ id, member, onBack, onCreated }) {
               return (
                 <label key={k} style={{ display: "flex", gap: 10, alignItems: "flex-start", border: `1px solid ${on ? "var(--accent)" : "var(--rule)"}`, background: on ? "var(--accent-soft)" : "#fff", borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
                   <input type="radio" name="sp-onboarding" checked={on} onChange={() => setProp("onboarding_url", k === "form" ? (p.proposal.onboarding_url || standardFormLink(p.business, p.website)) : "")} style={{ marginTop: 3 }} />
-                  <span><b style={{ fontSize: 14 }}>{title}</b><br /><span style={{ fontSize: 12.5, color: "var(--ink-dim)" }}>{sub}</span></span>
+                  <span><b style={{ fontSize: 14 }}>{title}</b><br /><span style={{ fontSize: 12.5, color: "#46607f" }}>{sub}</span></span>
                 </label>
               );
             })}
@@ -405,10 +405,11 @@ function SendPanel({ p, member, dirty, call, reload }) {
 
   return (
     <div className="card" style={{ padding: 20, marginBottom: 14, borderColor: "var(--accent)" }}>
-      <h3 style={{ margin: "0 0 8px", fontFamily: "var(--display)" }}>7 · Send it to {p.contact_name || "the client"}</h3>
+      <h3 style={{ margin: "0 0 8px", fontFamily: "var(--display)" }}>7 · Email it to {p.contact_name || "the client"}</h3>
+      {!draft && p.status === "ready" && <p style={{ margin: "0 0 12px", fontSize: 14, color: "var(--ink-dim)" }}>This button makes {p.contact_name ? `${p.contact_name}'s` : "their"} private link and writes the email. Nothing is sent yet — you read the email, then press Send.</p>}
       {p.status !== "ready" && <p style={{ margin: "0 0 10px", fontSize: 14 }}>Sent {fmt(p.sent_at)}{p.sent_by_email ? ` by ${p.sent_by_email}` : ""}{p.opened_at ? ` · opened ${fmt(p.opened_at)}` : " · not opened yet"}.</p>}
       {!draft ? (
-        <button className="btn btn-accent" disabled={dirty} onClick={make}>{p.has_link ? "Make a new link" : "Make the link"}</button>
+        <button className="btn btn-accent" disabled={dirty} onClick={make}>{p.has_link ? "Make a new link + email" : "Make the link + write the email"}</button>
       ) : (
         <>
           <div style={{ marginBottom: 14 }}>
@@ -423,7 +424,7 @@ function SendPanel({ p, member, dirty, call, reload }) {
                 <select className="adm-input" value={box} onChange={(e) => setBox(e.target.value)} style={{ width: "auto" }} aria-label="Send from">
                   {boxes.map((b) => <option key={b.email_address} value={b.email_address}>{b.email_address}</option>)}
                 </select>
-                <button className="btn btn-accent" disabled={sending || !box} onClick={sendGmail}>{sending ? "Sending…" : `Send to ${p.contact_email}`}</button>
+                <button className="btn btn-accent" disabled={sending || !box} onClick={sendGmail}>{sending ? "Sending…" : `Send the email to ${p.contact_email}`}</button>
               </>
             )}
             <button className="btn" onClick={copied}>Copy the email</button>

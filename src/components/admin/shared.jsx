@@ -219,7 +219,7 @@ export function Field({ label, children, hint }) {
     <label style={{ display: "block", marginBottom: 14 }}>
       <div className="label" style={{ marginBottom: 6 }}>{label}</div>
       {children}
-      {hint && <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-faint)" }}>{hint}</div>}
+      {hint && <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--ink-dim)" }}>{hint}</div>}
     </label>
   );
 }
