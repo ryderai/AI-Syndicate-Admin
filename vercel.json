@@ -89,6 +89,12 @@
     },
     "api/linkedin-reports.js": {
       "maxDuration": 300
+    },
+    "api/start-packets.js": {
+      "maxDuration": 30
+    },
+    "api/start-public.js": {
+      "maxDuration": 30
     }
   },
   "crons": [

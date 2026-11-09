@@ -1036,8 +1036,11 @@ const pageIdsFor = (role) => groupsFor(role).flatMap((g) =>
  * moment it changed the most.
  */
 
-test("a rep's console is four pages: Overview, The Floor, Gmail and AI Brain", () => {
-  assert.deepEqual(pageIdsFor("sales"), ["overview", "floor", "gmail", "brain"]);
+test("a rep's console is five pages: Overview, The Floor, Gmail, Start packets and AI Brain", () => {
+  /* CHANGED 7 Nov 2026, deliberately. Ryder: "anyone doing sales or getting
+   * new clients is able to easily just send" a start packet. A rep sees only
+   * their own packets (api/start-packets.js). */
+  assert.deepEqual(pageIdsFor("sales"), ["overview", "floor", "gmail", "start", "brain"]);
   /* The two that went away. Not renamed — absorbed: Work became Overview, and
    * the Floor with the switch on "Mine" IS My leads. An id that stops existing
    * has to stop existing everywhere, or an old bookmark quietly lands on the
@@ -1128,9 +1131,9 @@ test("TWO PAGE IDS ARE SHARED WITH THE OWNER, AND THE ROLE PICKS THE COMPONENT",
   assert.match(DASH, /<RepBrain member=\{member\} \/>/);
 });
 
-test("the rep's four items are named in Ryder's words", () => {
+test("the rep's five items are named in Ryder's words", () => {
   const items = groupsFor("sales").flatMap((g) => g.items).map(([, label]) => label);
-  assert.deepEqual(items, ["Overview", "The Floor", "Gmail", "AI Brain"]);
+  assert.deepEqual(items, ["Overview", "The Floor", "Gmail", "Start packets", "AI Brain"]);  // Start packets added 7 Nov 2026
 });
 
 test("every rep page id has a sidebar icon", () => {
