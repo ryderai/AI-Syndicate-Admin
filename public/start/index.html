@@ -19,7 +19,7 @@
 <meta name="twitter:title" content="Get started with AI Syndicate">
 <meta name="twitter:description" content="Your proposal, agreement, a few questions and payment — all in one place.">
 <meta name="twitter:image" content="https://ai-syndicate-admin.vercel.app/start/og.jpg">
-<meta name="theme-color" content="#0a2245">
+<meta name="theme-color" content="#ffffff">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.png" type="image/png">
 <link rel="apple-touch-icon" href="/favicon.png">
@@ -28,37 +28,62 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
-    --ink:#0a2245; --ink-2:#2d4663; --ink-dim:#5a7290; --ink-faint:#9eb1c7;
-    --accent:#5b5bd6; --accent-2:#8b5cf6; --accent-deep:#4338ca; --accent-soft:#eef0ff;
-    --rule:#e1e8f0; --bg:#f5f8fb; --card:#fff; --ok:#00813a; --ok-soft:#e8f7ee; --danger:#c8102e; --danger-soft:#fdecef;
-    --display:"Inter Tight", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --ink:#0a2245; --ink-2:#2d4663; --ink-dim:#5a6b85; --ink-faint:#9eb1c7;
+    --accent:#5b4ff0; --accent-2:#8b5cf6; --accent-deep:#4a3fe0; --accent-soft:#f1efff;
+    --rule:#e3e6f0; --bg:#f6f6fc; --card:#fff; --page:#fff;
+    --pill:linear-gradient(90deg,#7c4dff,#3f63e8); --beam:rgba(139,92,246,.16); --wrap:960px; --ok:#00813a; --ok-soft:#e8f7ee; --danger:#c8102e; --danger-soft:#fdecef;
+    --display:"Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
     --body:"Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     --radius:14px;
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
-  body { margin:0; font: 16px/1.6 var(--body); color: var(--ink); background: var(--bg); overflow-x: hidden; }
+  body { margin:0; font: 16px/1.6 var(--body); color: var(--ink); background: var(--page); overflow-x: hidden; }
   a { color: var(--accent-deep); }
   [hidden] { display: none !important; }
-  .top { background: var(--ink); color: #fff; }
-  .top-in { max-width: 860px; margin: 0 auto; padding: 14px 16px; display:flex; align-items:center; gap:10px; }
-  .brand { display:flex; align-items:center; gap:10px; font: 700 18px/1 var(--display); letter-spacing:-.01em; color:#fff; text-decoration:none; }
-  .brand svg { width: 30px; height: 30px; flex: none; }
-  .top .for { margin-left:auto; font-size: 13px; color: #c9d6e6; text-align:right; min-width: 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width: 55%; }
-  .hero { background: linear-gradient(135deg, #0a2245 0%, #24306e 55%, #4338ca 100%); color:#fff; }
-  .hero-in { max-width: 860px; margin: 0 auto; padding: 28px 16px 30px; }
-  .hero h1 { font: 800 clamp(26px, 6vw, 40px)/1.12 var(--display); letter-spacing: -.02em; margin: 0 0 8px; }
-  .hero p { margin: 0; color: #d7defa; font-size: clamp(15px, 3.6vw, 17px); max-width: 60ch; }
-  .steps-bar { position: sticky; top: 0; z-index: 5; background: rgba(245,248,251,.96); backdrop-filter: blur(6px); border-bottom: 1px solid var(--rule); }
-  .steps-in { max-width: 860px; margin: 0 auto; padding: 10px 16px; display:flex; gap:6px; overflow-x:auto; scrollbar-width: none; }
+  .top { background: rgba(255,255,255,.92); border-bottom: 1px solid var(--rule); }
+  .top-in { max-width: var(--wrap); margin: 0 auto; padding: 14px 16px; min-height: 64px; display:flex; align-items:center; gap:10px; }
+  .brand { display:flex; align-items:center; gap:10px; font: 700 15px/1 var(--display); letter-spacing:.12em; text-transform: uppercase; color: var(--ink); text-decoration:none; white-space: nowrap; flex: none; }
+  .brand svg { width: 28px; height: 28px; flex: none; }
+  .top .for { margin-left:auto; font-size: 13px; font-weight: 600; color: var(--ink-dim); text-align:right; min-width: 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width: 55%; }
+  /* Hero — same look as our onboarding form: white, a faint purple light beam, big navy headline */
+  .hero { position: relative; overflow: hidden; isolation: isolate; background: #fff; color: var(--ink); border-bottom: 1px solid var(--rule); }
+  .beam { position: absolute; inset: 0; z-index: -1; pointer-events: none;
+    background: radial-gradient(ellipse 42% 55% at 80% 40%, var(--beam), transparent 70%),
+                conic-gradient(from 228deg at 98% 4%, transparent 0deg, var(--beam) 14deg, transparent 30deg); }
+  @media (prefers-reduced-motion: no-preference) { .beam { animation: sweep 9s ease-in-out infinite alternate; } @keyframes sweep { from { transform: translateX(-2%) rotate(-1deg); } to { transform: translateX(2%) rotate(1deg); } } }
+  .hero-in { position: relative; max-width: var(--wrap); margin: 0 auto; padding: clamp(40px, 8vh, 88px) 16px 36px; }
+  .eyebrow { margin: 0 0 18px; font-size: 13px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent); overflow-wrap: anywhere; }
+  .hero h1 { font: 700 clamp(40px, 8vw, 76px)/1.02 var(--display); letter-spacing: -2px; margin: 0; max-width: 12ch; overflow-wrap: anywhere; }
+  .hero .lede { margin: 22px 0 0; color: var(--ink-2); font-size: clamp(18px, 2.2vw, 21px); line-height: 1.45; max-width: 36ch; }
+  .hero-cta { margin-top: 30px; display:flex; flex-wrap: wrap; align-items:center; gap: 14px 24px; }
+  .pill { display:inline-flex; align-items:center; justify-content:center; min-height: 52px; padding: 0 32px; border-radius: 999px; background: var(--pill); color:#fff; font: 700 16px/1 var(--body); text-decoration:none; border:0; cursor:pointer; }
+  .pill:hover { filter: brightness(1.06); }
+  .hero-note { font-size: 15px; color: var(--ink-dim); }
+  .spots { list-style:none; margin: 36px 0 0; padding: 0; display:grid; gap: 16px; }
+  .spot { display:grid; grid-template-columns: 28px 1fr; column-gap: 14px; align-items:center; max-width: 320px; padding-bottom: 10px; border-bottom: 1px solid #c9cfe0; }
+  .spot-dot { grid-row: span 2; width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--ink); position: relative; }
+  .spot-dot::after { content:""; position:absolute; inset: 9px; border-radius: 50%; border: 1.5px solid var(--ink); }
+  .spot-k { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .spot-v { font-size: 18px; color: var(--ink); }
+  @media (min-width: 900px) {
+    .spots { position: absolute; right: 16px; top: clamp(70px, 12vh, 120px); margin: 0; gap: 40px; }
+    .spot { width: 260px; grid-template-columns: 1fr 28px; text-align: right; }
+    .spot-dot { grid-column: 2; grid-row: 1 / span 2; }
+    .spot-k, .spot-v { grid-column: 1; }
+    .spot-2 { transform: translateX(-70px); }
+  }
+  .hero-foot { max-width: var(--wrap); margin: 0 auto; padding: 14px 16px 18px; border-top: 1px solid var(--rule); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-dim); position: relative; }
+  .steps-bar { position: sticky; top: 0; z-index: 5; background: rgba(255,255,255,.94); backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--rule); }
+  .steps-in { max-width: var(--wrap); margin: 0 auto; padding: 10px 16px; display:flex; gap:6px; overflow-x:auto; scrollbar-width: none; }
   .steps-in::-webkit-scrollbar { display:none; }
   .step-pill { flex: none; display:flex; align-items:center; gap:8px; font: 600 14px/1 var(--body); color: var(--ink-dim); background: transparent; border:1px solid transparent; border-radius: 99px; padding: 8px 12px 8px 8px; min-height: 44px; cursor: pointer; }
   .step-pill .n { width: 26px; height: 26px; border-radius: 50%; display:inline-flex; align-items:center; justify-content:center; background: #fff; border:1px solid var(--rule); font-size: 13px; }
-  .step-pill[aria-current="step"] { color: var(--ink); background: #fff; border-color: var(--rule); }
+  .step-pill[aria-current="step"] { color: var(--ink); background: var(--accent-soft); border-color: transparent; }
   .step-pill[aria-current="step"] .n { background: var(--accent-deep); color:#fff; border-color: var(--accent-deep); }
   .step-pill.done .n { background: var(--ok); color:#fff; border-color: var(--ok); }
-  main { max-width: 860px; margin: 0 auto; padding: 20px 16px calc(120px + env(safe-area-inset-bottom)); }
-  .card { background: var(--card); border:1px solid var(--rule); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(10,34,69,.04); }
+  main { max-width: var(--wrap); margin: 0 auto; padding: 20px 16px calc(120px + env(safe-area-inset-bottom)); }
+  .card { background: var(--card); border:1px solid var(--rule); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(10,34,69,.04), 0 8px 24px -16px rgba(91,79,240,.18); }
   h2 { font: 700 clamp(21px, 4.6vw, 26px)/1.2 var(--display); margin: 0 0 6px; letter-spacing: -.01em; }
   h3 { font: 700 18px/1.3 var(--display); margin: 22px 0 8px; }
   .sub { color: var(--ink-dim); margin: 0 0 14px; }
@@ -109,16 +134,16 @@
   .typed-preview { margin-top: 8px; min-height: 56px; border:1px solid var(--rule); border-radius: 12px; padding: 10px 14px; background:#fff; }
   .check { display:flex; gap: 12px; align-items:flex-start; margin: 16px 0 0; font-size: 15px; }
   .check input { width: 24px; height: 24px; margin: 2px 0 0; accent-color: var(--accent-deep); flex: none; }
-  .btn { display:inline-flex; align-items:center; justify-content:center; gap: 8px; min-height: 48px; padding: 12px 20px; border-radius: 12px; border: 1px solid #c9d5e3; background: #fff; color: var(--ink); font: 700 16px/1.2 var(--body); cursor: pointer; text-decoration: none; }
-  .btn.primary { background: var(--accent-deep); border-color: var(--accent-deep); color: #fff; }
-  .btn.primary:hover { background: #3730a3; }
+  .btn { display:inline-flex; align-items:center; justify-content:center; gap: 8px; min-height: 48px; padding: 12px 20px; border-radius: 999px; border: 1px solid #c9cfe0; background: #fff; color: var(--ink); font: 700 16px/1.2 var(--body); cursor: pointer; text-decoration: none; }
+  .btn.primary { background: var(--pill); border-color: transparent; color: #fff; border-radius: 999px; padding-left: 26px; padding-right: 26px; }
+  .btn.primary:hover { filter: brightness(1.06); }
   .btn.small { min-height: 44px; padding: 8px 14px; font-size: 14px; }
   .btn:disabled { opacity: .55; cursor: not-allowed; }
   .pay-box { border:1px solid var(--rule); border-radius: 12px; padding: 16px; background: var(--bg); }
   .status { display:inline-flex; gap: 8px; align-items:center; font-weight: 600; font-size: 15px; padding: 6px 12px; border-radius: 99px; background: #fff; border:1px solid var(--rule); }
   .status.ok { background: var(--ok-soft); color: var(--ok); border-color: #b7e3c6; }
   .bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: rgba(255,255,255,.97); border-top: 1px solid var(--rule); backdrop-filter: blur(6px); }
-  .bar-in { max-width: 860px; margin: 0 auto; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); display:flex; gap: 10px; align-items:center; }
+  .bar-in { max-width: var(--wrap); margin: 0 auto; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); display:flex; gap: 10px; align-items:center; }
   .bar-in .grow { flex: 1; min-width: 0; font-size: 14px; color: var(--ink-dim); }
   .notice { border-radius: 12px; padding: 14px 16px; margin: 0 0 16px; font-weight: 600; }
   .notice.bad { background: var(--danger-soft); color: var(--danger); }
@@ -135,7 +160,7 @@
   @media (prefers-reduced-motion: no-preference) { .card { animation: rise .25s ease-out; } @keyframes rise { from { transform: translateY(6px); } to { transform: none; } } }
   @media print {
     body { background: #fff; font-size: 12pt; }
-    .top, .steps-bar, .bar, .no-print, .hero { display: none !important; }
+    .top, .steps-bar, .bar, .no-print, .hero, .beam { display: none !important; }
     main { padding: 0; max-width: none; }
     .card { border: 0; box-shadow: none; padding: 0; margin: 0 0 18pt; break-inside: auto; animation: none; }
     .contract { max-height: none; overflow: visible; border: 0; padding: 0; }
@@ -155,11 +180,23 @@
     <span class="for" id="for"></span>
   </div>
 </header>
-<section class="hero" id="hero" hidden>
+<section class="hero" id="hero" aria-labelledby="hero-title" hidden>
+  <div class="beam" aria-hidden="true"></div>
   <div class="hero-in">
+    <p class="eyebrow" id="hero-eyebrow">Start packet · AI Syndicate</p>
     <h1 id="hero-title">Let's get you started.</h1>
-    <p id="hero-sub">Everything is in one place: the proposal, the agreement, a few questions about your business, and payment. It takes about 10 minutes, and you can come back to this link any time.</p>
+    <p class="lede" id="hero-sub">Everything is in one place: the proposal, the agreement, a few questions about your business, and payment. It takes about 10 minutes, and you can come back to this link any time.</p>
+    <div class="hero-cta no-print" id="hero-cta">
+      <a class="pill" href="#main" id="hero-begin">Begin</a>
+      <span class="hero-note" id="hero-note">Questions? Just reply to the email we sent you.</span>
+    </div>
+    <ul class="spots no-print" id="hero-spots" aria-label="Good to know">
+      <li class="spot spot-1"><span class="spot-dot" aria-hidden="true"></span><span class="spot-k">Time</span><span class="spot-v">About 10 minutes</span></li>
+      <li class="spot spot-2"><span class="spot-dot" aria-hidden="true"></span><span class="spot-k">Steps</span><span class="spot-v" id="spot-steps">5, one at a time</span></li>
+      <li class="spot spot-3"><span class="spot-dot" aria-hidden="true"></span><span class="spot-k">Your progress</span><span class="spot-v">Saves as you go</span></li>
+    </ul>
   </div>
+  <div class="hero-foot no-print" id="hero-foot"></div>
 </section>
 <nav class="steps-bar no-print" id="steps-bar" aria-label="Steps" hidden><div class="steps-in" id="steps"></div></nav>
 <main id="main"><div class="loading" id="loading">Loading your packet…</div></main>
@@ -244,8 +281,19 @@
     document.getElementById("hero").hidden = false;
     var first = (P.contact_name || "").split(/\s+/)[0];
     document.getElementById("hero-title").textContent = first ? "Welcome, " + first + "." : "Let's get you started.";
+    document.getElementById("hero-eyebrow").textContent = "Start packet · " + (P.business || "") + " · AI Syndicate";
+    document.getElementById("spot-steps").textContent = STEPS.length + ", one at a time";
+    document.getElementById("hero-foot").textContent = STEPS.length + " steps · " + STEPS.map(function (s) { return s.label; }).join(" → ");
+    var sender = ((P.ais_signature && P.ais_signature.name) || "").split(/\s+/)[0];
+    if (sender) document.getElementById("hero-note").textContent = "Questions? Just reply to " + sender + "'s email.";
+    document.getElementById("hero-begin").addEventListener("click", function (e) {
+      e.preventDefault();
+      var bar = document.getElementById("steps-bar");
+      window.scrollTo({ top: bar.getBoundingClientRect().top + window.pageYOffset, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      var hd = main.querySelector("h2"); if (hd) { hd.setAttribute("tabindex", "-1"); hd.focus({ preventScroll: true }); }
+    });
     document.getElementById("steps-bar").hidden = false;
-    if (PREVIEW) { var pv = document.createElement("div"); pv.className = "notice good no-print"; pv.style.cssText = "max-width:860px;margin:12px auto 0;"; pv.textContent = "Preview — this is what the client sees. Nothing you do here is sent."; document.getElementById("hero").after(pv); }
+    if (PREVIEW) { var pv = document.createElement("div"); pv.className = "notice good no-print"; pv.style.cssText = "width:calc(100% - 32px);max-width:928px;margin:12px auto 0;"; pv.textContent = "Preview — this is what the client sees. Nothing you do here is sent."; document.getElementById("hero").after(pv); }
     document.getElementById("bar").hidden = false;
     render();
   });
@@ -573,6 +621,8 @@
     document.getElementById("bar").hidden = true;
     document.getElementById("hero").hidden = false;
     document.getElementById("hero-title").textContent = "You're all set.";
+    document.getElementById("hero-eyebrow").textContent = "Done · " + (P.business || "") + " · AI Syndicate";
+    ["hero-cta", "hero-spots", "hero-foot"].forEach(function (id) { document.getElementById(id).hidden = true; });
     document.getElementById("hero-sub").textContent = "Thank you. Your signed agreement and answers are with the AI Syndicate team. We'll be in touch shortly about next steps.";
     main.innerHTML = "";
     var r = P.receipt || {};
