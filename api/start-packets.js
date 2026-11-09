@@ -37,6 +37,16 @@ const BUCKET = "start-packets";
 const LOCKED = ["sent", "opened", "returned", "void"];
 const LIST_COLS = "id,status,business,contact_name,contact_email,form_kind,proposal,ais_signed_at,sent_at,opened_at,returned_at,created_at,updated_at,created_by_email,sent_by_email,lead_id";
 
+/* Clearing the sender's signature (anything the client sees changed). */
+const UNSIGN = { ais_signed_at: null, ais_signer_name: null, ais_signer_title: null, ais_signer_email: null, ais_signature: null, ais_signed_by: null, contract_sha256: null, status: "draft", token_hash: null, token_expires_at: null };
+/* The proposal PDF lives inside the proposal JSON (no new column needed). */
+const keepPdf = (prop) => ({ pdf_path: prop?.pdf_path || null, pdf_name: prop?.pdf_name || null, pdf_sha256: prop?.pdf_sha256 || null });
+const signedUrl = async (admin, path, secs) => {
+  if (!path) return null;
+  const { data } = await admin.storage.from(BUCKET).createSignedUrl(path, secs);
+  return data?.signedUrl || null;
+};
+
 export const consoleLink = (id) => `${adminBaseUrl()}/#/dashboard/start?id=${id}`;
 export const clientLink = (token) => `${adminBaseUrl()}/start/?t=${token}`;
 
@@ -84,7 +94,8 @@ export default async function handler(req, res) {
         const { data } = await admin.storage.from(BUCKET).createSignedUrl(p.contract_pdf_path, 600);
         pdfUrl = data?.signedUrl || null;
       }
-      return res.status(200).json({ packet: forConsole(p), events: events || [], pdfUrl, consoleUrl: consoleLink(p.id) });
+      const proposalPdfUrl = await signedUrl(admin, p.proposal?.pdf_path, 600);
+      return res.status(200).json({ packet: forConsole(p), events: events || [], pdfUrl, proposalPdfUrl, consoleUrl: consoleLink(p.id) });
     }
     let q = admin.from("start_packets").select(LIST_COLS).order("updated_at", { ascending: false }).limit(200);
     if (isRep) q = q.eq("created_by", member.user.id);
@@ -113,6 +124,7 @@ export default async function handler(req, res) {
     const p = await load(admin, body.id);
     if (!p || !mine(p)) return res.status(404).json({ error: "No such packet." });
     if (LOCKED.includes(p.status)) return res.status(409).json({ error: "This packet was already sent, so it can't change. Cancel it and make a new one." });
+    v.proposal = { ...v.proposal, ...keepPdf(p.proposal) };
     const next = { ...p, ...v };
     const patch = { ...v };
     let cleared = false;
@@ -130,16 +142,18 @@ export default async function handler(req, res) {
   if (!p || !mine(p)) return res.status(404).json({ error: "No such packet." });
 
   /* ---------- the agreement PDF ---------- */
+  /* PDFs: kind "agreement" (default) or "proposal". Dropped or picked in the console. */
+  const pdfKind = body.kind === "proposal" ? "proposal" : "agreement";
   if (action === "pdf_upload") {
-    if (LOCKED.includes(p.status)) return res.status(409).json({ error: "Already sent — can't change the agreement." });
-    const safe = String(body.name || "agreement.pdf").replace(/[^A-Za-z0-9._-]+/g, "-").slice(-80) || "agreement.pdf";
-    const path = `${p.id}/${Date.now()}-${safe.endsWith(".pdf") ? safe : `${safe}.pdf`}`;
+    if (LOCKED.includes(p.status)) return res.status(409).json({ error: "Already sent — can't change it now." });
+    const safe = String(body.name || `${pdfKind}.pdf`).replace(/[^A-Za-z0-9._-]+/g, "-").slice(-80) || `${pdfKind}.pdf`;
+    const path = `${p.id}/${pdfKind}-${Date.now()}-${safe.toLowerCase().endsWith(".pdf") ? safe : `${safe}.pdf`}`;
     const { data, error } = await admin.storage.from(BUCKET).createSignedUploadUrl(path);
     if (error) return res.status(500).json({ error: `Upload not ready: ${error.message}` });
     return res.status(200).json({ path, token: data.token, signedUrl: data.signedUrl });
   }
   if (action === "pdf_attached") {
-    if (LOCKED.includes(p.status)) return res.status(409).json({ error: "Already sent — can't change the agreement." });
+    if (LOCKED.includes(p.status)) return res.status(409).json({ error: "Already sent — can't change it now." });
     const path = String(body.path || "");
     if (!path.startsWith(`${p.id}/`)) return res.status(400).json({ error: "That file isn't this packet's." });
     const { data: blob, error } = await admin.storage.from(BUCKET).download(path);
@@ -147,21 +161,25 @@ export default async function handler(req, res) {
     const buf = Buffer.from(await blob.arrayBuffer());
     if (buf.subarray(0, 5).toString("latin1") !== "%PDF-") return res.status(400).json({ error: "That file isn't a PDF." });
     const pdfSha = sha256(buf);
-    const name = String(body.name || "Agreement.pdf").slice(0, 160);
-    const patch = { contract_pdf_path: path, contract_pdf_name: name, contract_pdf_sha256: pdfSha };
-    if (p.ais_signed_at) Object.assign(patch, { ais_signed_at: null, ais_signer_name: null, ais_signer_title: null, ais_signer_email: null, ais_signature: null, ais_signed_by: null, contract_sha256: null, status: "draft", token_hash: null, token_expires_at: null });
+    const name = String(body.name || (pdfKind === "proposal" ? "Proposal.pdf" : "Agreement.pdf")).slice(0, 160);
+    const patch = pdfKind === "proposal"
+      ? { proposal: { ...(p.proposal || {}), pdf_path: path, pdf_name: name, pdf_sha256: pdfSha } }
+      : { contract_pdf_path: path, contract_pdf_name: name, contract_pdf_sha256: pdfSha };
+    if (p.ais_signed_at) Object.assign(patch, UNSIGN);
     const { data, error: e2 } = await admin.from("start_packets").update(patch).eq("id", p.id).select("*").single();
     if (e2) return res.status(500).json({ error: e2.message });
-    await logEvent(admin, p.id, "pdf_attached", member, req, { name, sha256: pdfSha, bytes: buf.length });
+    await logEvent(admin, p.id, pdfKind === "proposal" ? "proposal_pdf_attached" : "pdf_attached", member, req, { name, sha256: pdfSha, bytes: buf.length });
     return res.status(200).json({ packet: forConsole(data), cjSignatureCleared: Boolean(p.ais_signed_at) });
   }
   if (action === "pdf_remove") {
-    if (LOCKED.includes(p.status)) return res.status(409).json({ error: "Already sent — can't change the agreement." });
-    const patch = { contract_pdf_path: null, contract_pdf_name: null, contract_pdf_sha256: null };
-    if (p.ais_signed_at) Object.assign(patch, { ais_signed_at: null, ais_signer_name: null, ais_signer_title: null, ais_signer_email: null, ais_signature: null, ais_signed_by: null, contract_sha256: null, status: "draft", token_hash: null, token_expires_at: null });
+    if (LOCKED.includes(p.status)) return res.status(409).json({ error: "Already sent — can't change it now." });
+    const patch = pdfKind === "proposal"
+      ? { proposal: { ...(p.proposal || {}), pdf_path: null, pdf_name: null, pdf_sha256: null } }
+      : { contract_pdf_path: null, contract_pdf_name: null, contract_pdf_sha256: null };
+    if (p.ais_signed_at) Object.assign(patch, UNSIGN);
     const { data, error } = await admin.from("start_packets").update(patch).eq("id", p.id).select("*").single();
     if (error) return res.status(500).json({ error: error.message });
-    await logEvent(admin, p.id, "pdf_removed", member, req);
+    await logEvent(admin, p.id, pdfKind === "proposal" ? "proposal_pdf_removed" : "pdf_removed", member, req);
     return res.status(200).json({ packet: forConsole(data) });
   }
 

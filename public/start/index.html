@@ -181,7 +181,7 @@
   var P = null;            // the packet from the server
   var step = 0;
   var STEPS = [];
-  var state = { answers: {}, signer: { name: "", title: "", email: "" }, sigKind: "drawn", sigTyped: "", sigData: "", consent: false, payDone: false, payNote: "", hp: "" };
+  var state = { answers: {}, signer: { name: "", title: "", email: "" }, sigKind: "drawn", sigTyped: "", sigData: "", consent: false, payDone: false, payNote: "", obDone: false, hp: "" };
   var errors = {};
 
   function save() { try { var s = Object.assign({}, state); delete s.hp; localStorage.setItem(STORE, JSON.stringify(s)); } catch (e) {} }
@@ -238,7 +238,7 @@
         if (v) state.answers[q.id] = v;
       }
     });
-    STEPS = [{ id: "proposal", label: "Proposal" }, { id: "agreement", label: "Sign" }, { id: "questions", label: "Questions" }];
+    STEPS = [{ id: "proposal", label: "Proposal" }, { id: "agreement", label: "Sign" }, P.onboarding ? { id: "onboarding", label: "Onboarding" } : { id: "questions", label: "Questions" }];
     if (P.payment) STEPS.push({ id: "payment", label: "Payment" });
     STEPS.push({ id: "send", label: "Send back" });
     document.getElementById("hero").hidden = false;
@@ -269,6 +269,7 @@
     if (id === "proposal") main.appendChild(viewProposal());
     if (id === "agreement") main.appendChild(viewAgreement());
     if (id === "questions") main.appendChild(viewQuestions());
+    if (id === "onboarding") main.appendChild(viewOnboarding());
     if (id === "payment") main.appendChild(viewPayment());
     if (id === "send") main.appendChild(viewSend());
     document.getElementById("back").hidden = step === 0;
@@ -305,7 +306,10 @@
     var inc = String(p.includes || "").split(/\n+/).map(function (s) { return s.replace(/^[-•*]\s*/, "").trim(); }).filter(Boolean);
     if (inc.length) { card.appendChild(h("h3", { text: "What's included" })); card.appendChild(h("ul", { class: "incl" }, inc.map(function (s) { return h("li", { text: s }); }))); }
     if (p.notes) { card.appendChild(h("h3", { text: "Notes" })); String(p.notes).split(/\n{2,}/).forEach(function (para) { card.appendChild(h("p", { text: para })); }); }
-    if (p.doc_url) card.appendChild(h("p", null, [h("a", { class: "btn small", href: p.doc_url, target: "_blank", rel: "noopener", text: "Open the full proposal" })]));
+    var links = [];
+    if (P.proposal_pdf) links.push(h("a", { class: "btn small", href: P.proposal_pdf.url, target: "_blank", rel: "noopener", text: "Open the full proposal (PDF)" }));
+    if (p.doc_url) links.push(h("a", { class: "btn small", href: p.doc_url, target: "_blank", rel: "noopener", text: P.proposal_pdf ? "Open the proposal link" : "Open the full proposal" }));
+    if (links.length) card.appendChild(h("p", { style: "display:flex;flex-wrap:wrap;gap:10px;margin-top:16px" }, links));
     return card;
   }
 
@@ -443,6 +447,24 @@
     fs.appendChild(box);
   }
 
+  /* ---------------- 3b. onboarding by our form link ---------------- */
+  function viewOnboarding() {
+    var cb = h("input", { type: "checkbox", id: "f-obdone", "aria-invalid": errors.onboarding ? "true" : null, "aria-describedby": errors.onboarding ? "e-onboarding" : null, onchange: function (e) { state.obDone = e.target.checked; save(); } });
+    cb.checked = !!state.obDone;
+    return h("section", { class: "card", "aria-labelledby": "t-ob" }, [
+      h("h2", { id: "t-ob", text: "Your onboarding form" }),
+      h("p", { class: "sub", text: "This is where you tell us about your business and give us access to your site. It opens in a new tab. Fill it in, press send, then come back here." }),
+      h("div", { class: "pay-box" }, [
+        h("a", { class: "btn primary", href: P.onboarding.url, target: "_blank", rel: "noopener", text: "Open the onboarding form" }),
+        h("p", { class: "hint", style: "margin:10px 0 0", text: "Your answers save as you go on that form, so you can finish it later if you need to." }),
+      ]),
+      h("div", { class: errors.onboarding ? "has-err" : "" }, [
+        h("label", { class: "check", for: "f-obdone" }, [cb, h("span", { text: "I filled in and sent the onboarding form." })]),
+        errors.onboarding ? h("div", { class: "err", id: "e-onboarding", role: "alert", text: errors.onboarding }) : null,
+      ]),
+    ]);
+  }
+
   /* ---------------- 4. payment ---------------- */
   var payTimer = null;
   function viewPayment() {
@@ -516,6 +538,7 @@
         if (!empty && q.type === "email" && !EMAIL.test(String(v).trim())) e[q.id] = "That email doesn't look right.";
       });
     }
+    if (id === "onboarding" && !state.obDone) e.onboarding = "Open the onboarding form, send it, then tick the box.";
     if (id === "payment" && P.payment && !state.payDone && !(state.payNote || "").trim()) e.payment = "Add your card in Stripe, then tick the box. Paying another way? Say how in the box.";
     if (!quiet) errors = e;
     return Object.keys(e).length === 0;
@@ -529,14 +552,14 @@
     sending = true;
     var nx = document.getElementById("next"); nx.disabled = true; nx.textContent = "Sending…";
     var sig = state.sigKind === "drawn" ? { kind: "drawn", data: state.sigData } : { kind: "typed", data: state.signer.name };
-    api("POST", { t: T, action: "submit", signer: state.signer, signature: sig, consent: !!state.consent, answers: state.answers, payment_done: !!state.payDone, payment_note: state.payNote || "", hp_fax: state.hp || "" }).then(function (d) {
+    api("POST", { t: T, action: "submit", signer: state.signer, signature: sig, consent: !!state.consent, answers: state.answers, payment_done: !!state.payDone, payment_note: state.payNote || "", onboarding_done: !!state.obDone, hp_fax: state.hp || "" }).then(function (d) {
       sending = false; nx.disabled = false; nx.textContent = "Sign and send back";
       if (d.ok && d.packet) { P = d.packet; try { localStorage.removeItem(STORE); } catch (x) {} renderDone(true); return; }
       if (d.packet && d.packet.returned) { P = d.packet; renderDone(false); return; }
       if (d.errors) {
         errors = d.errors;
         for (var j = 0; j < STEPS.length; j++) { var sid = STEPS[j].id; var keys = Object.keys(errors);
-          var hit = keys.some(function (k) { return (sid === "agreement" && /^(signer_|signature|consent)/.test(k)) || (sid === "payment" && k === "payment") || (sid === "questions" && (P.questions || []).some(function (q) { return q.id === k; })); });
+          var hit = keys.some(function (k) { return (sid === "agreement" && /^(signer_|signature|consent)/.test(k)) || (sid === "payment" && k === "payment") || (sid === "onboarding" && k === "onboarding") || (sid === "questions" && (P.questions || []).some(function (q) { return q.id === k; })); });
           if (hit) { step = j; render(); focusErr(); return; } }
       }
       errors = { form: d.error || "Couldn't send. Please try again." }; render();
@@ -576,7 +599,8 @@
       ans.appendChild(h("h3", { text: part.title }));
       ans.appendChild(h("dl", { class: "answers" }, qs.reduce(function (acc, q) { var v = r.answers[q.id]; acc.push(h("dt", { text: q.label })); acc.push(h("dd", { text: Array.isArray(v) ? v.join(", ") : String(v) })); return acc; }, [])));
     });
-    main.appendChild(ans);
+    if (r.onboarding && r.onboarding.via === "form") ans.appendChild(h("p", { text: r.onboarding.client_says_sent ? "You sent your answers through our onboarding form." : "Onboarding form: not marked as sent." }));
+    if (P.onboarding || (ans.childNodes.length > 1)) main.appendChild(ans);
     window.scrollTo(0, 0);
   }
 })();
