@@ -4,7 +4,7 @@ import { getSupabase } from "../../lib/supabase.js";
 import { toast } from "../../lib/toast.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 import { SectionHeader, EmptyState, Field, TextInput, TextArea, timeAgo } from "./shared.jsx";
-import { questionsFor, partsFor, FORM_KINDS, stageLabel } from "../../../lib/start-questions.js";
+import { questionsFor, partsFor, FORM_KINDS, stageLabel, standardFormLink } from "../../../lib/start-questions.js";
 
 /* START PACKETS — one link that carries the whole start of a client. 6 Nov 2026.
  *
@@ -20,7 +20,7 @@ import { questionsFor, partsFor, FORM_KINDS, stageLabel } from "../../../lib/sta
 
 const EMPTY = {
   business: "", contact_name: "", contact_email: "", website: "", form_kind: "geo",
-  proposal: { package: "", price: "", term: "", start_date: "", includes: "", notes: "", doc_url: "" },
+  proposal: { package: "", price: "", term: "", start_date: "", includes: "", notes: "", doc_url: "", onboarding_url: "" },
   contract_title: "Agreement", contract_text: "", payment_url: "", payment_note: "", stripe_customer_id: "",
 };
 
@@ -51,6 +51,32 @@ function SigPad({ onChange }) {
     return () => { cv.onpointerdown = cv.onpointermove = cv.onpointerup = null; };
   }, [onChange]);
   return <canvas ref={ref} aria-label="Draw your signature" style={{ width: "100%", height: 130, border: "1px dashed var(--ink-faint)", borderRadius: 12, background: "#fff", touchAction: "none", display: "block" }} />;
+}
+
+/* Drop a PDF here, or click to choose one (Ryder, 9 Nov 2026: "allow a PDF
+ * to be dropped into"). Shows the file once it's attached. */
+function DropZone({ what, fileName, fileUrl, busy, disabled, onFile, onRemove }) {
+  const [over, setOver] = useState(false);
+  if (fileName) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", border: "1px solid var(--rule)", borderRadius: 12, padding: "12px 14px", background: "#fafbfc" }}>
+        <span aria-hidden="true" style={{ fontSize: 18 }}>📄</span>
+        {fileUrl ? <a href={fileUrl} target="_blank" rel="noopener noreferrer" style={{ fontWeight: 600 }}>{fileName}</a> : <span style={{ fontWeight: 600 }}>{fileName}</span>}
+        {!disabled && onRemove && <button type="button" className="btn btn-sm" disabled={busy} onClick={onRemove}>Remove</button>}
+      </div>
+    );
+  }
+  return (
+    <label
+      onDragOver={(e) => { e.preventDefault(); if (!disabled) setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => { e.preventDefault(); setOver(false); if (!disabled) onFile(e.dataTransfer?.files?.[0]); }}
+      style={{ display: "block", border: `2px dashed ${over ? "var(--accent)" : "var(--ink-faint, #9eb1c7)"}`, borderRadius: 12, padding: "18px 14px", textAlign: "center", cursor: disabled ? "not-allowed" : "pointer", background: over ? "var(--accent-soft)" : "#fafbfc", transition: "background .15s" }}>
+      <div style={{ fontWeight: 700, fontSize: 14.5 }}>{busy ? "Uploading…" : `Drop the ${what} PDF here`}</div>
+      <div style={{ fontSize: 12.5, color: "var(--ink-dim)", marginTop: 2 }}>or click to choose a file · PDF, up to 10 MB</div>
+      <input type="file" accept="application/pdf" hidden disabled={disabled || busy} onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ""; }} />
+    </label>
+  );
 }
 
 function SigShow({ sig, name }) {
@@ -120,6 +146,7 @@ function PacketEditor({ id, member, onBack, onCreated }) {
   const [p, setP] = useState(id ? null : { ...EMPTY, status: "draft" });
   const [events, setEvents] = useState([]);
   const [pdfUrl, setPdfUrl] = useState(null);
+  const [proposalPdfUrl, setProposalPdfUrl] = useState(null);
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -129,7 +156,7 @@ function PacketEditor({ id, member, onBack, onCreated }) {
     const r = await apiFetch(`/api/start-packets?id=${id}`);
     if (!r.ok) { toast.error("Couldn't open it", r.error); onBack(); return; }
     setP({ ...EMPTY, ...r.data.packet, proposal: { ...EMPTY.proposal, ...(r.data.packet.proposal || {}) } });
-    setEvents(r.data.events || []); setPdfUrl(r.data.pdfUrl || null); setDirty(false);
+    setEvents(r.data.events || []); setPdfUrl(r.data.pdfUrl || null); setProposalPdfUrl(r.data.proposalPdfUrl || null); setDirty(false);
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [load]);
 
@@ -157,20 +184,33 @@ function PacketEditor({ id, member, onBack, onCreated }) {
     await load(); return true;
   };
 
-  const uploadPdf = async (file) => {
+  /* kind: "agreement" or "proposal". A new packet is saved first so the file has a home. */
+  const uploadPdf = async (file, kind = "agreement") => {
     if (!file) return;
-    if (file.type !== "application/pdf") { toast.error("PDF only", "Save the agreement as a PDF first."); return; }
+    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+    if (!isPdf) { toast.error("PDF only", `Save the ${kind} as a PDF first.`); return; }
     if (file.size > 10 * 1024 * 1024) { toast.error("Too big", "Keep the PDF under 10 MB."); return; }
-    if (dirty && !(await save())) return;
-    const u = await call("pdf_upload", { name: file.name }, "Upload not ready");
-    if (!u) return;
-    setBusy("pdf");
-    const { error } = await getSupabase().storage.from("start-packets").uploadToSignedUrl(u.path, u.token, file, { contentType: "application/pdf" });
+    let pid = p.id;
+    if (!pid || dirty) {
+      setBusy("save");
+      const r = await apiFetch("/api/start-packets", { method: "POST", body: { action: "save", ...p, id: p.id || undefined } });
+      setBusy("");
+      if (!r.ok) { setErrors(r.status === 400 ? (r.data?.errors || {}) : {}); toast.error("Save it first", r.error); return; }
+      pid = r.data.packet.id; setDirty(false);
+    }
+    setBusy(`pdf-${kind}`);
+    const post = (action, extra) => apiFetch("/api/start-packets", { method: "POST", body: { action, id: pid, kind, ...extra } });
+    const u = await post("pdf_upload", { name: file.name });
+    if (!u.ok) { setBusy(""); toast.error("Upload not ready", u.error); return; }
+    const { error } = await getSupabase().storage.from("start-packets").uploadToSignedUrl(u.data.path, u.data.token, file, { contentType: "application/pdf" });
+    if (error) { setBusy(""); toast.error("Upload failed", error.message); return; }
+    const done = await post("pdf_attached", { path: u.data.path, name: file.name });
     setBusy("");
-    if (error) { toast.error("Upload failed", error.message); return; }
-    const done = await call("pdf_attached", { path: u.path, name: file.name }, "Couldn't attach it");
-    if (done) { toast.success("Agreement PDF attached", done.cjSignatureCleared ? "The signature was cleared — sign it again." : ""); load(); }
+    if (!done.ok) { toast.error("Couldn't attach it", done.error); return; }
+    toast.success(kind === "proposal" ? "Proposal PDF attached" : "Agreement PDF attached", done.data.cjSignatureCleared ? "The signature was cleared — sign it again." : "");
+    if (!p.id) onCreated(pid); else load();
   };
+  const removePdf = async (kind) => { if (await call("pdf_remove", { kind })) load(); };
 
   const err = (k) => errors[k] ? <div style={{ color: "var(--danger)", fontSize: 12.5, fontWeight: 600, marginTop: -8, marginBottom: 10 }}>{errors[k]}</div> : null;
 
@@ -191,15 +231,6 @@ function PacketEditor({ id, member, onBack, onCreated }) {
             <Field label="Their email *"><TextInput type="email" value={p.contact_email || ""} onChange={(e) => set("contact_email", e.target.value)} /></Field>
           </div>
           {err("business")}{err("contact_name")}{err("contact_email")}{err("website")}
-          <div style={{ marginBottom: 14 }}>
-            <div className="label" id="sp-kind" style={{ marginBottom: 6 }}>Which questions?</div>
-            <div role="group" aria-labelledby="sp-kind" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {Object.entries(FORM_KINDS).map(([k, label]) => (
-                <button key={k} type="button" className={`btn btn-sm ${p.form_kind === k ? "btn-primary" : ""}`} aria-pressed={p.form_kind === k} onClick={() => set("form_kind", k)}>{label}</button>
-              ))}
-            </div>
-          </div>
-          <div style={{ fontSize: 12.5, color: "var(--ink-dim)", marginTop: -6 }}>{questionsFor(p.form_kind).length} questions, the same as our onboarding form{p.form_kind === "website_geo" ? " plus the new-website ones" : ""}. Name, email, business and website are filled in for them.</div>
         </div>
 
         <div className="card" style={{ padding: 20, marginBottom: 14 }}>
@@ -213,7 +244,10 @@ function PacketEditor({ id, member, onBack, onCreated }) {
           {err("package")}{err("price")}
           <Field label="What's included" hint="One per line."><TextArea value={p.proposal.includes} onChange={(e) => setProp("includes", e.target.value)} /></Field>
           <Field label="Notes for the client"><TextArea value={p.proposal.notes} onChange={(e) => setProp("notes", e.target.value)} style={{ minHeight: 70 }} /></Field>
-          <Field label="Link to the full proposal (optional)" hint="A deck or PDF they can open."><TextInput value={p.proposal.doc_url} onChange={(e) => setProp("doc_url", e.target.value)} /></Field>
+          <div className="label" style={{ marginBottom: 6 }}>The full proposal (optional)</div>
+          <DropZone what="proposal" fileName={p.proposal.pdf_name} fileUrl={proposalPdfUrl} busy={busy === "pdf-proposal"} disabled={locked} onFile={(f) => uploadPdf(f, "proposal")} onRemove={() => removePdf("proposal")} />
+          <div style={{ height: 12 }} />
+          <Field label="Or a link to it" hint="A deck or page they can open. Optional."><TextInput value={p.proposal.doc_url} onChange={(e) => setProp("doc_url", e.target.value)} placeholder="https://…" /></Field>
           {err("doc_url")}
         </div>
 
@@ -224,18 +258,51 @@ function PacketEditor({ id, member, onBack, onCreated }) {
             <TextArea value={p.contract_text || ""} onChange={(e) => set("contract_text", e.target.value)} style={{ minHeight: 220, fontFamily: "var(--body)" }} />
           </Field>
           {err("contract_text")}
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>Or a PDF:</span>
-            {p.contract_pdf_name
-              ? <>{pdfUrl ? <a href={pdfUrl} target="_blank" rel="noopener noreferrer">{p.contract_pdf_name}</a> : <span>{p.contract_pdf_name}</span>}
-                {!locked && <button type="button" className="btn btn-sm" disabled={!!busy} onClick={async () => { if (await call("pdf_remove")) load(); }}>Remove</button>}</>
-              : !p.id ? <span style={{ fontSize: 13, color: "var(--ink-dim)" }}>Save first, then you can upload a PDF.</span>
-                : <label className="btn btn-sm" style={{ cursor: "pointer" }}>{busy === "pdf" ? "Uploading…" : "Upload PDF"}<input type="file" accept="application/pdf" hidden onChange={(e) => uploadPdf(e.target.files?.[0])} /></label>}
-          </div>
+          <div className="label" style={{ marginBottom: 6 }}>Or drop the agreement PDF</div>
+          <DropZone what="agreement" fileName={p.contract_pdf_name} fileUrl={pdfUrl} busy={busy === "pdf-agreement"} disabled={locked} onFile={(f) => uploadPdf(f, "agreement")} onRemove={() => removePdf("agreement")} />
         </div>
 
         <div className="card" style={{ padding: 20, marginBottom: 14 }}>
-          <h3 style={{ margin: "0 0 12px", fontFamily: "var(--display)" }}>4 · Payment</h3>
+          <h3 style={{ margin: "0 0 4px", fontFamily: "var(--display)" }}>4 · Onboarding</h3>
+          <p style={{ margin: "0 0 12px", fontSize: 13.5, color: "var(--ink-2)" }}>How they tell us about their business and give us access.</p>
+          <div role="radiogroup" aria-label="How they onboard" style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+            {[["form", "Send them our onboarding form", "They fill in our form (the one we built 4 Nov). It emails their answers to the team."],
+              ["packet", "Ask the questions inside this packet", "Their answers save here in the CRM and come in the team email."]].map(([k, title, sub]) => {
+              const on = k === "form" ? Boolean(p.proposal.onboarding_url) : !p.proposal.onboarding_url;
+              return (
+                <label key={k} style={{ display: "flex", gap: 10, alignItems: "flex-start", border: `1px solid ${on ? "var(--accent)" : "var(--rule)"}`, background: on ? "var(--accent-soft)" : "#fff", borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
+                  <input type="radio" name="sp-onboarding" checked={on} onChange={() => setProp("onboarding_url", k === "form" ? (p.proposal.onboarding_url || standardFormLink(p.business, p.website)) : "")} style={{ marginTop: 3 }} />
+                  <span><b style={{ fontSize: 14 }}>{title}</b><br /><span style={{ fontSize: 12.5, color: "var(--ink-dim)" }}>{sub}</span></span>
+                </label>
+              );
+            })}
+          </div>
+          {p.proposal.onboarding_url ? (
+            <>
+              <Field label="Onboarding form link" hint="Filled in with our standard GEO form, made out to this client. For a client with their own branded form (like Ronin or IFS), paste that link instead.">
+                <TextInput value={p.proposal.onboarding_url} onChange={(e) => setProp("onboarding_url", e.target.value)} />
+              </Field>
+              {err("onboarding_url")}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: -4 }}>
+                <button type="button" className="btn btn-sm" onClick={() => setProp("onboarding_url", standardFormLink(p.business, p.website))}>Use our standard GEO form</button>
+                <a className="btn btn-sm" href={p.proposal.onboarding_url} target="_blank" rel="noopener noreferrer">Open the form</a>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="label" id="sp-kind" style={{ marginBottom: 6 }}>Which questions?</div>
+              <div role="group" aria-labelledby="sp-kind" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                {Object.entries(FORM_KINDS).map(([k, label]) => (
+                  <button key={k} type="button" className={`btn btn-sm ${p.form_kind === k ? "btn-primary" : ""}`} aria-pressed={p.form_kind === k} onClick={() => set("form_kind", k)}>{label}</button>
+                ))}
+              </div>
+              <div style={{ fontSize: 12.5, color: "var(--ink-dim)" }}>{questionsFor(p.form_kind).length} questions, the same as our onboarding form{p.form_kind === "website_geo" ? " plus the new-website ones" : ""}. Name, email, business and website are filled in for them.</div>
+            </>
+          )}
+        </div>
+
+        <div className="card" style={{ padding: 20, marginBottom: 14 }}>
+          <h3 style={{ margin: "0 0 12px", fontFamily: "var(--display)" }}>5 · Payment</h3>
           <Field label="Stripe link *" hint="The payment link or the &quot;add your card&quot; link from Stripe. A buy.stripe.com link gets this packet's id and their email added for you.">
             <TextInput value={p.payment_url || ""} onChange={(e) => set("payment_url", e.target.value)} placeholder="https://buy.stripe.com/…" />
           </Field>
@@ -277,7 +344,7 @@ function SignPanel({ p, member, dirty, call, reload }) {
   if (p.ais_signed_at) {
     return (
       <div className="card" style={{ padding: 20, marginBottom: 14, background: "var(--success-soft, #e8f7ee)" }}>
-        <h3 style={{ margin: "0 0 8px", fontFamily: "var(--display)" }}>5 · Signed for AI Syndicate</h3>
+        <h3 style={{ margin: "0 0 8px", fontFamily: "var(--display)" }}>6 · Signed for AI Syndicate</h3>
         <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
           <SigShow sig={p.ais_signature} name={p.ais_signer_name} />
           <div style={{ fontSize: 14 }}><b>{p.ais_signer_name}</b>, {p.ais_signer_title} · {fmt(p.ais_signed_at)}</div>
@@ -287,8 +354,8 @@ function SignPanel({ p, member, dirty, call, reload }) {
   }
   return (
     <div className="card" style={{ padding: 20, marginBottom: 14, borderColor: "var(--accent)" }}>
-      <h3 style={{ margin: "0 0 8px", fontFamily: "var(--display)" }}>5 · Sign for AI Syndicate</h3>
-      <p style={{ margin: "0 0 12px", fontSize: 14, color: "var(--ink-2)" }}>Read sections 2–4 above. Your signature goes on exactly this version. If anyone changes it later, it's cleared and you sign again.</p>
+      <h3 style={{ margin: "0 0 8px", fontFamily: "var(--display)" }}>6 · Sign for AI Syndicate</h3>
+      <p style={{ margin: "0 0 12px", fontSize: 14, color: "var(--ink-2)" }}>Read sections 2–5 above. Your signature goes on exactly this version. If anyone changes it later, it's cleared and you sign again.</p>
       <Field label="Your title"><TextInput value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <button type="button" className={`btn btn-sm ${kind === "typed" ? "btn-primary" : ""}`} aria-pressed={kind === "typed"} onClick={() => setKind("typed")}>Type my name</button>
@@ -338,7 +405,7 @@ function SendPanel({ p, member, dirty, call, reload }) {
 
   return (
     <div className="card" style={{ padding: 20, marginBottom: 14, borderColor: "var(--accent)" }}>
-      <h3 style={{ margin: "0 0 8px", fontFamily: "var(--display)" }}>6 · Send it to {p.contact_name || "the client"}</h3>
+      <h3 style={{ margin: "0 0 8px", fontFamily: "var(--display)" }}>7 · Send it to {p.contact_name || "the client"}</h3>
       {p.status !== "ready" && <p style={{ margin: "0 0 10px", fontSize: 14 }}>Sent {fmt(p.sent_at)}{p.sent_by_email ? ` by ${p.sent_by_email}` : ""}{p.opened_at ? ` · opened ${fmt(p.opened_at)}` : " · not opened yet"}.</p>}
       {!draft ? (
         <button className="btn btn-accent" disabled={dirty} onClick={make}>{p.has_link ? "Make a new link" : "Make the link"}</button>
@@ -398,7 +465,14 @@ function Returned({ p, pdfUrl, call, reload }) {
       </div>
       <div style={{ fontSize: 12, color: "var(--ink-dim)", marginTop: 10, overflowWrap: "anywhere" }}>Fingerprint of what both signed (SHA-256): {p.contract_sha256}{pdfUrl ? <> · <a href={pdfUrl} target="_blank" rel="noopener noreferrer">agreement PDF</a></> : null}</div>
       <div style={{ fontSize: 13, marginTop: 8 }}>Team copy: {p.team_email?.sent ? `emailed to ${(p.team_email.to || []).join(", ")}` : `not sent (${p.team_email?.reason || "unknown"})`} <button className="btn btn-sm" style={{ marginLeft: 6 }} onClick={async () => { if (await call("resend_copy", {}, "Didn't send")) { toast.success("Team copy sent again"); reload(); } }}>Email the team copy again</button></div>
-      <h3 style={{ margin: "18px 0 6px", fontFamily: "var(--display)" }}>Their answers</h3>
+      {p.proposal?.onboarding_url && (
+        <div style={{ border: "1px solid var(--rule)", borderRadius: 12, padding: 12, marginTop: 14 }}>
+          <div className="label">Onboarding</div>
+          <div style={{ fontSize: 14 }}>By our form · client says they sent it: <b>{sig.onboarding?.client_says_sent ? "yes" : "no"}</b></div>
+          <div style={{ fontSize: 13, color: "var(--ink-dim)", overflowWrap: "anywhere" }}>Their answers come in that form's own email to the team. Form: {p.proposal.onboarding_url}</div>
+        </div>
+      )}
+      {!p.proposal?.onboarding_url && <h3 style={{ margin: "18px 0 6px", fontFamily: "var(--display)" }}>Their answers</h3>}
       {partsFor(p.form_kind).map((part) => {
         const qs = questionsFor(p.form_kind).filter((q) => q.part === part.id && answers[q.id] && String(answers[q.id]).length);
         if (!qs.length) return null;

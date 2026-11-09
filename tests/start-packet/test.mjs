@@ -5,6 +5,7 @@ import {
   checkSignature, teamList, questionsFor, partsFor, stageLabel, checkStripeCard, CONSENT_TEXT, QUESTIONS,
 } from "../../lib/start-packet.js";
 import { sendTeamEmail } from "../../lib/start-notify.js";
+import { standardFormLink } from "../../lib/start-questions.js";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { if (cond) { pass += 1; console.log(`  ok   ${name}`); } else { fail += 1; console.log(`  FAIL ${name}${extra ? `\n       ${extra}` : ""}`); } };
@@ -151,6 +152,21 @@ ok("only-client = nothing sent", !s.sent && s.reason === "no_team_recipient");
 delete process.env.RESEND_API_KEY;
 s = await sendTeamEmail({ to: ["ryder@aisyndicate.com"], allowed: teamList(), subject: "x", text: "y" }, { fetchImpl: fakeFetch });
 ok("no Resend key = says so, doesn't throw", !s.sent && s.reason === "no_resend_key");
+
+// ---- onboarding by our form link + proposal PDF (9 Nov 2026)
+const viaForm = { ...base, proposal: { ...base.proposal, onboarding_url: "https://geo-onboarding-woad.vercel.app/?for=ZZ", pdf_path: "x/proposal-1.pdf", pdf_name: "Proposal.pdf", pdf_sha256: "b".repeat(64) } };
+ok("the standard form link is made out to the client", standardFormLink("ZZ Test Roofing", "https://www.zztest.example.com/") === "https://geo-onboarding-woad.vercel.app/?for=ZZ+Test+Roofing&site=zztest.example.com");
+ok("an http onboarding link is refused", !validateDraft({ ...base, proposal: { ...base.proposal, onboarding_url: "http://x.example.com" } }).ok);
+ok("the onboarding link is part of what's signed", contentFingerprint(viaForm) !== contentFingerprint({ ...viaForm, proposal: { ...viaForm.proposal, onboarding_url: "https://other.example.com/" } }));
+ok("the proposal PDF is part of what's signed", contentFingerprint(viaForm) !== contentFingerprint({ ...viaForm, proposal: { ...viaForm.proposal, pdf_sha256: "c".repeat(64) } }));
+let rf = validateReturn({ ...good, answers: {}, onboarding_done: false }, viaForm);
+ok("via the form: no packet questions needed, but they must say it's sent", !rf.ok && rf.errors.onboarding && !rf.errors.b_offer, JSON.stringify(rf.errors));
+rf = validateReturn({ ...good, answers: {}, onboarding_done: true }, viaForm);
+ok("via the form: ticked = fine", rf.ok && rf.value.onboarding.client_says_sent === true, JSON.stringify(rf.errors));
+const pvf = publicView({ ...viaForm, status: "sent" }, { proposalPdfUrl: "https://signed/x" });
+ok("client view: the form link, the proposal PDF link, no questions, no storage path", pvf.onboarding.url.includes("geo-onboarding") && pvf.proposal_pdf.url === "https://signed/x" && pvf.questions.length === 0 && !JSON.stringify(pvf).includes("x/proposal-1.pdf"));
+const mf = teamEmail({ ...viaForm, status: "returned", client_sig: { name: "Pat", email: "pat@example.com", signed_at: "2026-11-09T17:00:00Z", onboarding: { via: "form", client_says_sent: true } }, answers: {}, payment_status: {} });
+ok("team email names the onboarding form and the proposal PDF", mf.text.includes("ONBOARDING") && mf.text.includes("Client says they sent it: yes") && mf.text.includes("Proposal PDF: Proposal.pdf") && !mf.text.includes("ANSWERS ("), mf.text.slice(0, 500));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

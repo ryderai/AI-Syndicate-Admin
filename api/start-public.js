@@ -47,6 +47,16 @@ async function findByToken(admin, t) {
   return data || null;
 }
 
+/* A 1-hour link to a private PDF (agreement or proposal), or null. */
+async function pdfLinks(admin, p) {
+  const one = async (path) => {
+    if (!path) return null;
+    const { data } = await admin.storage.from(BUCKET).createSignedUrl(path, 3600);
+    return data?.signedUrl || null;
+  };
+  return { pdfUrl: await one(p.contract_pdf_path), proposalPdfUrl: await one(p.proposal?.pdf_path) };
+}
+
 function gone(p) {
   if (!p) return "This link doesn't work. Ask the person who sent it for a new one.";
   if (p.status === "void") return "This packet was cancelled. Ask the person who sent it for a new one.";
@@ -79,12 +89,7 @@ export default async function handler(req, res) {
       await admin.from("start_packet_events").insert({ packet_id: p.id, kind: "opened", ip, ua });
       p.opened_at = now; p.status = "opened";
     }
-    let pdfUrl = null;
-    if (p.contract_pdf_path) {
-      const { data } = await admin.storage.from(BUCKET).createSignedUrl(p.contract_pdf_path, 3600);
-      pdfUrl = data?.signedUrl || null;
-    }
-    return res.status(200).json({ packet: publicView(p, { pdfUrl }) });
+    return res.status(200).json({ packet: publicView(p, await pdfLinks(admin, p)) });
   }
 
   if (req.method !== "POST") { res.setHeader("Allow", "GET, POST"); return res.status(405).json({ error: "Method not allowed." }); }
@@ -104,7 +109,7 @@ export default async function handler(req, res) {
 
   if (body.action !== "submit") return res.status(400).json({ error: "Unknown action." });
   if (!allowHit(`start-submit:${ip}`, 10, 10 * 60000)) return res.status(429).json({ error: "Too many tries. Please wait a few minutes." });
-  if (p.status === "returned") return res.status(409).json({ error: "This packet was already signed and sent back.", packet: publicView(p) });
+  if (p.status === "returned") return res.status(409).json({ error: "This packet was already signed and sent back.", packet: publicView(p, await pdfLinks(admin, p)) });
   if (!OPEN_STATES.includes(p.status)) return res.status(409).json({ error: "This packet can't be signed right now." });
   /* What the client is about to sign must still be exactly what CJ signed. */
   if (!p.ais_signed_at || contentFingerprint(p) !== p.contract_sha256) return res.status(409).json({ error: "This packet changed since it was sent. Ask for a new link." });
@@ -116,7 +121,7 @@ export default async function handler(req, res) {
 
   const now = new Date().toISOString();
   const stripeCheck = p.stripe_customer_id ? { ...(await checkStripeCard(getStripe(), p.stripe_customer_id)), at: now } : null;
-  const client_sig = { ...v.signer, signature: v.signature, consent: CONSENT_TEXT, contract_sha256: p.contract_sha256, ip, ua, signed_at: now };
+  const client_sig = { ...v.signer, signature: v.signature, consent: CONSENT_TEXT, contract_sha256: p.contract_sha256, onboarding: v.onboarding, ip, ua, signed_at: now };
   const payment_status = { ...v.payment, ...(stripeCheck ? { stripe: stripeCheck } : {}) };
 
   /* Once only: the update only lands while the packet is still open, so two
@@ -134,10 +139,5 @@ export default async function handler(req, res) {
   await admin.from("start_packets").update({ team_email: { ...r, at: new Date().toISOString() } }).eq("id", p.id);
   await admin.from("start_packet_events").insert({ packet_id: p.id, kind: r.sent ? "team_copy_sent" : "team_copy_failed", detail: { to: r.to, reason: r.reason || null } });
 
-  let pdfUrl = null;
-  if (saved.contract_pdf_path) {
-    const { data } = await admin.storage.from(BUCKET).createSignedUrl(saved.contract_pdf_path, 3600);
-    pdfUrl = data?.signedUrl || null;
-  }
-  return res.status(200).json({ ok: true, packet: publicView(saved, { pdfUrl }) });
+  return res.status(200).json({ ok: true, packet: publicView(saved, await pdfLinks(admin, saved)) });
 }
