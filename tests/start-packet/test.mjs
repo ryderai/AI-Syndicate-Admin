@@ -117,6 +117,9 @@ ok("team email subject names the client", mail.subject === "Signed + sent back: 
 ok("team email has both signatures, the fingerprint, payment and answers",
   ["Pat Lee, Owner <pat@example.com>", "CJ Britton", fp, "card added in Stripe: yes", "What do you offer?: Roofs", "WHAT A WIN LOOKS LIKE"].every((s) => mail.text.includes(s)), mail.text.slice(0, 400));
 ok("team email times are Central", /CT/.test(mail.text));
+ok("client email says 'onboarding form' when we send our form, 'questions' when we don't",
+  clientEmailDraft({ ...signed, proposal: { ...signed.proposal, onboarding_url: "https://geo-onboarding-woad.vercel.app/" } }, "https://x/start/?t=1").body.includes("fill in our onboarding form")
+  && clientEmailDraft({ ...signed, proposal: { ...signed.proposal, onboarding_url: "" } }, "https://x/start/?t=1").body.includes("answer a few questions"));
 ok("team email opens with who the client is and who sent it", mail.text.indexOf("CLIENT") < mail.text.indexOf("SIGNED") && mail.text.includes("- Business: ZZ Test Roofing") && /- Contact: .+<.+@.+>/.test(mail.text) && mail.text.includes("- Sent by: CJ Britton"), mail.text.slice(0, 400));
 ok("returned packet gives the client a receipt", publicView(back).receipt.signer.name === "Pat Lee");
 

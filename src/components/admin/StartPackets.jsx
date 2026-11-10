@@ -361,7 +361,7 @@ function SignPanel({ p, member, dirty, call, reload }) {
         <button type="button" className={`btn btn-sm ${kind === "typed" ? "btn-primary" : ""}`} aria-pressed={kind === "typed"} onClick={() => setKind("typed")}>Type my name</button>
         <button type="button" className={`btn btn-sm ${kind === "drawn" ? "btn-primary" : ""}`} aria-pressed={kind === "drawn"} onClick={() => setKind("drawn")}>Draw</button>
       </div>
-      {kind === "drawn" ? <SigPad onChange={onDraw} /> : <div style={{ padding: "8px 12px", border: "1px solid var(--rule)", borderRadius: 12, background: "#fff" }}><SigShow sig={{ kind: "typed" }} name={member?.membership?.full_name || "Your name"} /></div>}
+      {kind === "drawn" ? <SigPad onChange={onDraw} /> : <div style={{ padding: "8px 12px", border: "1px solid var(--rule)", borderRadius: 12, background: "#fff" }}><SigShow sig={{ kind: "typed" }} name={member?.full_name || member?.membership?.full_name || "Your name"} /></div>}
       <div style={{ marginTop: 12 }}>
         <button className="btn btn-accent" disabled={dirty || (kind === "drawn" && !drawn)} onClick={async () => {
           const r = await call("sign", { title, updated_at: p.updated_at, signature: kind === "drawn" ? { kind, data: drawn } : { kind: "typed", data: "" } }, "Couldn't sign");
@@ -382,7 +382,8 @@ function SendPanel({ p, member, dirty, call, reload }) {
   useEffect(() => { (async () => {
     const r = await apiFetch("/api/gmail-accounts");
     const list = r.ok ? (r.data.mailboxes || r.data.accounts || []).filter((m) => m.mine !== false && !m.needs_reconnect) : [];
-    setBoxes(list); setBox(list[0]?.email_address || "");
+    const me = String(member?.email || member?.membership?.email || "").toLowerCase();
+    setBoxes(list); setBox((list.find((m) => String(m.email_address).toLowerCase() === me) || list[0])?.email_address || "");
   })(); }, []);
 
   const make = async () => {
@@ -430,7 +431,7 @@ function SendPanel({ p, member, dirty, call, reload }) {
             <button className="btn" onClick={copied}>Copy the email</button>
             <button className="btn" onClick={async () => { if (await call("mark_sent", { via: "copied", to: p.contact_email })) { toast.success("Marked as sent"); setDraft(null); reload(); } }}>I sent it</button>
           </div>
-          {boxes && !boxes.length && <p style={{ fontSize: 12.5, color: "var(--ink-dim)", marginTop: 8 }}>No Gmail connected for {member?.membership?.email || "you"} — copy the email and send it from your own inbox, or connect Gmail on the Inbox page.</p>}
+          {boxes && !boxes.length && <p style={{ fontSize: 12.5, color: "var(--ink-dim)", marginTop: 8 }}>No Gmail connected for {member?.email || member?.membership?.email || "you"} — copy the email and send it from your own inbox, or connect Gmail on the Inbox page.</p>}
         </>
       )}
     </div>
@@ -492,7 +493,7 @@ function Returned({ p, pdfUrl, call, reload }) {
 }
 
 const EVENT_WORDS = {
-  created: "Made", edited: "Edited", edited_cj_signature_cleared: "Edited — signature cleared", signed: "Signed for AI Syndicate", pdf_attached: "Agreement PDF attached", pdf_removed: "Agreement PDF removed",
+  created: "Made", edited: "Edited", edited_cj_signature_cleared: "Edited — signature cleared", signed: "Signed for AI Syndicate", pdf_attached: "Agreement PDF attached", pdf_removed: "Agreement PDF removed", proposal_pdf_attached: "Proposal PDF attached", proposal_pdf_removed: "Proposal PDF removed",
   cj_signed: "CJ signed for AI Syndicate", asked_cj: "CJ emailed to sign", link_made: "Link made", link_replaced: "New link made (old one stopped working)", sent: "Sent to the client",
   opened: "Client opened it", returned: "Client signed and sent it back", team_copy_sent: "Team copy emailed", team_copy_failed: "Team copy FAILED to email", team_copy_resent: "Team copy emailed again",
   payment_checked: "Stripe checked", cancelled: "Cancelled",
